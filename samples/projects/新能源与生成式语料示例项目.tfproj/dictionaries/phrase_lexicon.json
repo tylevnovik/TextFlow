@@ -1,0 +1,25 @@
+{
+  "kind": "phrase_lexicon",
+  "name": "短语词典",
+  "version": "1.0.0",
+  "entries": [
+    {
+      "id": "6694846c-088f-4bc8-a040-2d6ac4820a7c",
+      "source": "supply chain",
+      "target": "supply_chain",
+      "tags": [],
+      "enabled": true,
+      "hits": 0,
+      "notes": ""
+    },
+    {
+      "id": "365135d4-1078-49ba-a923-ca0b70a0e3f3",
+      "source": "学术规范",
+      "target": "学术规范",
+      "tags": [],
+      "enabled": true,
+      "hits": 0,
+      "notes": ""
+    }
+  ]
+}

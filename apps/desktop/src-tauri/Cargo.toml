@@ -1,0 +1,23 @@
+[package]
+name = "textflow-desktop"
+version = "0.1.0"
+description = "TextFlow Studio desktop shell"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "=2.0.0", features = [] }
+tauri-utils = "=2.0.0"
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rfd = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "=2.0.0", features = [] }
+tauri-utils = "=2.0.0"
+time = "=0.3.36"
+tokio = { version = "1.40", features = ["time"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

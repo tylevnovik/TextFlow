@@ -1,0 +1,25 @@
+{
+  "kind": "custom_lexicon",
+  "name": "自定义词典",
+  "version": "1.0.0",
+  "entries": [
+    {
+      "id": "475bad44-5e49-497b-954b-189072e4b428",
+      "source": "智能制造",
+      "target": null,
+      "tags": [],
+      "enabled": true,
+      "hits": 0,
+      "notes": ""
+    },
+    {
+      "id": "f88f9f41-9ca1-4eb0-b16a-bae64d8faa8e",
+      "source": "battery recycling",
+      "target": null,
+      "tags": [],
+      "enabled": true,
+      "hits": 0,
+      "notes": ""
+    }
+  ]
+}

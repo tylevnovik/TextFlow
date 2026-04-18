@@ -1,0 +1,550 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import shutil
+import sys
+from pathlib import Path
+from typing import Any, Callable
+
+import pandas as pd
+
+from .defaults import deep_copy_manifest
+from .ingestion import ensure_sample_files, import_files, parse_optional_year
+from .pipeline import run_project_pipeline
+from .project_store import (
+    build_project_summary,
+    create_project,
+    create_project_from_template,
+    delete_project,
+    duplicate_project,
+    export_project_package,
+    find_project_dir,
+    import_project_package,
+    list_import_templates,
+    list_project_templates,
+    list_project_dirs,
+    load_import_template,
+    load_project_template,
+    load_project,
+    load_workspace_state,
+    load_workspace_snapshot,
+    mark_workspace_bootstrapped,
+    remember_project,
+    read_json,
+    save_import_template_record,
+    save_project_template,
+    save_project,
+    write_json,
+)
+
+ProgressCallback = Callable[[float, str], None]
+
+
+def emit(payload: Any) -> None:
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False))
+
+
+def notify(progress_callback: ProgressCallback | None, progress: float, message: str) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(progress, message)
+
+
+def parse_payload() -> dict[str, Any]:
+    if len(sys.argv) < 3:
+        return {}
+    return json.loads(sys.argv[2])
+
+
+def ensure_bootstrap_project() -> None:
+    if list_project_dirs():
+        mark_workspace_bootstrapped()
+        return
+
+    workspace_state = load_workspace_state()
+    if workspace_state.get("bootstrap_completed"):
+        return
+
+    sample_files = ensure_sample_files()
+    project_dir, manifest = create_project(
+        "新能源与生成式语料示例项目",
+        "新手上手示例：先看导入资料，再看词表如何影响切词与标准化，最后运行流程并导出结果。",
+    )
+    corpus, source_files, _issues = import_files(sample_files, manifest["import_template"], project_dir=project_dir)
+    manifest["source_files"] = source_files
+    manifest, corpus, _ = run_project_pipeline(project_dir, manifest, corpus)
+    save_project(project_dir, manifest, corpus)
+    remember_project(manifest["id"], set_current=True)
+    mark_workspace_bootstrapped()
+
+
+def load_project_or_fail(project_id: str) -> tuple[Any, dict[str, Any], list[dict[str, Any]]]:
+    project_dir = find_project_dir(project_id)
+    if project_dir is None:
+        raise ValueError(f"Project {project_id} not found")
+    manifest, corpus = load_project(project_dir)
+    return project_dir, manifest, corpus
+
+
+def normalize_corpus_document(document: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
+    normalized = dict(current or {})
+    normalized.update(document)
+    doc_id = str(normalized.get("doc_id") or normalized.get("id") or f"doc-{hashlib.md5(json.dumps(document, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:8]}")
+    raw_text = str(normalized.get("raw_text") or "")
+    normalized["id"] = doc_id
+    normalized["doc_id"] = doc_id
+    normalized["title"] = str(normalized.get("title") or doc_id)
+    normalized["source_profile"] = str(normalized.get("source_profile") or "generic")
+    normalized["raw_text"] = raw_text
+    normalized["clean_text"] = ""
+    normalized["normalized_text"] = ""
+    normalized["tokens"] = []
+    normalized["phrase_hits"] = []
+    normalized["filtered_tokens"] = []
+    normalized["year"] = parse_optional_year(normalized.get("year"))
+    normalized["extra_metadata"] = dict(normalized.get("extra_metadata") or {})
+    normalized["status"] = "ready" if raw_text.strip() else "warning"
+    normalized["raw_hash"] = hashlib.md5(raw_text.encode("utf-8")).hexdigest()
+    return normalized
+
+
+def refresh_source_files(project_dir: Path, manifest: dict[str, Any], corpus: list[dict[str, Any]]) -> dict[str, Any]:
+    tracked_counts: dict[str, int] = {}
+    has_untracked_documents = False
+    for item in corpus:
+        relative_path = item.get("extra_metadata", {}).get("_source_relative_path")
+        if isinstance(relative_path, str) and relative_path:
+            tracked_counts[relative_path] = tracked_counts.get(relative_path, 0) + 1
+        else:
+            has_untracked_documents = True
+
+    next_sources: list[dict[str, Any]] = []
+    for source in manifest.get("source_files", []):
+        relative_path = str(source.get("relative_path") or "")
+        next_source = dict(source)
+        if relative_path in tracked_counts:
+            next_source["row_count"] = tracked_counts[relative_path]
+            next_sources.append(next_source)
+            continue
+        source_path = project_dir / relative_path if relative_path else None
+        if not has_untracked_documents and relative_path.startswith("corpus/imported/") and source_path and source_path.exists():
+            try:
+                source_path.unlink()
+            except OSError:
+                pass
+            continue
+        next_sources.append(next_source)
+
+    manifest["source_files"] = next_sources
+    return manifest
+
+
+def action_load_workspace(_payload: dict[str, Any] | None = None, progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在准备工作区")
+    ensure_bootstrap_project()
+    snapshot = load_workspace_snapshot()
+    notify(progress_callback, 1.0, "工作区已就绪")
+    return snapshot
+
+
+def action_create_project(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在创建项目")
+    name = payload["name"]
+    description = payload.get("description", "")
+    project_dir, manifest = create_project(name, description)
+    save_project(project_dir, manifest, [])
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "项目已创建")
+    return build_project_summary(project_dir, manifest, [])
+
+
+def action_create_project_from_template(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在应用项目模板")
+    template = load_project_template(payload["template_id"])
+    project_dir, manifest = create_project_from_template(
+        payload["name"],
+        payload.get("description", ""),
+        template,
+    )
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "模板项目已创建")
+    return build_project_summary(project_dir, manifest, [])
+
+
+def action_open_project(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在打开项目")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "项目已打开")
+    return build_project_summary(project_dir, manifest, corpus)
+
+
+def action_duplicate_project(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在复制项目")
+    ensure_bootstrap_project()
+    duplicated_name = payload.get("name")
+    project_dir, manifest, corpus = duplicate_project(payload["project_id"], duplicated_name)
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "项目副本已生成")
+    return build_project_summary(project_dir, manifest, corpus)
+
+
+def action_delete_project(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在删除项目")
+    ensure_bootstrap_project()
+    result = delete_project(payload["project_id"])
+    notify(progress_callback, 1.0, "项目已删除")
+    return result
+
+
+def action_import_project_files(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.08, "正在读取项目配置")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+
+    if payload.get("import_template"):
+        manifest["import_template"] = payload["import_template"]
+
+    existing_hashes = [item.get("raw_hash", "") for item in corpus if item.get("raw_hash")]
+    notify(progress_callback, 0.35, "正在导入并校验文件")
+    imported_corpus, source_files, validation_issues = import_files(
+        payload.get("file_paths", []),
+        manifest["import_template"],
+        project_dir=project_dir,
+        existing_hashes=existing_hashes,
+    )
+    corpus.extend(imported_corpus)
+    manifest["source_files"] = [*manifest.get("source_files", []), *source_files]
+    notify(progress_callback, 0.8, "正在保存导入结果")
+    save_project(project_dir, manifest, corpus)
+    remember_project(manifest["id"], set_current=True)
+
+    notify(progress_callback, 1.0, "导入完成")
+    return {
+        "project_id": manifest["id"],
+        "imported_documents": len(imported_corpus),
+        "source_files": source_files,
+        "document_count": len(corpus),
+        "skipped_rows": len(validation_issues),
+        "validation_issues": validation_issues[:10],
+    }
+
+
+def action_run_pipeline(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.05, "正在准备流程")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    if not corpus:
+        notify(progress_callback, 0.12, "当前项目为空，正在载入示例语料")
+        corpus, source_files, _issues = import_files(ensure_sample_files(), manifest["import_template"], project_dir=project_dir)
+        manifest["source_files"] = source_files
+    manifest, corpus, run_record = run_project_pipeline(
+        project_dir,
+        manifest,
+        corpus,
+        progress_callback=progress_callback,
+    )
+    notify(progress_callback, 0.95, "正在保存运行结果")
+    save_project(project_dir, manifest, corpus)
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "流程运行完成")
+    return run_record
+
+
+def action_export_project(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.08, "正在准备导出")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    formats = payload.get("formats", [])
+    if not manifest.get("run_history"):
+        notify(progress_callback, 0.2, "尚无运行结果，先生成一次分析结果")
+        manifest, corpus, _ = run_project_pipeline(project_dir, manifest, corpus, progress_callback=progress_callback)
+        save_project(project_dir, manifest, corpus)
+
+    latest_run = manifest["run_history"][-1]["run_id"]
+    latest_run_dir = project_dir / "runs" / latest_run
+    export_dir = project_dir / "exports" / latest_run
+    export_dir.mkdir(parents=True, exist_ok=True)
+    exported: list[dict[str, str]] = []
+
+    if "csv" in formats:
+        notify(progress_callback, 0.45, "正在整理 CSV 文件")
+        for path in (latest_run_dir / "outputs").glob("*.csv"):
+            target = export_dir / path.name
+            shutil.copy2(path, target)
+            exported.append({
+                "path": str(target),
+                "relative_path": str(target.relative_to(project_dir).as_posix()),
+            })
+
+    if "html" in formats:
+        notify(progress_callback, 0.6, "正在整理 HTML 报告")
+        report_path = latest_run_dir / "report" / "report.html"
+        target = export_dir / report_path.name
+        shutil.copy2(report_path, target)
+        exported.append({
+            "path": str(target),
+            "relative_path": str(target.relative_to(project_dir).as_posix()),
+        })
+
+    if "png" in formats:
+        notify(progress_callback, 0.72, "正在整理图表文件")
+        for path in (latest_run_dir / "charts").glob("*.png"):
+            target = export_dir / path.name
+            shutil.copy2(path, target)
+            exported.append({
+                "path": str(target),
+                "relative_path": str(target.relative_to(project_dir).as_posix()),
+            })
+
+    if "xlsx" in formats:
+        notify(progress_callback, 0.84, "正在写出 Excel 汇总")
+        xlsx_path = export_dir / "analysis_bundle.xlsx"
+        with pd.ExcelWriter(xlsx_path) as writer:
+            for key, rows in manifest["results"].items():
+                if isinstance(rows, list) and key != "report_files":
+                    pd.DataFrame(rows).to_excel(writer, sheet_name=key[:31], index=False)
+        exported.append({
+            "path": str(xlsx_path),
+            "relative_path": str(xlsx_path.relative_to(project_dir).as_posix()),
+        })
+
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "导出完成")
+    return {
+        "project_id": manifest["id"],
+        "export_dir": str(export_dir),
+        "relative_export_dir": str(export_dir.relative_to(project_dir).as_posix()),
+        "files": exported,
+    }
+
+
+def action_export_project_backup(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在整理项目文件")
+    ensure_bootstrap_project()
+    project_dir, manifest, _corpus = load_project_or_fail(payload["project_id"])
+    output_path = Path(payload["path"]).expanduser() if payload.get("path") else None
+    notify(progress_callback, 0.6, "正在打包 .tfproj 项目包")
+    archive_path = export_project_package(project_dir, output_path)
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "项目包已导出")
+    try:
+        relative_path = archive_path.relative_to(project_dir).as_posix()
+    except ValueError:
+        relative_path = str(archive_path)
+    return {"path": str(archive_path), "relative_path": relative_path}
+
+
+def action_import_project_package(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在读取 .tfproj 项目包")
+    project_dir, manifest, corpus = import_project_package(Path(payload["path"]))
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "项目包已导入")
+    return build_project_summary(project_dir, manifest, corpus)
+
+
+def action_save_project_template(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在保存项目模板")
+    ensure_bootstrap_project()
+    _project_dir, manifest, _corpus = load_project_or_fail(payload["project_id"])
+    template = save_project_template(
+        manifest,
+        name=payload.get("name"),
+        description=payload.get("description"),
+        template_id=payload.get("template_id"),
+    )
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "项目模板已保存")
+    return template
+
+
+def action_list_project_templates(
+    _payload: dict[str, Any] | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> list[dict[str, Any]]:
+    notify(progress_callback, 0.1, "正在读取项目模板")
+    templates = list_project_templates()
+    notify(progress_callback, 1.0, "项目模板已加载")
+    return templates
+
+
+def action_save_import_template(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在保存导入模板")
+    ensure_bootstrap_project()
+    template_payload = payload.get("template")
+    if template_payload is None:
+        _project_dir, manifest, _corpus = load_project_or_fail(payload["project_id"])
+        template_payload = manifest["import_template"]
+        remember_project(manifest["id"], set_current=True)
+    saved = save_import_template_record(
+        template_payload,
+        name=payload.get("name"),
+        description=payload.get("description"),
+        template_id=payload.get("template_id"),
+    )
+    notify(progress_callback, 1.0, "导入模板已保存")
+    return saved
+
+
+def action_list_import_templates(
+    _payload: dict[str, Any] | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> list[dict[str, Any]]:
+    notify(progress_callback, 0.1, "正在读取导入模板")
+    templates = list_import_templates()
+    notify(progress_callback, 1.0, "导入模板已加载")
+    return templates
+
+
+def action_load_import_template(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在读取导入模板")
+    template = load_import_template(payload["template_id"])
+    notify(progress_callback, 1.0, "导入模板已加载")
+    return template
+
+
+def action_save_project(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在保存项目设置")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["id"])
+    updated = deep_copy_manifest(manifest)
+    updated.update(payload)
+    save_project(project_dir, updated, corpus)
+    remember_project(updated["id"], set_current=True)
+    notify(progress_callback, 1.0, "项目设置已保存")
+    return build_project_summary(project_dir, updated, corpus)
+
+
+def action_update_corpus_document(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在保存语料文档")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    document = payload["document"]
+    doc_id = str(document.get("doc_id") or document.get("id") or "")
+    existing = next((item for item in corpus if item.get("doc_id") == doc_id or item.get("id") == doc_id), None)
+    normalized = normalize_corpus_document(document, current=existing)
+
+    updated = False
+    next_corpus: list[dict[str, Any]] = []
+    for item in corpus:
+        item_doc_id = str(item.get("doc_id") or item.get("id") or "")
+        if item_doc_id == normalized["doc_id"]:
+            next_corpus.append(normalized)
+            updated = True
+        else:
+            next_corpus.append(item)
+    if not updated:
+        next_corpus.append(normalized)
+
+    manifest = refresh_source_files(project_dir, manifest, next_corpus)
+    save_project(project_dir, manifest, next_corpus)
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "语料文档已保存，请重新运行处理流程")
+    return normalized
+
+
+def action_delete_corpus_document(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在删除语料文档")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    doc_id = str(payload["doc_id"])
+    next_corpus = [item for item in corpus if str(item.get("doc_id") or item.get("id") or "") != doc_id]
+    if len(next_corpus) == len(corpus):
+        raise ValueError(f"Corpus document {doc_id} not found")
+
+    manifest = refresh_source_files(project_dir, manifest, next_corpus)
+    save_project(project_dir, manifest, next_corpus)
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "语料文档已删除，请重新运行处理流程")
+    return {"doc_id": doc_id, "document_count": len(next_corpus)}
+
+
+def action_import_dictionary_sheet(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在读取词表文件")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    kind = payload["kind"]
+    source_path = Path(payload["path"])
+    imported_sheet = read_json(source_path)
+    if not isinstance(imported_sheet, dict):
+        raise ValueError(f"Invalid dictionary sheet: {source_path}")
+
+    existing_sheet = manifest["dictionary_set"]["sheets"][kind]
+    imported_sheet["kind"] = kind
+    imported_sheet.setdefault("name", existing_sheet["name"])
+    imported_sheet.setdefault("version", existing_sheet["version"])
+    imported_sheet.setdefault("entries", [])
+    manifest["dictionary_set"]["sheets"][kind] = imported_sheet
+    notify(progress_callback, 0.7, "正在写入项目词表")
+    save_project(project_dir, manifest, corpus)
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "词表已导入")
+    return imported_sheet
+
+
+def action_export_dictionary_sheet(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在整理词表")
+    ensure_bootstrap_project()
+    _project_dir, manifest, _corpus = load_project_or_fail(payload["project_id"])
+    kind = payload["kind"]
+    output_path = payload["path"]
+    write_json(Path(output_path), manifest["dictionary_set"]["sheets"][kind])
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "词表已导出")
+    return {
+        "kind": kind,
+        "path": output_path,
+    }
+
+
+ACTION_HANDLERS: dict[str, Callable[..., Any]] = {
+    "load-workspace": action_load_workspace,
+    "create-project": action_create_project,
+    "create-project-from-template": action_create_project_from_template,
+    "open-project": action_open_project,
+    "duplicate-project": action_duplicate_project,
+    "delete-project": action_delete_project,
+    "import-project-files": action_import_project_files,
+    "run-pipeline": action_run_pipeline,
+    "export-project": action_export_project,
+    "export-project-backup": action_export_project_backup,
+    "import-project-package": action_import_project_package,
+    "save-project-template": action_save_project_template,
+    "list-project-templates": action_list_project_templates,
+    "save-import-template": action_save_import_template,
+    "list-import-templates": action_list_import_templates,
+    "load-import-template": action_load_import_template,
+    "save-project": action_save_project,
+    "update-corpus-document": action_update_corpus_document,
+    "delete-corpus-document": action_delete_corpus_document,
+    "import-dictionary-sheet": action_import_dictionary_sheet,
+    "export-dictionary-sheet": action_export_dictionary_sheet,
+}
+
+
+def execute_action(
+    action: str,
+    payload: dict[str, Any] | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> Any:
+    handler = ACTION_HANDLERS.get(action)
+    if handler is None:
+        raise ValueError(f"Unknown action: {action}")
+    payload = payload or {}
+    return handler(payload, progress_callback)
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        raise SystemExit("Usage: python -m app.cli <action> [json-payload]")
+
+    action = sys.argv[1]
+    payload = parse_payload()
+
+    emit(execute_action(action, payload))
+
+
+if __name__ == "__main__":
+    main()

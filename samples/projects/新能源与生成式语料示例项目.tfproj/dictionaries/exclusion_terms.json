@@ -1,0 +1,25 @@
+{
+  "kind": "exclusion_terms",
+  "name": "排除词表",
+  "version": "1.0.0",
+  "entries": [
+    {
+      "id": "9fa8c22b-30a8-4197-acba-814947db635c",
+      "source": "etc",
+      "target": null,
+      "tags": [],
+      "enabled": true,
+      "hits": 0,
+      "notes": ""
+    },
+    {
+      "id": "81d4ea98-1b6f-4f5f-9cbf-a4b38df56bb4",
+      "source": "misc",
+      "target": null,
+      "tags": [],
+      "enabled": true,
+      "hits": 0,
+      "notes": ""
+    }
+  ]
+}

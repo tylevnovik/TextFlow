@@ -1,0 +1,15 @@
+[
+  {
+    "doc_id": "DOC-003",
+    "title": "智能制造语料中的工艺知识抽取",
+    "abstract": "面向智能制造的工艺知识抽取，需要结合术语词典、规则治理和机构主题演化分析。",
+    "year": 2025,
+    "source": "IncoPat",
+    "author": "Chen",
+    "institution": "上海交通大学",
+    "country_or_region": "CN",
+    "category_or_tag": "manufacturing",
+    "keyword_field": "智能制造; 知识抽取",
+    "source_profile": "incopat"
+  }
+]

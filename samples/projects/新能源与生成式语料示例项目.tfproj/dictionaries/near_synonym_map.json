@@ -1,0 +1,25 @@
+{
+  "kind": "near_synonym_map",
+  "name": "近义词表",
+  "version": "1.0.0",
+  "entries": [
+    {
+      "id": "81a77a59-ec35-4ca8-9deb-bd5c2ab7363f",
+      "source": "文本挖掘",
+      "target": "分析",
+      "tags": [],
+      "enabled": true,
+      "hits": 0,
+      "notes": ""
+    },
+    {
+      "id": "bfd1abb5-9a8c-4690-a03c-0d6b3dbd9087",
+      "source": "知识抽取",
+      "target": "工艺知识",
+      "tags": [],
+      "enabled": true,
+      "hits": 0,
+      "notes": ""
+    }
+  ]
+}

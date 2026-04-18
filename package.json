@@ -1,0 +1,16 @@
+{
+  "name": "textflow-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace apps/desktop",
+    "build": "npm run build --workspace apps/desktop",
+    "lint": "npm run lint --workspace apps/desktop",
+    "test:engine": "powershell -ExecutionPolicy Bypass -File .\\scripts\\test-engine.ps1"
+  }
+}
