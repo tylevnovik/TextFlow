@@ -1,5 +1,8 @@
 # TextFlow Studio Pipeline Spec
 
+> 说明：本文档描述当前仓库已经落地的 V1 线性运行时，也是 V2 节点工作流在迁移期需要编译到的兼容执行目标。  
+> V2 节点规格见 [docs/workflow-node-spec.md](./workflow-node-spec.md)，运行时适配见 [docs/node-runtime-spec.md](./node-runtime-spec.md)。
+
 ## V1 线性流程
 
 ```text
@@ -12,6 +15,16 @@ Ingestion
   -> Analysis
   -> Export
 ```
+
+## V2 迁移关系
+
+V2 首期不会直接替换这条线性执行链，而是：
+
+- 在前端引入节点工作流画布
+- 在持久化层引入 `workflow_definitions`
+- 在运行前把工作流图编译回本文定义的线性 `pipeline`
+
+因此，本文仍是当前 Python sidecar 的执行基线。
 
 ## 运行意图层
 

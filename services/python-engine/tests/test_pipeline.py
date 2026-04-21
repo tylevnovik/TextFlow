@@ -27,6 +27,9 @@ def test_pipeline_end_to_end_generates_outputs(isolated_workspace):
     assert manifest["results"]["frequency_table"]
     assert manifest["results"]["keyword_cluster_result"]
     assert manifest["results"]["report_files"]
+    assert run_record["workflow_id"] == manifest["active_workflow_id"]
+    assert run_record["workflow_name"] == manifest["workflow_definitions"][0]["name"]
+    assert run_record["workflow_hash"].startswith("sha256:")
     for relative_path in manifest["results"]["report_files"]:
         assert (project_dir / relative_path).exists()
     assert any(path.endswith("keyword_wordcloud.png") for path in manifest["results"]["report_files"])
@@ -137,11 +140,72 @@ def test_pipeline_scope_filters_subset_and_records_summary(isolated_workspace):
     assert run_record["status"] == "completed"
     assert run_record["processed_document_count"] == 1
     assert "年份=2024-2024" in run_record["run_scope_summary"]
+    assert run_record["workflow_id"] == manifest["active_workflow_id"]
     assert run_record["recipe_id"] == "keyword_topic"
     assert run_record["output_bundle_id"] == "charts_and_report"
     assert run_record["output_summary"]
     assert {row["doc_id"] for row in manifest["results"]["term_document_table"]} == {"DOC-001"}
     assert {row["year"] for row in manifest["results"]["term_year_table"]} == {2024}
+
+
+def test_pipeline_uses_active_workflow_even_if_pipeline_snapshot_is_stale(isolated_workspace):
+    project_name = f"pytest-{uuid4().hex[:8]}"
+    project_dir, manifest = create_project(project_name, "workflow runtime compile test")
+    corpus, source_files, _issues = import_files(ensure_sample_files(), default_import_template(), project_dir=project_dir)
+    manifest["source_files"] = source_files
+    manifest["pipeline"]["run_scope"]["mode"] = "all_documents"
+    manifest["pipeline"]["recipe_id"] = "standard_analysis"
+    manifest["pipeline"]["output_bundle_id"] = "full_report"
+
+    active_workflow = manifest["workflow_definitions"][0]
+    active_workflow["source"] = "manual"
+    for node in active_workflow["nodes"]:
+        if node["node_type"] == "corpus_input":
+            node["config"] = {
+                **node["config"],
+                "mode": "filtered_subset",
+                "source_values": ["Journal of Digital Humanities"],
+                "institution_values": [],
+                "category_values": [],
+                "year_from": 2024,
+                "year_to": 2024,
+                "selected_doc_ids": [],
+            }
+        elif node["node_type"] == "filter_terms":
+            node["config"]["min_term_frequency"] = 2
+    active_workflow["meta"]["template_id"] = "keyword_topic"
+    active_workflow["meta"]["output_bundle_id"] = "charts_and_report"
+
+    manifest, processed_corpus, run_record = run_project_pipeline(project_dir, manifest, corpus)
+    save_project(project_dir, manifest, processed_corpus)
+
+    assert run_record["processed_document_count"] == 1
+    assert run_record["recipe_id"] == "keyword_topic"
+    assert run_record["output_bundle_id"] == "charts_and_report"
+    assert manifest["pipeline"]["run_scope"]["mode"] == "filtered_subset"
+    assert manifest["pipeline"]["filtering"]["min_term_frequency"] == 2
+
+
+def test_pipeline_respects_disconnected_active_workflow_edges(isolated_workspace):
+    project_name = f"pytest-{uuid4().hex[:8]}"
+    project_dir, manifest = create_project(project_name, "workflow edge runtime test")
+    corpus, source_files, _issues = import_files(ensure_sample_files(), default_import_template(), project_dir=project_dir)
+    manifest["source_files"] = source_files
+
+    active_workflow = manifest["workflow_definitions"][0]
+    active_workflow["source"] = "manual"
+    active_workflow["edges"] = [
+        edge
+        for edge in active_workflow["edges"]
+        if not str(edge["to_node"]).startswith("node-save-")
+    ]
+
+    manifest, processed_corpus, run_record = run_project_pipeline(project_dir, manifest, corpus)
+    save_project(project_dir, manifest, processed_corpus)
+
+    assert "export" not in manifest["pipeline"]["enabled_steps"]
+    assert manifest["results"]["report_files"] == []
+    assert any("导出步骤已禁用" in entry["message"] for entry in run_record["logs"])
 
 
 def test_analysis_uses_yake_keywords_and_nmf_topics():

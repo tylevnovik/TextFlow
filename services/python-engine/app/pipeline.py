@@ -19,7 +19,7 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import NMF, PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from .defaults import empty_result_bundle, utc_now_iso
+from .defaults import compile_pipeline_from_workflow, empty_result_bundle, utc_now_iso, workflow_payload_hash
 from .reporting import write_run_outputs
 
 os.environ.setdefault("LOKY_MAX_CPU_COUNT", "1")
@@ -1002,12 +1002,16 @@ def build_run_record(
     recipe_id: str,
     output_bundle_id: str,
     output_summary: str,
+    workflow_definition: dict[str, Any],
 ) -> dict[str, Any]:
     run_id = f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6]}"
     return {
         "run_id": run_id,
         "project_id": manifest["id"],
         "pipeline_version": manifest["pipeline"]["id"],
+        "workflow_id": str(workflow_definition.get("workflow_id") or "wf-default"),
+        "workflow_name": str(workflow_definition.get("name") or "默认工作流"),
+        "workflow_hash": workflow_payload_hash(workflow_definition),
         "dictionary_version": manifest["dictionary_set"]["version"],
         "started_at": utc_now_iso(),
         "ended_at": None,
@@ -1045,10 +1049,24 @@ def run_project_pipeline(
     logs: list[dict[str, Any]] = []
     warnings: list[str] = []
     errors: list[str] = []
-    pipeline_definition = manifest["pipeline"]
+    workflow_definitions = [
+        workflow
+        for workflow in manifest.get("workflow_definitions", [])
+        if isinstance(workflow, dict) and workflow.get("workflow_id")
+    ]
+    active_workflow_id = str(manifest.get("active_workflow_id") or "")
+    workflow_lookup = {str(workflow["workflow_id"]): workflow for workflow in workflow_definitions}
+    active_workflow = workflow_lookup.get(active_workflow_id) or (workflow_definitions[0] if workflow_definitions else {})
+    active_workflow_source = str(active_workflow.get("source") or "migrated_from_pipeline")
+    pipeline_definition = (
+        compile_pipeline_from_workflow(active_workflow, manifest["pipeline"])
+        if active_workflow_source == "manual"
+        else deepcopy(manifest["pipeline"])
+    )
     pipeline_definition["run_scope"] = normalize_run_scope(pipeline_definition.get("run_scope"))
     pipeline_definition["recipe_id"] = pipeline_definition.get("recipe_id", "standard_analysis")
     pipeline_definition["output_bundle_id"] = pipeline_definition.get("output_bundle_id", "full_report")
+    manifest["pipeline"] = deepcopy(pipeline_definition)
     execution_steps = enabled_step_order(pipeline_definition)
     export_params = pipeline_definition.get("export", {})
     scoped_corpus = [item for item in corpus if document_matches_scope(item, pipeline_definition["run_scope"])]
@@ -1064,6 +1082,7 @@ def run_project_pipeline(
         pipeline_definition["recipe_id"],
         pipeline_definition["output_bundle_id"],
         output_summary,
+        active_workflow,
     )
 
     normalization_audits: list[dict[str, Any]] = []

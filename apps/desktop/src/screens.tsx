@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
 import type {
   CorpusItem,
   DictionaryEntry,
@@ -11,11 +11,41 @@ import type {
   PipelineRecipeId,
   PipelineStepId,
   PageId,
-  RunScopeDefinition
+  ProjectManifest,
+  ResultBundle,
+  RunScopeDefinition,
+  WorkflowDefinition,
+  WorkflowNodeInstance,
+  WorkflowPortType
 } from "@textflow/shared-types";
 import { sourceProfileImportTemplates, sourceProfiles } from "@textflow/shared-types";
 import type { ImportProjectFilesResponse } from "./bridge/desktopBridge";
 import { useWorkspace } from "./store/workspaceStore";
+import {
+  addWorkflowNodeByType,
+  autoLayoutWorkflow,
+  buildBlankWorkflowFromPipeline,
+  compilePipelineFromWorkflow,
+  createWorkflowEdge,
+  normalizeWorkflowGraph,
+  removeWorkflowEdge,
+  removeWorkflowNodeById,
+  resolveActiveWorkflow,
+  restoreWorkflowDefaultEdges,
+  syncWorkflowFromPipeline,
+  updateWorkflowMeta,
+  updateWorkflowNode,
+  updateWorkflowNodePosition,
+  updateWorkflowViewport,
+  validateWorkflowGraph,
+  workflowConnectionTargets,
+  workflowNodeCanRemove,
+  workflowNodeDefinition,
+  workflowNodeDescriptionForType,
+  workflowOptionalToolboxNodes,
+  workflowNodeStepId
+} from "./workflow";
+import type { WorkflowValidation } from "./workflow";
 import {
   AuditTable,
   DictionaryTable,
@@ -32,6 +62,7 @@ import {
   TopicPanel
 } from "./ui";
 import type { DocumentPreviewMode } from "./ui";
+import { renderWorkflowNodeInlineEditor, renderWorkflowNodePreview } from "./workflowNodeRegistry";
 
 const mappingTargetOptions: FieldMappingRule["target_field"][] = [
   "doc_id",
@@ -529,6 +560,423 @@ function outputBundleSummary(exportParams: PipelineDefinition["export"]): string
   return labels.join("、") || "仅运行快照";
 }
 
+function workflowNodeDescription(node: WorkflowNodeInstance): string {
+  return workflowNodeDescriptionForType(node.node_type);
+}
+
+function countEnabledFlags(values: Record<string, unknown>, keys: readonly (readonly [string, string])[]): number {
+  return keys.reduce((count, [key]) => count + (values[key] ? 1 : 0), 0);
+}
+
+function workflowNodeSummary(node: WorkflowNodeInstance, pipeline: PipelineDefinition, runSummary: string): string {
+  const config = node.config ?? {};
+  switch (node.node_type) {
+    case "corpus_input":
+      if (config.mode === "selected_documents") {
+        return `手动选择 ${((config.selected_doc_ids as string[] | undefined) ?? []).length} 篇文档`;
+      }
+      if (config.mode === "filtered_subset") {
+        return "按来源/机构/年份等条件筛选";
+      }
+      return "项目全部文档";
+    case "dictionary_input":
+      return "引用项目词表资源";
+    case "merge_corpora":
+      return `合并策略：${String(config.strategy ?? "append")}`;
+    case "clean_text":
+      return `${countEnabledFlags(config, cleaningToggleItems)} 个清洗开关`;
+    case "normalize_text":
+      return `${countEnabledFlags(config, normalizationToggleItems)} 个统一化开关`;
+    case "tokenize":
+      return `${String(config.language_mode ?? pipeline.tokenization.language_mode)} · 最短长度 ${Number(config.min_token_length_before_filter ?? pipeline.tokenization.min_token_length_before_filter)}`;
+    case "apply_dictionary_rules":
+      return `${countEnabledFlags(config, dictionaryToggleItems)} 类词表规则`;
+    case "filter_terms":
+      return `长度 >= ${Number(config.min_token_length ?? pipeline.filtering.min_token_length)} · 词频 >= ${Number(config.min_term_frequency ?? pipeline.filtering.min_term_frequency)}`;
+    case "frequency_statistics":
+      return `词频 Top ${Number(config.top_n ?? pipeline.analysis.top_n)}`;
+    case "term_year_analysis":
+      return "输出词项年份变化";
+    case "cooccurrence_analysis":
+      return `窗口 ${Number(config.cooccurrence_window ?? pipeline.analysis.cooccurrence_window)} · 最小共现 ${Number(config.min_cooccurrence ?? pipeline.analysis.min_cooccurrence)}`;
+    case "keyword_extraction":
+      return `文档 ${Number(config.top_k_per_doc ?? pipeline.analysis.top_k_per_doc)} · 项目 ${Number(config.top_k_project ?? pipeline.analysis.top_k_project)}`;
+    case "keyword_clustering":
+      return `聚类 ${Number(config.keyword_cluster_k ?? pipeline.analysis.keyword_cluster_k)} · 主题 ${Number(config.topic_model_k ?? pipeline.analysis.topic_model_k)}`;
+    case "institution_topic_analysis":
+      return `主题 ${Number(config.topic_model_k ?? pipeline.analysis.topic_model_k)}`;
+    case "save_csv":
+      return `CSV · ${String(config.file_prefix ?? "tables")}`;
+    case "save_xlsx":
+      return `XLSX · ${String(config.file_prefix ?? "tables")}`;
+    case "save_png":
+      return `PNG · ${Number(config.chart_dpi ?? pipeline.export.chart_dpi)} DPI`;
+    case "save_html_report":
+      return `${Boolean(config.include_audit ?? pipeline.export.include_audit) ? "含审计" : "不含审计"} · ${String(config.file_prefix ?? "report")}`;
+    case "note":
+      return String(config.text ?? "画布备注");
+    case "group":
+      return String(config.title ?? "分组容器");
+    case "load_project_corpus":
+      return "旧版项目语料入口";
+    case "filter_corpus":
+      return runSummary;
+    case "project_dictionary_set":
+      return "旧版项目词表入口";
+    case "analyze_corpus":
+      return `Top ${pipeline.analysis.top_n} · 主题 ${pipeline.analysis.topic_model_k} · 聚类 ${pipeline.analysis.keyword_cluster_k}`;
+    case "export_results":
+      return outputBundleSummary(pipeline.export);
+    default:
+      return "等待配置";
+  }
+}
+
+function workflowNodeBadge(node: WorkflowNodeInstance, validation?: WorkflowValidation): string {
+  if (validation?.missing_inputs_by_node_id[node.node_id]?.length) {
+    return "缺线";
+  }
+  if (validation && !validation.reachable_node_ids.includes(node.node_id) && node.inputs.length) {
+    return "未接入";
+  }
+  if (node.ui_state.bypassed) {
+    return "已跳过";
+  }
+  if (node.node_type === "corpus_input" || node.node_type === "dictionary_input" || node.node_type === "load_project_corpus" || node.node_type === "project_dictionary_set") {
+    return "输入";
+  }
+  if (node.node_type === "merge_corpora") {
+    return "合并";
+  }
+  if (node.node_type === "save_csv" || node.node_type === "save_xlsx" || node.node_type === "save_png" || node.node_type === "save_html_report" || node.node_type === "export_results") {
+    return "输出";
+  }
+  const stepId = workflowNodeStepId(node);
+  if (!stepId) {
+    return node.node_type === "filter_corpus" ? "范围" : "辅助";
+  }
+  return stepId === "analysis" ? "分析" : "处理中";
+}
+
+function workflowNodeTitle(nodeType: WorkflowNodeInstance["node_type"]): string {
+  return workflowNodeDefinition(nodeType).label;
+}
+
+const workflowCanvasNodeWidth = 220;
+const workflowCanvasNodeHeight = 190;
+const workflowCanvasPadding = 160;
+const workflowCanvasMinWidth = 12000;
+const workflowCanvasMinHeight = 7600;
+const workflowCanvasBaseOriginX = 5200;
+const workflowCanvasBaseOriginY = 3200;
+
+function workflowDraftStorageKey(projectId: string, workflowId: string): string {
+  return `textflow.workflow-draft.${projectId}.${workflowId}`;
+}
+
+function workflowEditorStateStorageKey(projectId: string, workflowId: string): string {
+  return `textflow.workflow-ui.${projectId}.${workflowId}`;
+}
+
+function loadPersistedWorkflowDraft(projectId: string, workflowId: string): WorkflowDefinition | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(workflowDraftStorageKey(projectId, workflowId));
+    return raw ? JSON.parse(raw) as WorkflowDefinition : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadPersistedWorkflowEditorState(
+  projectId: string,
+  workflowId: string
+): {
+  selectedNodeId?: string;
+  selectedEdgeId?: string;
+  dockView?: "library" | "nodes" | "status";
+  dockCollapsed?: boolean;
+  documentPickerQuery?: string;
+} | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(workflowEditorStateStorageKey(projectId, workflowId));
+    return raw ? JSON.parse(raw) as {
+      selectedNodeId?: string;
+      selectedEdgeId?: string;
+      dockView?: "library" | "nodes" | "status";
+      dockCollapsed?: boolean;
+      documentPickerQuery?: string;
+    } : null;
+  } catch {
+    return null;
+  }
+}
+
+function clampWorkflowZoom(zoom: number): number {
+  return Math.min(1.2, Math.max(0.5, Math.round(zoom * 100) / 100));
+}
+
+function workflowNodeCanvasFrame(nodeOrType: WorkflowNodeInstance | WorkflowNodeInstance["node_type"]) {
+  const nodeType = typeof nodeOrType === "string" ? nodeOrType : nodeOrType.node_type;
+  const declaredSize = workflowNodeDefinition(nodeType).size;
+  if (declaredSize) {
+    return declaredSize;
+  }
+  if (typeof nodeOrType !== "string" && nodeOrType.size) {
+    return nodeOrType.size;
+  }
+  return { w: workflowCanvasNodeWidth, h: workflowCanvasNodeHeight };
+}
+
+function workflowCanvasMetrics(nodes: WorkflowNodeInstance[]) {
+  const minX = Math.min(...nodes.map((node) => node.position.x), 0);
+  const minY = Math.min(...nodes.map((node) => node.position.y), 0);
+  const maxX = Math.max(...nodes.map((node) => node.position.x + workflowNodeCanvasFrame(node).w), workflowCanvasNodeWidth);
+  const maxY = Math.max(...nodes.map((node) => node.position.y + workflowNodeCanvasFrame(node).h), workflowCanvasNodeHeight);
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width: Math.max(
+      workflowCanvasMinWidth,
+      workflowCanvasBaseOriginX + maxX + workflowCanvasPadding,
+      workflowCanvasBaseOriginX - minX + workflowCanvasPadding
+    ),
+    height: Math.max(
+      workflowCanvasMinHeight,
+      workflowCanvasBaseOriginY + maxY + workflowCanvasPadding,
+      workflowCanvasBaseOriginY - minY + workflowCanvasPadding
+    )
+  };
+}
+
+function workflowFitViewport(_nodes: WorkflowNodeInstance[]) {
+  const minX = Math.min(..._nodes.map((node) => node.position.x), 0);
+  const minY = Math.min(..._nodes.map((node) => node.position.y), 0);
+  const zoom = 0.82;
+  return {
+    x: 96 - (workflowCanvasBaseOriginX + minX) * zoom,
+    y: 132 - (workflowCanvasBaseOriginY + minY) * zoom,
+    zoom
+  };
+}
+
+function workflowCanvasOrigin(_metrics: ReturnType<typeof workflowCanvasMetrics>) {
+  return {
+    x: workflowCanvasBaseOriginX,
+    y: workflowCanvasBaseOriginY
+  };
+}
+
+function workflowMiniMapMetrics(metrics: ReturnType<typeof workflowCanvasMetrics>) {
+  const maxWidth = 220;
+  const maxHeight = 150;
+  const scale = Math.min(maxWidth / metrics.width, maxHeight / metrics.height);
+  return {
+    scale,
+    width: metrics.width * scale,
+    height: metrics.height * scale
+  };
+}
+
+const workflowPortRailInset = 20;
+
+function workflowPortLocalCenter(
+  node: WorkflowNodeInstance,
+  portId: string,
+  direction: "inputs" | "outputs"
+) {
+  const ports = node[direction];
+  const portIndex = Math.max(0, ports.findIndex((port) => port.port_id === portId));
+  const { h: nodeHeight } = workflowNodeCanvasFrame(node);
+  const usableHeight = Math.max(60, nodeHeight - workflowPortRailInset * 2);
+  const rowGap = usableHeight / (ports.length + 1);
+  return workflowPortRailInset + rowGap * (portIndex + 1);
+}
+
+function workflowPortAnchor(
+  node: WorkflowNodeInstance,
+  portId: string,
+  direction: "inputs" | "outputs",
+  origin: { x: number; y: number }
+) {
+  return {
+    x: (direction === "outputs" ? node.position.x + workflowNodeCanvasFrame(node).w : node.position.x) + origin.x,
+    y: node.position.y + workflowPortLocalCenter(node, portId, direction) + origin.y
+  };
+}
+
+function workflowEdgePath(
+  fromNode: WorkflowNodeInstance,
+  toNode: WorkflowNodeInstance,
+  fromPortId: string,
+  toPortId: string,
+  origin: { x: number; y: number }
+): string {
+  const fromPoint = workflowPortAnchor(fromNode, fromPortId, "outputs", origin);
+  const toPoint = workflowPortAnchor(toNode, toPortId, "inputs", origin);
+  const deltaX = toPoint.x - fromPoint.x;
+  const verticalLink = Math.abs(deltaX) < 140;
+
+  if (verticalLink) {
+    const midY = (fromPoint.y + toPoint.y) / 2;
+    return `M ${fromPoint.x} ${fromPoint.y} C ${fromPoint.x} ${midY}, ${toPoint.x} ${midY}, ${toPoint.x} ${toPoint.y}`;
+  }
+
+  const controlX = fromPoint.x + Math.max(60, (toPoint.x - fromPoint.x) / 2);
+  return `M ${fromPoint.x} ${fromPoint.y} C ${controlX} ${fromPoint.y}, ${controlX} ${toPoint.y}, ${toPoint.x} ${toPoint.y}`;
+}
+
+function workflowPortLabel(
+  node: WorkflowNodeInstance | undefined,
+  portId: string,
+  direction: "inputs" | "outputs"
+): string {
+  const port = node?.[direction].find((item) => item.port_id === portId);
+  return port?.label ?? port?.port_id ?? portId;
+}
+
+function workflowPortType(
+  node: WorkflowNodeInstance | undefined,
+  portId: string,
+  direction: "inputs" | "outputs"
+): WorkflowPortType | "Unknown" {
+  const port = node?.[direction].find((item) => item.port_id === portId);
+  return port?.port_type ?? "Unknown";
+}
+
+function enabledDictionaryEntryCount(dictionarySet: DictionarySet): number {
+  return Object.values(dictionarySet.sheets).reduce(
+    (count, sheet) => count + sheet.entries.filter((entry) => entry.enabled).length,
+    0
+  );
+}
+
+function previewSampleTexts(documents: CorpusItem[], field: "raw_text" | "clean_text" | "normalized_text"): string[] {
+  return documents
+    .map((item) => item[field]?.trim())
+    .filter(Boolean)
+    .slice(0, 2) as string[];
+}
+
+function previewSampleTerms(documents: CorpusItem[], field: "tokens" | "phrase_hits" | "filtered_tokens"): string[] {
+  return documents
+    .flatMap((item) => item[field] ?? [])
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function edgeDataSummary(
+  portType: WorkflowPortType | "Unknown",
+  project: ProjectManifest,
+  matchedDocuments: CorpusItem[],
+  latestRun: ProjectManifest["run_history"][number] | undefined
+): { summary: string; samples: string[] } {
+  const results: ResultBundle = project.results;
+  switch (portType) {
+    case "CorpusTable":
+    case "ProjectCorpus":
+    case "ScopedCorpus":
+      return {
+        summary: `当前项目共有 ${project.source_files.length} 个导入源、${matchedDocuments.length} 篇当前可见文档。`,
+        samples: matchedDocuments.slice(0, 3).map((item) => item.title)
+      };
+    case "CleanCorpus":
+    case "NormalizedCorpus":
+    case "TokenCorpus":
+    case "FilteredTokenCorpus":
+      return {
+        summary: `当前范围内共有 ${matchedDocuments.length} 篇文档参与流转。`,
+        samples: matchedDocuments.slice(0, 3).map((item) => item.title)
+      };
+    case "DictionarySet":
+      return {
+        summary: `当前项目词表集中启用了 ${enabledDictionaryEntryCount(project.dictionary_set)} 条规则/词项。`,
+        samples: Object.values(project.dictionary_set.sheets)
+          .flatMap((sheet) => sheet.entries.filter((entry) => entry.enabled).slice(0, 2).map((entry) => `${sheet.name}：${entry.source}`))
+          .slice(0, 4)
+      };
+    case "FrequencyTable":
+      return {
+        summary: `当前结果快照包含 ${results.frequency_table.length} 条词频统计。`,
+        samples: results.frequency_table.slice(0, 5).map((row) => `${row.term} · ${row.tf}`)
+      };
+    case "TermDocumentTable":
+      return {
+        summary: `当前结果快照包含 ${results.term_document_table.length} 条词项-文档关系。`,
+        samples: results.term_document_table.slice(0, 5).map((row) => `${row.term} · ${row.doc_id}`)
+      };
+    case "TermYearTable":
+      return {
+        summary: `当前结果快照包含 ${results.term_year_table.length} 条词项年份记录。`,
+        samples: results.term_year_table.slice(0, 5).map((row) => `${row.term} · ${row.year}`)
+      };
+    case "CooccurrenceTable":
+      return {
+        summary: `当前结果快照包含 ${results.cooccurrence_table.length} 条共现关系。`,
+        samples: results.cooccurrence_table.slice(0, 5).map((row) => `${row.term_a} × ${row.term_b}`)
+      };
+    case "KeywordTable":
+      return {
+        summary: `当前结果快照包含 ${results.keyword_result.length} 条关键词。`,
+        samples: results.keyword_result.slice(0, 5).map((row) => `${row.keyword} · ${row.scope}`)
+      };
+    case "KeywordClusterTable":
+      return {
+        summary: `当前结果快照包含 ${results.keyword_cluster_result.length} 条关键词聚类结果。`,
+        samples: results.keyword_cluster_result.slice(0, 5).map((row) => `${row.topic_label ?? `簇 ${row.cluster_id}`} · ${row.term}`)
+      };
+    case "InstitutionTopicTable":
+      return {
+        summary: `当前结果快照包含 ${results.institution_topic_cooccurrence.length} 条机构主题关系。`,
+        samples: results.institution_topic_cooccurrence.slice(0, 5).map((row) => `${row.institution} · ${row.topic_label}`)
+      };
+    case "AnalysisBundle":
+    case "AnyAnalysisResult":
+      return {
+        summary: `当前结果快照包含 ${results.frequency_table.length} 条词频、${results.keyword_result.length} 条关键词、${results.institution_topic_cooccurrence.length} 条机构主题关系。`,
+        samples: results.frequency_table.slice(0, 5).map((row) => `${row.term} · ${row.tf}`)
+      };
+    case "AnyTable":
+      return {
+        summary: `当前结果快照包含 ${results.frequency_table.length + results.term_year_table.length + results.cooccurrence_table.length} 条主要表格结果。`,
+        samples: [
+          ...results.frequency_table.slice(0, 2).map((row) => `词频：${row.term}`),
+          ...results.term_year_table.slice(0, 2).map((row) => `年份：${row.term}`),
+          ...results.cooccurrence_table.slice(0, 2).map((row) => `共现：${row.term_a}`)
+        ].slice(0, 5)
+      };
+    case "AnyRenderable":
+      return {
+        summary: `当前可渲染的分析结果主要来自词频、年份、共现、聚类和机构主题输出。`,
+        samples: [
+          ...results.frequency_table.slice(0, 2).map((row) => `词频图：${row.term}`),
+          ...results.keyword_cluster_result.slice(0, 2).map((row) => `聚类图：${row.topic_label ?? `簇 ${row.cluster_id}`}`),
+          ...results.institution_topic_cooccurrence.slice(0, 2).map((row) => `机构主题：${row.institution}`)
+        ].slice(0, 5)
+      };
+    case "AuditTable":
+      return {
+        summary: `最近一次结果中共有 ${results.audit_table.length} 条规则命中审计。`,
+        samples: results.audit_table.slice(0, 5).map((row) => `${row.source_term} -> ${row.target_term ?? row.action}`)
+      };
+    case "ExportArtifact":
+    case "ExportBundle":
+      return {
+        summary: `当前项目结果中可见 ${results.report_files.length} 个导出文件。${latestRun ? `最近一次运行状态：${latestRun.status}` : ""}`.trim(),
+        samples: results.report_files.slice(0, 5)
+      };
+    default:
+      return { summary: "当前端口类型的流转摘要还在补充。", samples: [] };
+  }
+}
+
 function runScopeSummary(scope: RunScopeDefinition, totalCount: number, matchedCount: number): string {
   if (scope.mode === "selected_documents") {
     return `已手动选择 ${scope.selected_doc_ids.length} 篇文档，当前能命中 ${matchedCount}/${totalCount} 篇。`;
@@ -592,7 +1040,7 @@ export function PageView({ page }: { page: PageId }) {
     case "data":
       return <DataPage />;
     case "pipeline":
-      return <PipelinePage />;
+      return <WorkflowPipelinePage />;
     case "dictionaries":
       return <DictionariesPage />;
     case "analysis":
@@ -2736,6 +3184,1624 @@ function PipelinePage() {
         </div>
       </Panel>
     </>
+  );
+}
+
+function WorkflowPipelinePage() {
+  const {
+    state: { snapshot, loading },
+    saveProject,
+    runPipeline,
+    setActivePage
+  } = useWorkspace();
+  const project = snapshot.current_project;
+  const activeWorkflow = project ? resolveActiveWorkflow(project) : null;
+  const [draftWorkflow, setDraftWorkflow] = useState<WorkflowDefinition | null>(
+    project && activeWorkflow ? deepClone(activeWorkflow) : null
+  );
+  const [selectedNodeId, setSelectedNodeId] = useState("");
+  const [selectedEdgeId, setSelectedEdgeId] = useState("");
+  const [pendingConnection, setPendingConnection] = useState<{ fromNodeId: string; fromPortId: string } | null>(null);
+  const [documentPickerQuery, setDocumentPickerQuery] = useState("");
+  const [dockView, setDockView] = useState<"library" | "nodes" | "status">("library");
+  const [dockCollapsed, setDockCollapsed] = useState(false);
+  const [draggedToolboxNodeType, setDraggedToolboxNodeType] = useState<WorkflowNodeInstance["node_type"] | "">("");
+  const [toolboxDragPointer, setToolboxDragPointer] = useState<{ x: number; y: number } | null>(null);
+  const [isCanvasDropActive, setIsCanvasDropActive] = useState(false);
+  const canvasScrollRef = useRef<HTMLDivElement | null>(null);
+  const canvasTopbarRef = useRef<HTMLDivElement | null>(null);
+  const canvasBannerRef = useRef<HTMLDivElement | null>(null);
+  const miniMapRef = useRef<HTMLDivElement | null>(null);
+  const toolboxDragStateRef = useRef<{ nodeType: WorkflowNodeInstance["node_type"] } | null>(null);
+  const canvasPanStateRef = useRef<{
+    startClientX: number;
+    startClientY: number;
+    startViewportX: number;
+    startViewportY: number;
+  } | null>(null);
+  const miniMapDragStateRef = useRef(false);
+  const dragStateRef = useRef<{
+    nodeId: string;
+    startClientX: number;
+    startClientY: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+  const [canvasViewportSize, setCanvasViewportSize] = useState({ width: 0, height: 0 });
+  const [canvasOverlayOffset, setCanvasOverlayOffset] = useState(120);
+  const [draggingNodeId, setDraggingNodeId] = useState("");
+  const [isCanvasPanning, setIsCanvasPanning] = useState(false);
+
+  useEffect(() => {
+    const nextWorkflow = project ? resolveActiveWorkflow(project) : null;
+    const persistedDraft = project && nextWorkflow
+      ? loadPersistedWorkflowDraft(project.id, nextWorkflow.workflow_id)
+      : null;
+    const persistedEditorState = project && nextWorkflow
+      ? loadPersistedWorkflowEditorState(project.id, nextWorkflow.workflow_id)
+      : null;
+    const normalizedWorkflow = project && nextWorkflow
+      ? normalizeWorkflowGraph(deepClone(persistedDraft ?? nextWorkflow), project.pipeline)
+      : null;
+    const hydratedWorkflow = normalizedWorkflow && !persistedDraft
+      ? updateWorkflowViewport(normalizedWorkflow, workflowFitViewport(normalizedWorkflow.nodes))
+      : normalizedWorkflow;
+    const sortedNodeIds = hydratedWorkflow
+      ? [...hydratedWorkflow.nodes]
+        .sort((left, right) => left.position.x - right.position.x || left.position.y - right.position.y)
+        .map((node) => node.node_id)
+      : [];
+    setDraftWorkflow(hydratedWorkflow);
+    setSelectedNodeId(
+      persistedEditorState?.selectedNodeId && sortedNodeIds.includes(persistedEditorState.selectedNodeId)
+        ? persistedEditorState.selectedNodeId
+        : (sortedNodeIds[0] ?? "")
+    );
+    setSelectedEdgeId(persistedEditorState?.selectedEdgeId ?? "");
+    setPendingConnection(null);
+    setDocumentPickerQuery(persistedEditorState?.documentPickerQuery ?? "");
+    setDockView(persistedEditorState?.dockView ?? "library");
+    setDockCollapsed(persistedEditorState?.dockCollapsed ?? false);
+  }, [project?.id, project?.updated_at, project?.active_workflow_id]);
+
+  useEffect(() => {
+    if (!project || !draftWorkflow) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        workflowDraftStorageKey(project.id, draftWorkflow.workflow_id),
+        JSON.stringify(draftWorkflow)
+      );
+    } catch {
+      // Ignore draft persistence failures and keep the in-memory editor usable.
+    }
+  }, [draftWorkflow, project?.id]);
+
+  useEffect(() => {
+    if (!project || !draftWorkflow) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        workflowEditorStateStorageKey(project.id, draftWorkflow.workflow_id),
+        JSON.stringify({
+          selectedNodeId,
+          selectedEdgeId,
+          dockView,
+          dockCollapsed,
+          documentPickerQuery
+        })
+      );
+    } catch {
+      // Ignore editor-state persistence failures and keep the in-memory editor usable.
+    }
+  }, [
+    dockCollapsed,
+    dockView,
+    documentPickerQuery,
+    draftWorkflow,
+    project?.id,
+    selectedEdgeId,
+    selectedNodeId
+  ]);
+
+  useEffect(() => {
+    const canvasElement = canvasScrollRef.current;
+    if (!canvasElement) {
+      return undefined;
+    }
+    const updateViewportSize = () => {
+      setCanvasViewportSize({
+        width: canvasElement.clientWidth,
+        height: canvasElement.clientHeight
+      });
+    };
+    updateViewportSize();
+    const observer = new ResizeObserver(updateViewportSize);
+    observer.observe(canvasElement);
+    return () => observer.disconnect();
+  }, [draftWorkflow?.workflow_id]);
+
+  const draftPipeline = useMemo(
+    () => (project && draftWorkflow
+      ? normalizePipelineDraft(compilePipelineFromWorkflow(draftWorkflow, project.pipeline))
+      : null),
+    [draftWorkflow, project]
+  );
+  const workflowValidation = draftWorkflow ? validateWorkflowGraph(draftWorkflow) : null;
+
+  useEffect(() => {
+    const topbarElement = canvasTopbarRef.current;
+    const bannerElement = canvasBannerRef.current;
+    const updateOffset = () => {
+      setCanvasOverlayOffset((topbarElement?.offsetHeight ?? 0) + (bannerElement?.offsetHeight ?? 0) + 28);
+    };
+    updateOffset();
+    const observer = new ResizeObserver(updateOffset);
+    if (topbarElement) {
+      observer.observe(topbarElement);
+    }
+    if (bannerElement) {
+      observer.observe(bannerElement);
+    }
+    return () => observer.disconnect();
+  }, [pendingConnection, workflowValidation, dockCollapsed]);
+
+  if (!project || !draftWorkflow || !draftPipeline || !workflowValidation) {
+    return <EmptyState title="流程配置待初始化" body="请先建立项目工作区。" />;
+  }
+
+  const sortedNodes = [...draftWorkflow.nodes].sort((left, right) => left.position.x - right.position.x || left.position.y - right.position.y);
+  const nodeLookup = new Map(draftWorkflow.nodes.map((node) => [node.node_id, node]));
+  const reachableNodeIds = new Set(workflowValidation.reachable_node_ids);
+  const activeNodeIds = new Set(workflowValidation.active_node_ids);
+  const connectionTargets = pendingConnection
+    ? workflowConnectionTargets(draftWorkflow, pendingConnection.fromNodeId, pendingConnection.fromPortId)
+    : [];
+  const connectionTargetKeys = new Set(connectionTargets.map((target) => `${target.node_id}:${target.port_id}`));
+  const canvasMetrics = workflowCanvasMetrics(draftWorkflow.nodes);
+  const canvasOrigin = workflowCanvasOrigin(canvasMetrics);
+  const viewport = {
+    x: draftWorkflow.viewport.x ?? 0,
+    y: draftWorkflow.viewport.y ?? 0,
+    zoom: clampWorkflowZoom(draftWorkflow.viewport.zoom ?? 0.82)
+  };
+  const miniMap = workflowMiniMapMetrics(canvasMetrics);
+  const viewportWorldRect = {
+    x: Math.max(0, (-viewport.x) / viewport.zoom),
+    y: Math.max(0, (-viewport.y) / viewport.zoom),
+    width: Math.max(120, (canvasViewportSize.width || 920) / viewport.zoom),
+    height: Math.max(80, (canvasViewportSize.height || 640) / viewport.zoom)
+  };
+  const selectedNode = sortedNodes.find((node) => node.node_id === selectedNodeId) ?? null;
+  const displayEdges = workflowValidation.normalized_edges;
+  const selectedEdge = displayEdges.find((edge) => edge.edge_id === selectedEdgeId) ?? null;
+  const selectedEdgeSourceNode = selectedEdge ? nodeLookup.get(selectedEdge.from_node) : null;
+  const selectedEdgeTargetNode = selectedEdge ? nodeLookup.get(selectedEdge.to_node) : null;
+  const selectedEdgeLabel = selectedEdge
+    ? `${selectedEdgeSourceNode?.label ?? selectedEdge.from_node} -> ${selectedEdgeTargetNode?.label ?? selectedEdge.to_node}`
+    : "";
+  const latestRun = project.run_history.at(-1);
+  const availableSources = Array.from(new Set(snapshot.corpus.map((item) => item.source).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
+  const availableInstitutions = Array.from(new Set(snapshot.corpus.map((item) => item.institution).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
+  const availableCategories = Array.from(new Set(snapshot.corpus.map((item) => item.category_or_tag).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
+  const nodeDefinitionsByType = new Map((snapshot.node_definitions ?? []).map((definition) => [definition.type, definition]));
+  const runScopeForNode = (node: WorkflowNodeInstance | null | undefined): RunScopeDefinition => {
+    if (!node || (node.node_type !== "corpus_input" && node.node_type !== "filter_corpus")) {
+      return draftPipeline.run_scope;
+    }
+    return {
+      ...draftPipeline.run_scope,
+      ...(node.config as Partial<RunScopeDefinition>),
+      source_values: [...(((node.config.source_values as string[] | undefined) ?? draftPipeline.run_scope.source_values))],
+      institution_values: [...(((node.config.institution_values as string[] | undefined) ?? draftPipeline.run_scope.institution_values))],
+      category_values: [...(((node.config.category_values as string[] | undefined) ?? draftPipeline.run_scope.category_values))],
+      selected_doc_ids: [...(((node.config.selected_doc_ids as string[] | undefined) ?? draftPipeline.run_scope.selected_doc_ids))]
+    };
+  };
+  const workflowScopeNode = sortedNodes.find((node) => activeNodeIds.has(node.node_id) && node.node_type === "corpus_input")
+    ?? sortedNodes.find((node) => node.node_type === "corpus_input")
+    ?? sortedNodes.find((node) => node.node_type === "filter_corpus")
+    ?? null;
+  const workflowRunScope = runScopeForNode(workflowScopeNode);
+  const matchedDocuments = snapshot.corpus.filter((item) => corpusMatchesRunScope(item, workflowRunScope));
+  const pickerQuery = documentPickerQuery.trim().toLowerCase();
+  const pickerScope = selectedNode?.node_type === "corpus_input" || selectedNode?.node_type === "filter_corpus"
+    ? runScopeForNode(selectedNode)
+    : workflowRunScope;
+  const documentPickerRows = pickerScope.mode === "selected_documents"
+    ? snapshot.corpus.filter((item) =>
+      !pickerQuery || [item.doc_id, item.title, item.source, item.institution].filter(Boolean).join(" ").toLowerCase().includes(pickerQuery)
+    )
+    : [];
+  const estimatedEffort = matchedDocuments.length <= 20 ? "短" : matchedDocuments.length <= 80 ? "中" : "长";
+  const canRun = !loading && matchedDocuments.length > 0 && workflowValidation.valid;
+  const runSummary = runScopeSummary(workflowRunScope, snapshot.corpus.length, matchedDocuments.length);
+  const toolboxNodeTypes = workflowOptionalToolboxNodes();
+  const toolboxSections = [
+    { id: "input", title: "输入节点" },
+    { id: "process", title: "处理节点" },
+    { id: "analysis", title: "分析节点" },
+    { id: "output", title: "输出节点" },
+    { id: "utility", title: "辅助节点" }
+  ]
+    .map((section) => ({
+      ...section,
+      items: toolboxNodeTypes.filter((nodeType) => workflowNodeDefinition(nodeType).category === section.id)
+    }))
+    .filter((section) => section.items.length > 0);
+  const registeredNodeCount = snapshot.node_definitions?.length ?? 0;
+
+  const activateDock = (view: "library" | "nodes" | "status") => {
+    setDockView(view);
+    setDockCollapsed(false);
+  };
+
+  const selectNode = (nodeId: string) => {
+    setSelectedNodeId(nodeId);
+    setSelectedEdgeId("");
+    setPendingConnection(null);
+  };
+
+  const selectEdge = (edgeId: string) => {
+    setSelectedEdgeId(edgeId);
+    setPendingConnection(null);
+  };
+
+  useEffect(() => {
+    if (!draggingNodeId) {
+      return undefined;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const dragState = dragStateRef.current;
+      if (!dragState) {
+        return;
+      }
+      const deltaX = (event.clientX - dragState.startClientX) / viewport.zoom;
+      const deltaY = (event.clientY - dragState.startClientY) / viewport.zoom;
+      setDraftWorkflow((current) => current
+        ? updateWorkflowNodePosition(current, dragState.nodeId, {
+          x: dragState.startX + deltaX,
+          y: dragState.startY + deltaY
+        })
+        : current);
+    };
+
+    const handlePointerUp = () => {
+      dragStateRef.current = null;
+      setDraggingNodeId("");
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [draggingNodeId, viewport.zoom]);
+
+  useEffect(() => {
+    if (!isCanvasPanning) {
+      return undefined;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const panState = canvasPanStateRef.current;
+      if (!panState) {
+        return;
+      }
+      const deltaX = event.clientX - panState.startClientX;
+      const deltaY = event.clientY - panState.startClientY;
+      setDraftWorkflow((current) => current
+        ? updateWorkflowViewport(current, {
+          x: panState.startViewportX + deltaX,
+          y: panState.startViewportY + deltaY
+        })
+        : current);
+    };
+
+    const handlePointerUp = () => {
+      canvasPanStateRef.current = null;
+      setIsCanvasPanning(false);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [isCanvasPanning]);
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!miniMapDragStateRef.current) {
+        return;
+      }
+      const canvasElement = canvasScrollRef.current;
+      const minimapElement = miniMapRef.current;
+      if (!canvasElement || !minimapElement) {
+        return;
+      }
+      const rect = minimapElement.getBoundingClientRect();
+      const clampedX = Math.min(rect.right, Math.max(rect.left, event.clientX));
+      const clampedY = Math.min(rect.bottom, Math.max(rect.top, event.clientY));
+      const worldX = (clampedX - rect.left) / miniMap.scale;
+      const worldY = (clampedY - rect.top) / miniMap.scale;
+      setDraftWorkflow((current) => current
+        ? updateWorkflowViewport(current, {
+          x: canvasElement.clientWidth / 2 - worldX * viewport.zoom,
+          y: canvasElement.clientHeight / 2 - worldY * viewport.zoom
+        })
+        : current);
+    };
+
+    const handlePointerUp = () => {
+      miniMapDragStateRef.current = false;
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [miniMap.scale, viewport.zoom]);
+
+  useEffect(() => {
+    if (!draggedToolboxNodeType) {
+      return undefined;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      setToolboxDragPointer({ x: event.clientX, y: event.clientY });
+      const canvasElement = canvasScrollRef.current;
+      if (!canvasElement) {
+        setIsCanvasDropActive(false);
+        return;
+      }
+      const rect = canvasElement.getBoundingClientRect();
+      const insideCanvas = event.clientX >= rect.left
+        && event.clientX <= rect.right
+        && event.clientY >= rect.top
+        && event.clientY <= rect.bottom;
+      setIsCanvasDropActive(insideCanvas);
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      const canvasElement = canvasScrollRef.current;
+      if (canvasElement && toolboxDragStateRef.current) {
+        const rect = canvasElement.getBoundingClientRect();
+        const insideCanvas = event.clientX >= rect.left
+          && event.clientX <= rect.right
+          && event.clientY >= rect.top
+          && event.clientY <= rect.bottom;
+        if (insideCanvas) {
+          const frame = workflowNodeCanvasFrame(toolboxDragStateRef.current.nodeType);
+          const x = (event.clientX - rect.left - viewport.x) / viewport.zoom - canvasOrigin.x - frame.w / 2;
+          const y = (event.clientY - rect.top - viewport.y) / viewport.zoom - canvasOrigin.y - frame.h / 3;
+          addWorkflowNode(toolboxDragStateRef.current.nodeType, { x, y });
+        }
+      }
+      toolboxDragStateRef.current = null;
+      setDraggedToolboxNodeType("");
+      setToolboxDragPointer(null);
+      setIsCanvasDropActive(false);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [draggedToolboxNodeType, viewport.x, viewport.y, viewport.zoom, canvasOrigin.x, canvasOrigin.y]);
+
+  const updateWorkflow = (updater: (current: WorkflowDefinition) => WorkflowDefinition) => {
+    setDraftWorkflow((current) => current ? updater(current) : current);
+  };
+
+  const addWorkflowNode = (
+    nodeType: WorkflowNodeInstance["node_type"],
+    position?: { x: number; y: number }
+  ) => {
+    let nextSelectedNodeId = "";
+    updateWorkflow((current) => {
+      let next = addWorkflowNodeByType(current, nodeType, draftPipeline);
+      const previousNodeIds = new Set(current.nodes.map((node) => node.node_id));
+      nextSelectedNodeId = next.nodes.find((node) => !previousNodeIds.has(node.node_id))?.node_id ?? "";
+      if (position && nextSelectedNodeId) {
+        next = updateWorkflowNodePosition(next, nextSelectedNodeId, position);
+      }
+      return next;
+    });
+    setSelectedEdgeId("");
+    setSelectedNodeId(nextSelectedNodeId);
+    setPendingConnection(null);
+  };
+
+  const removeWorkflowNode = (nodeId: string) => {
+    updateWorkflow((current) => removeWorkflowNodeById(current, nodeId));
+    if (selectedNodeId === nodeId) {
+      setSelectedNodeId("");
+    }
+    setSelectedEdgeId("");
+    setPendingConnection(null);
+  };
+
+  const clearWorkflowCanvas = () => {
+    const confirmed = window.confirm("清空当前画布上的所有节点和连线？\n\n这不会删除项目语料和词表资源，只会把当前 workflow 变成空白画布。");
+    if (!confirmed) {
+      return;
+    }
+    setDraftWorkflow(buildBlankWorkflowFromPipeline(draftWorkflow.workflow_id, draftWorkflow.name, draftPipeline));
+    setSelectedNodeId("");
+    setSelectedEdgeId("");
+    setPendingConnection(null);
+  };
+
+  const insertRecommendedStarter = () => {
+    const blankWorkflow = buildBlankWorkflowFromPipeline(draftWorkflow.workflow_id, draftWorkflow.name, draftPipeline);
+    const nextWorkflow = syncWorkflowFromPipeline(blankWorkflow, draftPipeline, "manual");
+    setDraftWorkflow(nextWorkflow);
+    setSelectedNodeId(nextWorkflow.nodes[0]?.node_id ?? "");
+    setSelectedEdgeId("");
+    setPendingConnection(null);
+  };
+
+  const restoreRecommendedEdges = () => {
+    updateWorkflow((current) => restoreWorkflowDefaultEdges(current, draftPipeline));
+    setSelectedEdgeId("");
+    setPendingConnection(null);
+  };
+
+  const focusWorkflowCanvas = () => {
+    updateWorkflow((current) => updateWorkflowViewport(current, workflowFitViewport(current.nodes)));
+  };
+
+  const resetWorkflowLayout = () => {
+    updateWorkflow((current) => autoLayoutWorkflow(current));
+    requestAnimationFrame(() => {
+      canvasScrollRef.current?.scrollTo({ left: 0, top: 0, behavior: "smooth" });
+    });
+  };
+
+  const updateWorkflowZoom = (zoom: number) => {
+    updateWorkflow((current) => updateWorkflowViewport(current, { zoom: clampWorkflowZoom(zoom) }));
+  };
+
+  const handleCanvasWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (
+      target.closest(".workflow-node-card")
+      || target.closest(".workflow-minimap-shell")
+      || target.closest("input")
+      || target.closest("textarea")
+      || target.closest("select")
+      || target.closest("button")
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const canvasElement = canvasScrollRef.current;
+    if (!canvasElement) {
+      return;
+    }
+    const rect = canvasElement.getBoundingClientRect();
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const nextZoom = clampWorkflowZoom(viewport.zoom + (event.deltaY < 0 ? 0.08 : -0.08));
+    if (nextZoom === viewport.zoom) {
+      return;
+    }
+    const worldX = (pointerX - viewport.x) / viewport.zoom;
+    const worldY = (pointerY - viewport.y) / viewport.zoom;
+    updateWorkflow((current) => updateWorkflowViewport(current, {
+      zoom: nextZoom,
+      x: pointerX - worldX * nextZoom,
+      y: pointerY - worldY * nextZoom
+    }));
+  };
+
+  const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (loading || event.button !== 0) {
+      return;
+    }
+    const target = event.target as HTMLElement;
+    if (target.closest(".workflow-node-card") || target.closest(".workflow-port") || target.closest(".workflow-minimap-shell")) {
+      return;
+    }
+    canvasPanStateRef.current = {
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startViewportX: viewport.x,
+      startViewportY: viewport.y
+    };
+    setIsCanvasPanning(true);
+    setSelectedNodeId("");
+    setSelectedEdgeId("");
+    setPendingConnection(null);
+    event.preventDefault();
+  };
+
+  const handleMiniMapPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const canvasElement = canvasScrollRef.current;
+    if (!canvasElement) {
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const centerViewport = (clientX: number, clientY: number) => {
+      const worldX = (clientX - rect.left) / miniMap.scale;
+      const worldY = (clientY - rect.top) / miniMap.scale;
+      updateWorkflow((current) => updateWorkflowViewport(current, {
+        x: canvasElement.clientWidth / 2 - worldX * viewport.zoom,
+        y: canvasElement.clientHeight / 2 - worldY * viewport.zoom
+      }));
+    };
+    miniMapDragStateRef.current = true;
+    centerViewport(event.clientX, event.clientY);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // ignore browsers that deny capture on synthetic layers
+    }
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleToolboxPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    nodeType: WorkflowNodeInstance["node_type"]
+  ) => {
+    if (loading || event.button !== 0) {
+      return;
+    }
+    toolboxDragStateRef.current = { nodeType };
+    setDraggedToolboxNodeType(nodeType);
+    setToolboxDragPointer({ x: event.clientX, y: event.clientY });
+    event.preventDefault();
+  };
+
+  const beginConnection = (fromNodeId: string, fromPortId: string) => {
+    setPendingConnection((current) =>
+      current?.fromNodeId === fromNodeId && current?.fromPortId === fromPortId
+        ? null
+        : { fromNodeId, fromPortId }
+    );
+    setSelectedEdgeId("");
+  };
+
+  const connectPendingPort = (toNodeId: string, toPortId: string) => {
+    if (!pendingConnection) {
+      return;
+    }
+    updateWorkflow((current) => createWorkflowEdge(current, pendingConnection.fromNodeId, pendingConnection.fromPortId, toNodeId, toPortId));
+    setPendingConnection(null);
+    setSelectedNodeId(toNodeId);
+    setSelectedEdgeId("");
+  };
+
+  const removeSelectedWorkflowEdge = () => {
+    if (!selectedEdge) {
+      return;
+    }
+    updateWorkflow((current) => removeWorkflowEdge(current, selectedEdge.edge_id));
+    setSelectedEdgeId("");
+  };
+
+  const handleCanvasNodePointerDown = (event: ReactPointerEvent<HTMLElement>, node: WorkflowNodeInstance) => {
+    if (loading || event.button !== 0) {
+      return;
+    }
+    dragStateRef.current = {
+      nodeId: node.node_id,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: node.position.x,
+      startY: node.position.y
+    };
+    selectNode(node.node_id);
+    setDraggingNodeId(node.node_id);
+    event.preventDefault();
+  };
+
+  const updateNodeConfig = (nodeId: string, patch: Record<string, unknown>) => {
+    updateWorkflow((current) => updateWorkflowNode(current, nodeId, (node) => ({
+      ...node,
+      config: {
+        ...node.config,
+        ...patch
+      }
+    })));
+  };
+
+  const updateRunScope = (nodeId: string, patch: Partial<RunScopeDefinition>) => {
+    updateNodeConfig(nodeId, patch as Record<string, unknown>);
+  };
+
+  const toggleScopeArrayValue = (
+    nodeId: string,
+    field: "source_values" | "institution_values" | "category_values",
+    value: string
+  ) => {
+    const currentScope = runScopeForNode(nodeLookup.get(nodeId));
+    const values = currentScope[field];
+    updateRunScope(nodeId, {
+      [field]: values.includes(value) ? values.filter((item) => item !== value) : [...values, value]
+    } as Partial<RunScopeDefinition>);
+  };
+
+  const toggleSelectedDocument = (nodeId: string, docId: string) => {
+    const currentScope = runScopeForNode(nodeLookup.get(nodeId));
+    updateRunScope(nodeId, {
+      selected_doc_ids: currentScope.selected_doc_ids.includes(docId)
+        ? currentScope.selected_doc_ids.filter((item) => item !== docId)
+        : [...currentScope.selected_doc_ids, docId]
+    });
+  };
+
+  const setNodeBypassed = (nodeId: string, bypassed: boolean) => {
+    updateWorkflow((current) => updateWorkflowNode(current, nodeId, (node) => ({
+      ...node,
+      ui_state: {
+        ...node.ui_state,
+        bypassed
+      }
+    })));
+  };
+
+  const renderBooleanToggles = (
+    nodeId: string,
+    values: Record<string, unknown>,
+    items: readonly (readonly [string, string])[]
+  ) => (
+    <div className="toggle-grid">
+      {items.map(([key, label]) => (
+        <label key={key} className="switch-row">
+          <input
+            type="checkbox"
+            checked={Boolean(values[key])}
+            onChange={(event) => updateNodeConfig(nodeId, { [key]: event.target.checked })}
+            disabled={loading}
+          />
+          <span>{label}</span>
+        </label>
+      ))}
+    </div>
+  );
+
+  const saveWorkflow = async () => {
+    const normalizedWorkflow = normalizeWorkflowGraph(draftWorkflow, project.pipeline);
+    const compiledPipeline = normalizePipelineDraft(compilePipelineFromWorkflow(normalizedWorkflow, project.pipeline));
+    const nextWorkflowDefinitions = project.workflow_definitions.some(
+      (workflow) => workflow.workflow_id === normalizedWorkflow.workflow_id
+    )
+      ? project.workflow_definitions.map((workflow) =>
+        workflow.workflow_id === normalizedWorkflow.workflow_id ? normalizedWorkflow : workflow
+      )
+      : [...project.workflow_definitions, normalizedWorkflow];
+
+    try {
+      window.localStorage.setItem(
+        workflowDraftStorageKey(project.id, normalizedWorkflow.workflow_id),
+        JSON.stringify(normalizedWorkflow)
+      );
+    } catch {
+      // Ignore local draft persistence failures during save.
+    }
+
+    return saveProject({
+      ...project,
+      pipeline: compiledPipeline,
+      workflow_definitions: nextWorkflowDefinitions,
+      active_workflow_id: normalizedWorkflow.workflow_id
+    });
+  };
+
+  const runCurrentWorkflow = async () => {
+    if (!matchedDocuments.length) {
+      return;
+    }
+    const saved = await saveWorkflow();
+    if (saved) {
+      await runPipeline();
+    }
+  };
+
+  const renderRunScopeEditor = (node: WorkflowNodeInstance) => {
+    const nodeScope = runScopeForNode(node);
+    const scopeMatchedDocuments = snapshot.corpus.filter((item) => corpusMatchesRunScope(item, nodeScope));
+    return (
+      <Panel title="语料输入">
+        <div className="status-panel"><strong>当前范围</strong><span>{runScopeSummary(nodeScope, snapshot.corpus.length, scopeMatchedDocuments.length)}</span></div>
+        <div className="intent-option-grid">
+          {runScopeModeOptions.map((option) => (
+            <button key={option.id} type="button" className={`intent-choice ${nodeScope.mode === option.id ? "is-active" : ""}`} onClick={() => updateRunScope(node.node_id, { mode: option.id })} disabled={loading}>
+              <div>
+                <strong>{option.title}</strong>
+                <p>{option.description}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+        {nodeScope.mode === "filtered_subset" && (
+          <div className="intent-filter-stack">
+            <div className="intent-filter-group">
+              <strong>来源</strong>
+              <div className="pill-cloud">
+                {availableSources.length ? availableSources.map((source) => (
+                  <button key={source} type="button" className={`intent-pill ${nodeScope.source_values.includes(source) ? "is-active" : ""}`} onClick={() => toggleScopeArrayValue(node.node_id, "source_values", source)} disabled={loading}>{source}</button>
+                )) : <span className="muted">当前语料还没有来源字段。</span>}
+              </div>
+            </div>
+            <div className="intent-filter-group">
+              <strong>机构</strong>
+              <div className="pill-cloud">
+                {availableInstitutions.length ? availableInstitutions.map((institution) => (
+                  <button key={institution} type="button" className={`intent-pill ${nodeScope.institution_values.includes(institution) ? "is-active" : ""}`} onClick={() => toggleScopeArrayValue(node.node_id, "institution_values", institution)} disabled={loading}>{institution}</button>
+                )) : <span className="muted">当前语料还没有机构字段。</span>}
+              </div>
+            </div>
+            <div className="intent-filter-group">
+              <strong>标签</strong>
+              <div className="pill-cloud">
+                {availableCategories.length ? availableCategories.map((category) => (
+                  <button key={category} type="button" className={`intent-pill ${nodeScope.category_values.includes(category) ? "is-active" : ""}`} onClick={() => toggleScopeArrayValue(node.node_id, "category_values", category)} disabled={loading}>{category}</button>
+                )) : <span className="muted">当前语料还没有标签字段。</span>}
+              </div>
+            </div>
+            <div className="settings-grid">
+              <label className="field"><span>起始年份</span><input type="number" value={nodeScope.year_from ?? ""} onChange={(event) => updateRunScope(node.node_id, { year_from: event.target.value ? Number(event.target.value) : null })} disabled={loading} placeholder="例如 2024" /></label>
+              <label className="field"><span>结束年份</span><input type="number" value={nodeScope.year_to ?? ""} onChange={(event) => updateRunScope(node.node_id, { year_to: event.target.value ? Number(event.target.value) : null })} disabled={loading} placeholder="例如 2025" /></label>
+            </div>
+          </div>
+        )}
+        {nodeScope.mode === "selected_documents" && (
+          <div className="intent-filter-stack">
+            <label className="field">
+              <span>搜索文档</span>
+              <input value={documentPickerQuery} onChange={(event) => setDocumentPickerQuery(event.target.value)} placeholder="按标题、来源或机构筛选" disabled={loading} />
+            </label>
+            <div className="document-picker-list">
+              {documentPickerRows.slice(0, 24).map((item) => (
+                <label key={item.doc_id} className="document-picker-row">
+                  <input type="checkbox" checked={nodeScope.selected_doc_ids.includes(item.doc_id)} onChange={() => toggleSelectedDocument(node.node_id, item.doc_id)} disabled={loading} />
+                  <div>
+                    <strong>{item.title}</strong>
+                    <p>{[item.doc_id, item.source, item.institution, item.year].filter(Boolean).join(" · ")}</p>
+                  </div>
+                </label>
+              ))}
+              {!documentPickerRows.length && <span className="muted">没有匹配的文档，请换个关键词试试。</span>}
+            </div>
+          </div>
+        )}
+      </Panel>
+    );
+  };
+
+  const renderSelectedNodePanel = () => {
+    if (!selectedNode) {
+      return <EmptyState title="选择一个节点" body="从左侧工具箱加入节点，或点击画布中的节点卡片后，在这里继续补完整参数。" />;
+    }
+
+    if (selectedNode.node_type === "corpus_input" || selectedNode.node_type === "filter_corpus") {
+      return renderRunScopeEditor(selectedNode);
+    }
+
+    if (selectedNode.node_type === "dictionary_input" || selectedNode.node_type === "project_dictionary_set") {
+      return (
+        <Panel title="词表输入" actions={<button type="button" className="toolbar-button ghost" onClick={() => setActivePage("dictionaries")} disabled={loading}>打开词表中心</button>}>
+          <p className="body-copy">这里引用的是项目当前词表资源。后续如果要支持多词表切换，会继续把资源选择器下沉到节点体内。</p>
+          <div className="status-panel"><strong>当前词表版本</strong><span>{project.dictionary_set.version}</span></div>
+          <div className="status-panel"><strong>启用条目</strong><span>{enabledDictionaryEntryCount(project.dictionary_set)} 条</span></div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "merge_corpora") {
+      return (
+        <Panel title="合并语料">
+          <p className="body-copy">合并节点已经开放建图，但当前运行时还不能真正执行多语料汇合。你可以先用它组织画布结构，后续 DAG 引擎会直接接管。</p>
+          <label className="field">
+            <span>合并策略</span>
+            <select value={String(selectedNode.config.strategy ?? "append")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { strategy: event.target.value })} disabled={loading}>
+              <option value="append">直接追加</option>
+              <option value="deduplicate_doc_id">按 doc_id 去重</option>
+            </select>
+          </label>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "clean_text") {
+      return <Panel title="基础清洗">{renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, cleaningToggleItems)}</Panel>;
+    }
+
+    if (selectedNode.node_type === "normalize_text") {
+      return (
+        <Panel title="统一写法">
+          {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, normalizationToggleItems)}
+          <label className="field">
+            <span>Regex 优先策略</span>
+            <select value={String(selectedNode.config.regex_rule_priority ?? draftPipeline.normalization.regex_rule_priority)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { regex_rule_priority: event.target.value })} disabled={loading}>
+              <option value="rule_order">按规则顺序</option>
+              <option value="first_match">命中首条后停止</option>
+            </select>
+          </label>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "tokenize") {
+      return (
+        <Panel title="切词">
+          <div className="settings-grid">
+            <label className="field">
+              <span>语言模式</span>
+              <select value={String(selectedNode.config.language_mode ?? draftPipeline.tokenization.language_mode)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { language_mode: event.target.value })} disabled={loading}>
+                <option value="auto">自动判断</option>
+                <option value="zh">中文</option>
+                <option value="en">英文</option>
+                <option value="mixed">中英混合</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>切词前最短长度</span>
+              <input type="number" value={Number(selectedNode.config.min_token_length_before_filter ?? draftPipeline.tokenization.min_token_length_before_filter)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_token_length_before_filter: Number(event.target.value) })} disabled={loading} />
+            </label>
+          </div>
+          {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, tokenizationToggleItems)}
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "apply_dictionary_rules") {
+      return (
+        <Panel title="套用词表">
+          {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, dictionaryToggleItems)}
+          <label className="field">
+            <span>冲突处理</span>
+            <select value={String(selectedNode.config.conflict_resolution ?? draftPipeline.dictionary.conflict_resolution)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { conflict_resolution: event.target.value })} disabled={loading}>
+              <option value="priority">按词表优先级</option>
+              <option value="first_match">命中首条后停止</option>
+            </select>
+          </label>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "filter_terms") {
+      return (
+        <Panel title="过滤词项">
+          {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, filteringToggleItems)}
+          <div className="settings-grid">
+            <label className="field"><span>最短 token 长度</span><input type="number" value={Number(selectedNode.config.min_token_length ?? draftPipeline.filtering.min_token_length)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_token_length: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>最小词频</span><input type="number" value={Number(selectedNode.config.min_term_frequency ?? draftPipeline.filtering.min_term_frequency)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_term_frequency: Number(event.target.value) })} disabled={loading} /></label>
+          </div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "frequency_statistics") {
+      return (
+        <Panel title="词频统计">
+          <label className="field">
+            <span>高频词 Top N</span>
+            <input type="number" value={Number(selectedNode.config.top_n ?? draftPipeline.analysis.top_n)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_n: Number(event.target.value) })} disabled={loading} />
+          </label>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "term_year_analysis") {
+      return <Panel title="词项年份分析"><p className="body-copy">这个节点会输出词项在不同年份上的变化表，适合继续连到图表和报表输出节点。</p></Panel>;
+    }
+
+    if (selectedNode.node_type === "cooccurrence_analysis") {
+      return (
+        <Panel title="共现分析">
+          <div className="settings-grid">
+            <label className="field"><span>共现窗口</span><input type="number" value={Number(selectedNode.config.cooccurrence_window ?? draftPipeline.analysis.cooccurrence_window)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { cooccurrence_window: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>最小共现次数</span><input type="number" value={Number(selectedNode.config.min_cooccurrence ?? draftPipeline.analysis.min_cooccurrence)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_cooccurrence: Number(event.target.value) })} disabled={loading} /></label>
+          </div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "keyword_extraction") {
+      return (
+        <Panel title="关键词提取">
+          <div className="settings-grid">
+            <label className="field"><span>每篇文档关键词数</span><input type="number" value={Number(selectedNode.config.top_k_per_doc ?? draftPipeline.analysis.top_k_per_doc)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_k_per_doc: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>项目级关键词数</span><input type="number" value={Number(selectedNode.config.top_k_project ?? draftPipeline.analysis.top_k_project)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_k_project: Number(event.target.value) })} disabled={loading} /></label>
+          </div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "keyword_clustering") {
+      return (
+        <Panel title="关键词聚类">
+          <div className="settings-grid">
+            <label className="field"><span>关键词聚类数</span><input type="number" value={Number(selectedNode.config.keyword_cluster_k ?? draftPipeline.analysis.keyword_cluster_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { keyword_cluster_k: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>主题数量</span><input type="number" value={Number(selectedNode.config.topic_model_k ?? draftPipeline.analysis.topic_model_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { topic_model_k: Number(event.target.value) })} disabled={loading} /></label>
+          </div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "institution_topic_analysis") {
+      return (
+        <Panel title="机构主题分析">
+          <label className="field"><span>主题数量</span><input type="number" value={Number(selectedNode.config.topic_model_k ?? draftPipeline.analysis.topic_model_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { topic_model_k: Number(event.target.value) })} disabled={loading} /></label>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "save_csv" || selectedNode.node_type === "save_xlsx") {
+      return (
+        <Panel title={selectedNode.node_type === "save_csv" ? "保存 CSV" : "保存 XLSX"}>
+          <label className="field"><span>文件名前缀</span><input value={String(selectedNode.config.file_prefix ?? "tables")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { file_prefix: event.target.value })} disabled={loading} /></label>
+          <p className="body-copy">这个输出节点支持多输入，可以把多个表格节点一起连进来统一导出。</p>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "save_png") {
+      return (
+        <Panel title="保存 PNG">
+          <div className="settings-grid">
+            <label className="field"><span>文件名前缀</span><input value={String(selectedNode.config.file_prefix ?? "charts")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { file_prefix: event.target.value })} disabled={loading} /></label>
+            <label className="field"><span>PNG 分辨率（DPI）</span><input type="number" value={Number(selectedNode.config.chart_dpi ?? draftPipeline.export.chart_dpi)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { chart_dpi: Number(event.target.value) })} disabled={loading} /></label>
+          </div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "save_html_report") {
+      return (
+        <Panel title="保存 HTML 报告">
+          <label className="field"><span>文件名前缀</span><input value={String(selectedNode.config.file_prefix ?? "report")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { file_prefix: event.target.value })} disabled={loading} /></label>
+          <label className="switch-row">
+            <input type="checkbox" checked={Boolean(selectedNode.config.include_audit ?? draftPipeline.export.include_audit)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { include_audit: event.target.checked })} disabled={loading} />
+            <span>在报告中附带审计摘要</span>
+          </label>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "note") {
+      return <Panel title="注释"><label className="field"><span>注释文本</span><textarea value={String(selectedNode.config.text ?? "")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { text: event.target.value })} disabled={loading} rows={6} /></label></Panel>;
+    }
+
+    if (selectedNode.node_type === "group") {
+      return <Panel title="分组"><label className="field"><span>分组标题</span><input value={String(selectedNode.config.title ?? "")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { title: event.target.value })} disabled={loading} /></label></Panel>;
+    }
+
+    return <Panel title="节点参数"><p className="body-copy">这个节点类型的完整配置面板还在继续补充，当前已经可以在节点体内做快捷调整。</p></Panel>;
+  };
+
+  const renderNodeInlineEditor = (node: WorkflowNodeInstance) => renderWorkflowNodeInlineEditor({
+    node,
+    project,
+    snapshot: { corpus: snapshot.corpus },
+    latestRun,
+    draftPipeline,
+    loading,
+    nodeDefinitionsByType,
+    availableSources,
+    availableInstitutions,
+    availableCategories,
+    documentPickerQuery,
+    setDocumentPickerQuery,
+    setActivePage,
+    runScopeForNode,
+    runScopeSummary,
+    corpusMatchesRunScope,
+    updateNodeConfig,
+    updateRunScope,
+    toggleScopeArrayValue,
+    toggleSelectedDocument,
+    enabledDictionaryEntryCount
+  });
+
+  const renderSelectedNodePreview = () => {
+    if (!selectedNode) {
+      return null;
+    }
+
+    const rawSamples = previewSampleTexts(matchedDocuments, "raw_text");
+    const cleanSamples = previewSampleTexts(matchedDocuments, "clean_text");
+    const normalizedSamples = previewSampleTexts(matchedDocuments, "normalized_text");
+    const tokenSamples = previewSampleTerms(matchedDocuments, "tokens");
+    const phraseSamples = previewSampleTerms(matchedDocuments, "phrase_hits");
+    const filteredSamples = previewSampleTerms(matchedDocuments, "filtered_tokens");
+    const latestArtifacts = latestRun?.artifacts ?? [];
+
+    if (selectedNode.node_type === "corpus_input" || selectedNode.node_type === "load_project_corpus" || selectedNode.node_type === "filter_corpus") {
+      return (
+        <Panel title="预览（基于当前项目快照）">
+          <div className="status-panel"><strong>当前命中文档</strong><span>{matchedDocuments.length} 篇</span></div>
+          <ul className="micro-list">
+            {matchedDocuments.slice(0, 5).map((item) => <li key={item.doc_id}>{item.title}</li>)}
+            {!matchedDocuments.length && <li>当前范围下还没有可见文档。</li>}
+          </ul>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "dictionary_input" || selectedNode.node_type === "project_dictionary_set") {
+      return (
+        <Panel title="预览（基于当前项目词表）">
+          <div className="status-panel"><strong>启用词条</strong><span>{enabledDictionaryEntryCount(project.dictionary_set)} 条</span></div>
+          <ul className="micro-list">
+            {Object.values(project.dictionary_set.sheets).flatMap((sheet) => sheet.entries.filter((entry) => entry.enabled).slice(0, 1).map((entry) => `${sheet.name}：${entry.source}`)).slice(0, 6).map((entry) => <li key={entry}>{entry}</li>)}
+          </ul>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "clean_text") {
+      return (
+        <Panel title="预览（基于最近一次项目快照）">
+          <div className="preview-compare-grid">
+            <div className="preview-card"><strong>原文片段</strong><p>{rawSamples[0] ?? "暂无原文样本。"}</p></div>
+            <div className="preview-card"><strong>清洗后片段</strong><p>{cleanSamples[0] ?? "暂无清洗后样本。"}</p></div>
+          </div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "normalize_text") {
+      return (
+        <Panel title="预览（基于最近一次项目快照）">
+          <div className="preview-compare-grid">
+            <div className="preview-card"><strong>清洗后片段</strong><p>{cleanSamples[0] ?? "暂无清洗后样本。"}</p></div>
+            <div className="preview-card"><strong>标准化片段</strong><p>{normalizedSamples[0] ?? "暂无标准化样本。"}</p></div>
+          </div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "tokenize") {
+      return (
+        <Panel title="预览（基于最近一次项目快照）">
+          <div className="status-panel"><strong>Token 样本</strong><span>{tokenSamples.slice(0, 8).join(" / ") || "暂无 token 样本"}</span></div>
+          <div className="status-panel"><strong>短语命中</strong><span>{phraseSamples.slice(0, 6).join(" / ") || "暂无短语命中"}</span></div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "apply_dictionary_rules" || selectedNode.node_type === "filter_terms") {
+      return (
+        <Panel title="预览（基于最近一次项目快照）">
+          <div className="status-panel"><strong>过滤后词项</strong><span>{filteredSamples.slice(0, 10).join(" / ") || "暂无过滤后词项"}</span></div>
+          <div className="status-panel"><strong>审计命中</strong><span>{project.results.audit_table.length} 条</span></div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "frequency_statistics" || selectedNode.node_type === "analyze_corpus") {
+      return (
+        <Panel title="预览（基于最近一次运行结果）">
+          <div className="status-panel"><strong>词频 Top 5</strong><span>{project.results.frequency_table.slice(0, 5).map((row) => `${row.term}(${row.tf})`).join(" / ") || "暂无词频结果"}</span></div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "term_year_analysis") {
+      return (
+        <Panel title="预览（基于最近一次运行结果）">
+          <div className="status-panel"><strong>年份趋势样本</strong><span>{project.results.term_year_table.slice(0, 5).map((row) => `${row.term}(${row.year})`).join(" / ") || "暂无年份结果"}</span></div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "cooccurrence_analysis") {
+      return (
+        <Panel title="预览（基于最近一次运行结果）">
+          <div className="status-panel"><strong>共现样本</strong><span>{project.results.cooccurrence_table.slice(0, 5).map((row) => `${row.term_a}×${row.term_b}`).join(" / ") || "暂无共现结果"}</span></div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "keyword_extraction") {
+      return (
+        <Panel title="预览（基于最近一次运行结果）">
+          <div className="status-panel"><strong>项目关键词</strong><span>{project.results.keyword_result.filter((row) => row.scope === "project").slice(0, 5).map((row) => row.keyword).join(" / ") || "暂无项目关键词"}</span></div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "keyword_clustering") {
+      return (
+        <Panel title="预览（基于最近一次运行结果）">
+          <div className="status-panel"><strong>聚类样本</strong><span>{project.results.keyword_cluster_result.slice(0, 5).map((row) => `${row.topic_label ?? `簇 ${row.cluster_id}`}:${row.term}`).join(" / ") || "暂无聚类结果"}</span></div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "institution_topic_analysis") {
+      return (
+        <Panel title="预览（基于最近一次运行结果）">
+          <div className="status-panel"><strong>机构主题样本</strong><span>{project.results.institution_topic_cooccurrence.slice(0, 5).map((row) => `${row.institution}:${row.topic_label}`).join(" / ") || "暂无机构主题结果"}</span></div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "save_csv" || selectedNode.node_type === "save_xlsx" || selectedNode.node_type === "save_png" || selectedNode.node_type === "save_html_report" || selectedNode.node_type === "export_results") {
+      return (
+        <Panel title="预览（基于最近一次运行结果）">
+          <div className="status-panel"><strong>导出文件</strong><span>{project.results.report_files.length} 个</span></div>
+          <ul className="micro-list">
+            {project.results.report_files.slice(0, 5).map((path) => <li key={path}>{path}</li>)}
+            {!project.results.report_files.length && <li>最近一次运行还没有导出文件。</li>}
+          </ul>
+          <div className="status-panel"><strong>运行产物摘要</strong><span>{latestArtifacts.map((artifact) => `${artifact.step}:${artifact.record_count}`).join(" / ") || "暂无运行产物摘要"}</span></div>
+        </Panel>
+      );
+    }
+
+    return null;
+  };
+
+  const renderDockContent = () => {
+    if (dockView === "nodes") {
+      return (
+        <>
+          <div className="workflow-dock-card">
+            <div className="workflow-dock-card-head">
+              <div>
+                <p className="eyebrow">Nodes</p>
+                <h4>当前画布</h4>
+                <p className="body-copy">点击节点会在画布和右侧同步选中。所有节点都允许删除或重新接线。</p>
+              </div>
+              <span className="pill">{sortedNodes.length}</span>
+            </div>
+            <div className="workflow-node-list">
+              {sortedNodes.map((node) => (
+                <button key={node.node_id} type="button" className={`workflow-node-list-item ${selectedNode?.node_id === node.node_id && !selectedEdge ? "is-active" : ""}`} onClick={() => selectNode(node.node_id)}>
+                  <div>
+                    <strong>{node.label}</strong>
+                    <p>{workflowNodeSummary(node, draftPipeline, runSummary)}</p>
+                  </div>
+                  <span className="pill">{workflowNodeBadge(node, workflowValidation)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="workflow-dock-card">
+            <div className="workflow-dock-card-head">
+              <div>
+                <h4>画布操作</h4>
+                <p className="body-copy">这些操作只调整当前 workflow 的组织方式，不会删除项目资源。</p>
+              </div>
+            </div>
+            <div className="workflow-dock-action-stack">
+              <button type="button" className="toolbar-button ghost" onClick={insertRecommendedStarter} disabled={loading}>生成推荐骨架</button>
+              <button type="button" className="toolbar-button ghost" onClick={restoreRecommendedEdges} disabled={loading}>恢复推荐连线</button>
+              <button type="button" className="toolbar-button ghost" onClick={resetWorkflowLayout} disabled={loading}>自动整理布局</button>
+              <button type="button" className="toolbar-button ghost" onClick={clearWorkflowCanvas} disabled={loading}>清空画布</button>
+            </div>
+          </div>
+        </>
+      );
+    }
+
+    if (dockView === "status") {
+      return (
+        <>
+          <div className="workflow-dock-card">
+            <div className="workflow-dock-card-head">
+              <div>
+                <p className="eyebrow">Graph</p>
+                <h4>图状态</h4>
+                <p className="body-copy">系统会从输出节点回溯活跃子图，未接到输出的支路不会进入这次执行。</p>
+              </div>
+              <span className="pill">{workflowValidation.valid ? "可运行" : `${workflowValidation.issues.length} 个问题`}</span>
+            </div>
+            <div className="workflow-validation-stack">
+              <div className="status-panel"><strong>活跃执行链</strong><span>{workflowValidation.active_node_ids.length} 个节点</span></div>
+              <div className="status-panel"><strong>输出节点</strong><span>{workflowValidation.sink_node_ids.length} 个</span></div>
+              <div className="status-panel"><strong>当前范围</strong><span>{runSummary}</span></div>
+              {workflowValidation.issues.length ? workflowValidation.issues.slice(0, 5).map((issue) => (
+                <div key={issue} className="status-panel warning"><span>{issue}</span></div>
+              )) : (
+                <div className="status-panel success"><span>当前主链已经接通，可以直接保存并运行。</span></div>
+              )}
+            </div>
+          </div>
+
+          <div className="workflow-dock-card">
+            <div className="workflow-dock-card-head">
+              <div>
+                <h4>最近一次运行</h4>
+                <p className="body-copy">右下角 mini-map 和节点预览都基于当前画布或最近一次运行结果。</p>
+              </div>
+            </div>
+            {latestRun ? (
+              <div className="workflow-validation-stack">
+                <div className="status-panel"><strong>工作流</strong><span>{latestRun.workflow_name}</span></div>
+                <div className="status-panel"><strong>处理文档</strong><span>{latestRun.processed_document_count ?? snapshot.corpus.length} 篇</span></div>
+                <div className="status-panel"><strong>输出包</strong><span>{latestRun.output_summary ?? "按照当前导出设置生成结果文件"}</span></div>
+              </div>
+            ) : (
+              <div className="status-panel"><span>还没有运行记录，保存后点击运行即可生成第一批产物。</span></div>
+            )}
+          </div>
+        </>
+      );
+    }
+
+    return (
+      <>
+        <div className="workflow-dock-card">
+          <div className="workflow-dock-card-head">
+            <div>
+                <p className="eyebrow">Workflow</p>
+                <h4>{draftWorkflow.name}</h4>
+                <p className="body-copy">现在输入、处理、分析和导出都通过节点和连线组织。所有常用配置、预览和删除操作都直接放进节点卡片里完成。</p>
+              </div>
+              <span className="pill">{workflowValidation.valid ? "Ready" : "Needs Wiring"}</span>
+            </div>
+          <div className="workflow-validation-stack">
+            <div className="status-panel"><strong>当前范围</strong><span>{runSummary}</span></div>
+            <div className="status-panel"><strong>预计耗时</strong><span>{estimatedEffort}</span></div>
+            <div className="status-panel"><strong>后端已注册</strong><span>{registeredNodeCount || toolboxNodeTypes.length} 类节点</span></div>
+          </div>
+        </div>
+
+        <div className="workflow-dock-card">
+          <div className="workflow-dock-card-head">
+            <div>
+              <h4>节点工具箱</h4>
+              <p className="body-copy">从这里把输入、分析和输出节点拖进当前思路里；也可以直接点击插入到默认位置。</p>
+            </div>
+          </div>
+          <div className="workflow-toolbox-section-stack">
+            {toolboxSections.map((section) => (
+              <section key={section.id} className="workflow-toolbox-section">
+                <div className="workflow-toolbox-section-head">
+                  <strong>{section.title}</strong>
+                  <span>{section.items.length}</span>
+                </div>
+                <div className="workflow-toolbox-grid">
+                  {section.items.map((nodeType) => (
+                    <button
+                      key={nodeType}
+                      type="button"
+                      className={`workflow-toolbox-item ${draggedToolboxNodeType === nodeType ? "is-dragging" : ""}`}
+                      onClick={() => addWorkflowNode(nodeType)}
+                      onPointerDown={(event) => handleToolboxPointerDown(event, nodeType)}
+                      disabled={loading}
+                    >
+                      <strong>{workflowNodeTitle(nodeType)}</strong>
+                      <span>{workflowNodeDescription({ node_type: nodeType } as WorkflowNodeInstance)}</span>
+                      <small>点击插入 / 拖到画布投放</small>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </div>
+      </>
+    );
+  };
+
+  return (
+    <div className="workflow-editor-page">
+      <div className={`workflow-editor-shell ${dockCollapsed ? "is-dock-collapsed" : ""}`}>
+        <aside className="workflow-editor-rail">
+          <div className="workflow-rail-brand">WF</div>
+          <button type="button" className={`workflow-rail-button ${dockView === "library" && !dockCollapsed ? "is-active" : ""}`} onClick={() => activateDock("library")}>库</button>
+          <button type="button" className={`workflow-rail-button ${dockView === "nodes" && !dockCollapsed ? "is-active" : ""}`} onClick={() => activateDock("nodes")}>图</button>
+          <button type="button" className={`workflow-rail-button ${dockView === "status" && !dockCollapsed ? "is-active" : ""}`} onClick={() => activateDock("status")}>态</button>
+          <button type="button" className="workflow-rail-button" onClick={() => setDockCollapsed((current) => !current)}>{dockCollapsed ? ">" : "<"}</button>
+        </aside>
+
+        <aside className="workflow-editor-dock">
+          {renderDockContent()}
+        </aside>
+
+        <section
+          className={`workflow-editor-canvas ${isCanvasPanning ? "is-panning" : ""} ${isCanvasDropActive ? "is-drop-active" : ""}`}
+          style={{ ["--workflow-overlay-offset" as string]: `${canvasOverlayOffset}px` }}
+        >
+          <div ref={canvasTopbarRef} className="workflow-floating-topbar">
+            <div className="workflow-floating-topbar-group">
+              <div className="workflow-title-stack">
+                <p className="eyebrow">Node Workflow</p>
+                <h3>{draftWorkflow.name}</h3>
+                <span>{pendingConnection ? "点击高亮输入端完成连线" : "滚轮缩放，拖拽空白区域平移，节点内部直接改常用参数。"}</span>
+              </div>
+              <div className="workflow-floating-pills">
+                <span className="pill">{workflowValidation.valid ? "图已连通" : "仍需补线"}</span>
+                <span className="pill">{workflowValidation.active_node_ids.length} 个活跃节点</span>
+                <span className="pill">{Math.round(viewport.zoom * 100)}%</span>
+              </div>
+            </div>
+            <div className="workflow-floating-topbar-group workflow-floating-topbar-actions">
+              <div className="button-row">
+                {selectedEdge && (
+                  <>
+                    <span className="pill">{selectedEdgeLabel}</span>
+                    <button type="button" className="toolbar-button ghost" onClick={removeSelectedWorkflowEdge} disabled={loading}>删线</button>
+                  </>
+                )}
+                <button type="button" className="toolbar-button ghost" onClick={resetWorkflowLayout} disabled={loading}>整理</button>
+                <button type="button" className="toolbar-button ghost" onClick={focusWorkflowCanvas} disabled={loading}>聚焦</button>
+              </div>
+              <div className="button-row">
+                <button type="button" className="toolbar-button" onClick={() => void saveWorkflow()} disabled={loading}>保存工作流</button>
+                <button type="button" className="toolbar-button accent" onClick={() => void runCurrentWorkflow()} disabled={!canRun}>运行</button>
+              </div>
+            </div>
+          </div>
+
+          {(pendingConnection || workflowValidation.issues.length > 0) && (
+            <div ref={canvasBannerRef} className={`workflow-floating-banner ${pendingConnection ? "is-warning" : ""}`}>
+              {pendingConnection
+                ? `正在从 ${nodeLookup.get(pendingConnection.fromNodeId)?.label ?? pendingConnection.fromNodeId} · ${workflowPortLabel(nodeLookup.get(pendingConnection.fromNodeId), pendingConnection.fromPortId, "outputs")} 连线，可连接 ${connectionTargets.length} 个输入端。`
+                : workflowValidation.issues[0]}
+            </div>
+          )}
+
+          <div
+            ref={canvasScrollRef}
+            className="workflow-canvas-scroll"
+            onWheel={handleCanvasWheel}
+            onPointerDown={handleCanvasPointerDown}
+          >
+            <div className="workflow-canvas-stage" onClick={() => setPendingConnection(null)}>
+                <div
+                  className="workflow-canvas-surface"
+                  style={{
+                    width: canvasMetrics.width,
+                    height: canvasMetrics.height,
+                    transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`
+                  }}
+                >
+                  <svg className="workflow-edge-layer" width={canvasMetrics.width} height={canvasMetrics.height} viewBox={`0 0 ${canvasMetrics.width} ${canvasMetrics.height}`} aria-hidden="true">
+                    <defs>
+                      <marker id="workflow-arrow-head" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+                        <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(138, 90, 15, 0.58)" />
+                      </marker>
+                    </defs>
+                    {displayEdges.map((edge) => {
+                      const fromNode = nodeLookup.get(edge.from_node);
+                      const toNode = nodeLookup.get(edge.to_node);
+                      if (!fromNode || !toNode) {
+                        return null;
+                      }
+                      const edgePath = workflowEdgePath(fromNode, toNode, edge.from_port, edge.to_port, canvasOrigin);
+                      const isSelected = selectedEdge?.edge_id === edge.edge_id;
+                      return (
+                        <g key={edge.edge_id}>
+                          <path
+                            d={edgePath}
+                            className={`workflow-edge-path ${isSelected ? "is-selected" : ""}`}
+                            markerEnd="url(#workflow-arrow-head)"
+                          />
+                          <path
+                            d={edgePath}
+                            className="workflow-edge-hit"
+                            onClick={() => selectEdge(edge.edge_id)}
+                          />
+                        </g>
+                      );
+                    })}
+                  </svg>
+                {sortedNodes.map((node, index) => {
+                  const nodeSelected = selectedNode?.node_id === node.node_id;
+                  const nodeStepId = workflowNodeStepId(node);
+                  const nodeCanBypass = Boolean(nodeStepId && optionalPipelineSteps.includes(nodeStepId));
+                  const nodeFrame = workflowNodeCanvasFrame(node);
+                  const nodeInlinePreview = renderWorkflowNodePreview({
+                    node,
+                    project,
+                    snapshot: { corpus: snapshot.corpus },
+                    latestRun,
+                    draftPipeline,
+                    loading,
+                    nodeDefinitionsByType,
+                    availableSources,
+                    availableInstitutions,
+                    availableCategories,
+                    documentPickerQuery,
+                    setDocumentPickerQuery,
+                    setActivePage,
+                    runScopeForNode,
+                    runScopeSummary,
+                    corpusMatchesRunScope,
+                    updateNodeConfig,
+                    updateRunScope,
+                    toggleScopeArrayValue,
+                    toggleSelectedDocument,
+                    enabledDictionaryEntryCount
+                  });
+                  return (
+                    <div
+                      key={node.node_id}
+                      className={`workflow-node-card workflow-node-card-canvas ${nodeSelected ? "is-selected" : ""} ${node.ui_state.bypassed ? "is-bypassed" : ""} ${draggingNodeId === node.node_id ? "is-dragging" : ""}`}
+                      style={{
+                        left: canvasOrigin.x + node.position.x,
+                        top: canvasOrigin.y + node.position.y,
+                        width: nodeFrame.w,
+                        minHeight: nodeFrame.h,
+                        zIndex: draggingNodeId === node.node_id ? 40 : nodeSelected ? 30 : 10 + index
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        selectNode(node.node_id);
+                        setPendingConnection(null);
+                      }}
+                    >
+                      {node.inputs.length > 0 && (
+                        <div className="workflow-port-rail is-input">
+                          {node.inputs.map((port) => {
+                            const isCompatible = connectionTargetKeys.has(`${node.node_id}:${port.port_id}`);
+                            const isPendingSource = pendingConnection?.fromNodeId === node.node_id && pendingConnection?.fromPortId === port.port_id;
+                            return (
+                              <button
+                                key={`${node.node_id}-${port.port_id}`}
+                                type="button"
+                                className={`workflow-port is-input ${isCompatible ? "is-compatible" : ""} ${isPendingSource ? "is-pending" : ""}`}
+                                style={{ top: workflowPortLocalCenter(node, port.port_id, "inputs") }}
+                                title={`${port.port_id} · ${port.port_type}`}
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  if (pendingConnection && isCompatible) {
+                                    connectPendingPort(node.node_id, port.port_id);
+                                  }
+                                }}
+                                disabled={Boolean(pendingConnection) && !isCompatible}
+                              >
+                                <span>{port.port_id}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <div className="workflow-node-card-body">
+                        <div className="workflow-node-card-head">
+                          <div
+                            className="workflow-node-card-head-main"
+                            onPointerDown={(event) => {
+                              event.stopPropagation();
+                              handleCanvasNodePointerDown(event, node);
+                            }}
+                          >
+                            <button
+                              type="button"
+                              className="workflow-node-card-grab"
+                              onClick={(event) => event.stopPropagation()}
+                              aria-label={`拖动 ${node.label}`}
+                              title="拖动节点"
+                            >
+                              ⋮⋮
+                            </button>
+                            <span className="pill">{workflowNodeBadge(node, workflowValidation)}</span>
+                          </div>
+                          {nodeSelected && (
+                            <div className="workflow-node-card-actions" onPointerDown={(event) => event.stopPropagation()}>
+                              {nodeCanBypass && (
+                                <button type="button" className="workflow-node-card-action" onClick={(event) => {
+                                  event.stopPropagation();
+                                  setNodeBypassed(node.node_id, !node.ui_state.bypassed);
+                                }}>
+                                  {node.ui_state.bypassed ? "恢复" : "跳过"}
+                                </button>
+                              )}
+                              {workflowNodeCanRemove() && (
+                                <button type="button" className="workflow-node-card-action danger" onClick={(event) => {
+                                  event.stopPropagation();
+                                  removeWorkflowNode(node.node_id);
+                                }}>
+                                  删除
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <strong>{node.label}</strong>
+                        <p>{workflowNodeDescription(node)}</p>
+                        <small>{workflowNodeSummary(node, draftPipeline, runSummary)}</small>
+                        {nodeInlinePreview}
+                        {!reachableNodeIds.has(node.node_id) && node.inputs.length > 0 && (
+                          <span className="workflow-node-inline-warning">当前未接入有效链路</span>
+                        )}
+                        {renderNodeInlineEditor(node)}
+                      </div>
+                      {node.outputs.length > 0 && (
+                        <div className="workflow-port-rail is-output">
+                          {node.outputs.map((port) => {
+                            const isPending = pendingConnection?.fromNodeId === node.node_id && pendingConnection?.fromPortId === port.port_id;
+                            return (
+                              <button
+                                key={`${node.node_id}-${port.port_id}`}
+                                type="button"
+                                className={`workflow-port is-output ${isPending ? "is-pending" : ""}`}
+                                style={{ top: workflowPortLocalCenter(node, port.port_id, "outputs") }}
+                                title={`${port.port_id} · ${port.port_type}`}
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  beginConnection(node.node_id, port.port_id);
+                                }}
+                              >
+                                <span>{port.port_id}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                  {!sortedNodes.length && (
+                    <div className="workflow-canvas-empty">
+                      <strong>当前是空白画布</strong>
+                      <p>从左侧工具箱拖入 `语料输入`、分析节点和输出节点，或者点击“生成推荐骨架”快速起步。</p>
+                    </div>
+                  )}
+                </div>
+            </div>
+          </div>
+
+          {toolboxDragPointer && (
+            <div
+              className={`workflow-toolbox-drag-ghost ${isCanvasDropActive ? "is-valid" : ""}`}
+              style={{
+                left: toolboxDragPointer.x + 14,
+                top: toolboxDragPointer.y + 14
+              }}
+            >
+              {toolboxDragStateRef.current ? workflowNodeTitle(toolboxDragStateRef.current.nodeType) : "拖放节点"}
+            </div>
+          )}
+
+          <div className="workflow-minimap-shell">
+            <div className="workflow-minimap-head">
+              <strong>Map</strong>
+              <span>{Math.round(viewport.zoom * 100)}%</span>
+            </div>
+            <div ref={miniMapRef} className="workflow-minimap-canvas" onPointerDown={handleMiniMapPointerDown}>
+              <div className="workflow-minimap-surface" style={{ width: miniMap.width, height: miniMap.height }}>
+                {sortedNodes.map((node) => (
+                  <div
+                    key={`mini-${node.node_id}`}
+                    className={`workflow-minimap-node ${selectedNode?.node_id === node.node_id ? "is-active" : ""}`}
+                    style={{
+                      left: (canvasOrigin.x + node.position.x) * miniMap.scale,
+                      top: (canvasOrigin.y + node.position.y) * miniMap.scale,
+                      width: Math.max(12, workflowNodeCanvasFrame(node).w * miniMap.scale),
+                      height: Math.max(10, workflowNodeCanvasFrame(node).h * miniMap.scale)
+                    }}
+                  />
+                ))}
+                <div
+                  className="workflow-minimap-viewport"
+                  style={{
+                    left: viewportWorldRect.x * miniMap.scale,
+                    top: viewportWorldRect.y * miniMap.scale,
+                    width: Math.min(miniMap.width, viewportWorldRect.width * miniMap.scale),
+                    height: Math.min(miniMap.height, viewportWorldRect.height * miniMap.scale)
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
   );
 }
 

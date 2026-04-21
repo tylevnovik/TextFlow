@@ -29,6 +29,58 @@ export type DictionaryKind =
 export type RunStatus = "idle" | "running" | "completed" | "failed" | "cancelled";
 
 export type ExportFormat = "csv" | "xlsx" | "png" | "html";
+export type WorkflowGraphMode = "dag";
+export type WorkflowSource = "system_default" | "migrated_from_pipeline" | "manual" | "template";
+export type WorkflowNodeType =
+  | "corpus_input"
+  | "dictionary_input"
+  | "merge_corpora"
+  | "load_project_corpus"
+  | "filter_corpus"
+  | "project_dictionary_set"
+  | "clean_text"
+  | "normalize_text"
+  | "tokenize"
+  | "apply_dictionary_rules"
+  | "filter_terms"
+  | "frequency_statistics"
+  | "term_year_analysis"
+  | "cooccurrence_analysis"
+  | "keyword_extraction"
+  | "keyword_clustering"
+  | "institution_topic_analysis"
+  | "analyze_corpus"
+  | "save_csv"
+  | "save_xlsx"
+  | "save_png"
+  | "save_html_report"
+  | "export_results"
+  | "note"
+  | "group";
+export type WorkflowPortType =
+  | "CorpusResource"
+  | "CorpusTable"
+  | "ProjectCorpus"
+  | "ScopedCorpus"
+  | "DictionarySet"
+  | "AnyTable"
+  | "AnyAnalysisResult"
+  | "AnyRenderable"
+  | "CleanCorpus"
+  | "NormalizedCorpus"
+  | "TokenCorpus"
+  | "FilteredTokenCorpus"
+  | "FrequencyTable"
+  | "TermDocumentTable"
+  | "TermYearTable"
+  | "CooccurrenceTable"
+  | "KeywordTable"
+  | "KeywordClusterTable"
+  | "InstitutionTopicTable"
+  | "AnalysisBundle"
+  | "AuditTable"
+  | "ExportBundle"
+  | "ExportArtifact";
 
 export interface RelativePathRef {
   relative_path: string;
@@ -252,6 +304,110 @@ export interface PipelineDefinition {
   output_bundle_id: OutputBundleId;
 }
 
+export interface WorkflowPort {
+  port_id: string;
+  port_type: WorkflowPortType;
+  label?: string;
+  allow_multiple?: boolean;
+}
+
+export interface WorkflowNodeUiState {
+  collapsed: boolean;
+  bypassed: boolean;
+  pinned_preview?: boolean;
+}
+
+export interface WorkflowNodeRuntimeMeta {
+  step_id?: PipelineStepId | "scope" | "resource" | "merge" | "sink" | "utility";
+  node_impl_version: string;
+}
+
+export interface WorkflowNodeInstance {
+  node_id: string;
+  node_type: WorkflowNodeType;
+  label: string;
+  position: { x: number; y: number };
+  size?: { w: number; h: number };
+  inputs: WorkflowPort[];
+  outputs: WorkflowPort[];
+  config: Record<string, unknown>;
+  ui_state: WorkflowNodeUiState;
+  runtime_meta: WorkflowNodeRuntimeMeta;
+}
+
+export interface WorkflowEdge {
+  edge_id: string;
+  from_node: string;
+  from_port: string;
+  to_node: string;
+  to_port: string;
+}
+
+export interface WorkflowGroup {
+  group_id: string;
+  label: string;
+  node_ids: string[];
+  collapsed: boolean;
+}
+
+export interface WorkflowDefinition {
+  workflow_id: string;
+  name: string;
+  version: string;
+  graph_mode: WorkflowGraphMode;
+  source: WorkflowSource;
+  meta: {
+    template_id: PipelineRecipeId;
+    output_bundle_id: OutputBundleId;
+  };
+  nodes: WorkflowNodeInstance[];
+  edges: WorkflowEdge[];
+  groups: WorkflowGroup[];
+  viewport: {
+    x: number;
+    y: number;
+    zoom: number;
+  };
+  created_at: string;
+  updated_at: string;
+}
+
+export type WorkflowNodeParamKind = "boolean" | "number" | "string" | "enum";
+
+export interface WorkflowNodeParamOption {
+  value: string;
+  label: string;
+}
+
+export interface WorkflowNodeParamDefinition {
+  param_id: string;
+  label: string;
+  kind: WorkflowNodeParamKind;
+  description?: string;
+  required?: boolean;
+  default_value?: string | number | boolean | null;
+  options?: WorkflowNodeParamOption[];
+}
+
+export interface RegisteredWorkflowNodeDefinition {
+  type: WorkflowNodeType;
+  title: string;
+  category: "input" | "process" | "analysis" | "output" | "utility" | "legacy";
+  description?: string;
+  hidden_from_toolbox?: boolean;
+  singleton?: boolean;
+  inputs: WorkflowPort[];
+  outputs: WorkflowPort[];
+  params: WorkflowNodeParamDefinition[];
+  runtime: {
+    step_id: PipelineStepId | "scope" | "resource" | "merge" | "sink" | "utility";
+    executor: string;
+    cacheable: boolean;
+    previewable: boolean;
+    output_node: boolean;
+  };
+}
+
 export interface RunLogEntry {
   timestamp: string;
   level: "info" | "warning" | "error" | "fatal";
@@ -270,6 +426,9 @@ export interface RunRecord {
   run_id: string;
   project_id: string;
   pipeline_version: string;
+  workflow_id: string;
+  workflow_name: string;
+  workflow_hash: string;
   dictionary_version: string;
   started_at: string;
   ended_at?: string;
@@ -404,6 +563,8 @@ export interface ProjectTemplate {
   description: string;
   source_profile: SourceProfile;
   pipeline: PipelineDefinition;
+  workflow_definitions: WorkflowDefinition[];
+  active_workflow_id: string;
   dictionary_set: DictionarySet;
   import_template: ImportTemplate;
 }
@@ -422,6 +583,8 @@ export interface ProjectManifest {
   import_template: ImportTemplate;
   dictionary_set: DictionarySet;
   pipeline: PipelineDefinition;
+  workflow_definitions: WorkflowDefinition[];
+  active_workflow_id: string;
   run_history: RunRecord[];
   results: ResultBundle;
 }
@@ -441,6 +604,7 @@ export interface WorkspaceSnapshot {
   current_project?: ProjectManifest;
   corpus: CorpusItem[];
   selected_run?: RunRecord;
+  node_definitions?: RegisteredWorkflowNodeDefinition[];
 }
 
 export const sourceProfiles: Record<SourceProfile, string> = {

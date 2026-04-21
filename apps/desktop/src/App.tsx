@@ -13,6 +13,7 @@ export function App() {
   } = useWorkspace();
 
   const project = snapshot.current_project;
+  const isWorkflowPage = activePage === "pipeline";
 
   return (
     <div className="app-shell">
@@ -54,8 +55,8 @@ export function App() {
         </div>
       </aside>
 
-      <main className="main-stage">
-        <header className="topbar">
+      <main className={`main-stage ${isWorkflowPage ? "is-workflow-page" : ""}`}>
+        <header className={`topbar ${isWorkflowPage ? "is-workflow-page" : ""}`}>
           <div>
             <p className="eyebrow">当前步骤</p>
             <h2>{pageMeta[activePage].headline}</h2>
@@ -92,7 +93,7 @@ export function App() {
           </section>
         )}
 
-        <section className="content-grid">
+        <section className={`content-grid ${isWorkflowPage ? "is-workflow-page" : ""}`}>
           <PageView page={activePage} />
         </section>
       </main>

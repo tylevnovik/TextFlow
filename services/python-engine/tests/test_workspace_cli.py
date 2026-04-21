@@ -57,6 +57,138 @@ def test_bootstrap_project_guides_first_run(isolated_workspace):
     assert len(snapshot["corpus"]) >= 3
     assert snapshot["selected_run"] is not None
     assert snapshot["current_project"]["results"]["frequency_table"]
+    assert snapshot["node_definitions"]
+    assert any(node["type"] == "corpus_input" for node in snapshot["node_definitions"])
+    assert any(node["type"] == "save_html_report" for node in snapshot["node_definitions"])
+
+
+def test_new_project_has_default_workflow_definition(isolated_workspace):
+    created = action_create_project({"name": "工作流基础项目", "description": "workflow foundation"})
+    project_dir = find_project_dir(created["id"])
+    assert project_dir is not None
+
+    manifest, _ = load_project(project_dir)
+    workflow = manifest["workflow_definitions"][0]
+    node_types = {node["node_type"] for node in workflow["nodes"]}
+
+    assert manifest["workflow_definitions"]
+    assert manifest["active_workflow_id"] == workflow["workflow_id"]
+    assert workflow["graph_mode"] == "dag"
+    assert "corpus_input" in node_types
+    assert "dictionary_input" in node_types
+    assert "keyword_extraction" in node_types
+    assert "save_html_report" in node_types
+    assert "analyze_corpus" not in node_types
+    assert "export_results" not in node_types
+
+
+def test_save_project_compiles_active_workflow_into_pipeline(isolated_workspace):
+    created = action_create_project({"name": "工作流编译项目", "description": "workflow compiler"})
+    project_dir = find_project_dir(created["id"])
+    assert project_dir is not None
+
+    manifest, _ = load_project(project_dir)
+    workflow = manifest["workflow_definitions"][0]
+    workflow["source"] = "manual"
+    removed_node_ids = set()
+
+    for node in workflow["nodes"]:
+        if node["node_type"] == "corpus_input":
+            node["config"] = {
+                **node["config"],
+                "mode": "filtered_subset",
+                "source_values": ["Journal of Digital Humanities"],
+                "institution_values": [],
+                "category_values": [],
+                "year_from": 2024,
+                "year_to": 2024,
+                "selected_doc_ids": [],
+            }
+        elif node["node_type"] == "clean_text":
+            node["ui_state"]["bypassed"] = True
+        elif node["node_type"] == "filter_terms":
+            node["config"]["min_term_frequency"] = 3
+        elif node["node_type"] == "save_html_report":
+            node["config"]["include_audit"] = False
+        elif node["node_type"] == "save_png":
+            removed_node_ids.add(node["node_id"])
+
+    workflow["nodes"] = [
+        node
+        for node in workflow["nodes"]
+        if node["node_id"] not in removed_node_ids
+    ]
+    workflow["edges"] = [
+        edge
+        for edge in workflow["edges"]
+        if edge["from_node"] not in removed_node_ids and edge["to_node"] not in removed_node_ids
+    ]
+
+    workflow["meta"]["template_id"] = "trend_scan"
+    workflow["meta"]["output_bundle_id"] = "charts_and_report"
+
+    action_save_project(manifest)
+    reloaded_manifest, _ = load_project(project_dir)
+
+    assert reloaded_manifest["pipeline"]["recipe_id"] == "trend_scan"
+    assert reloaded_manifest["pipeline"]["output_bundle_id"] == "charts_and_report"
+    assert reloaded_manifest["pipeline"]["run_scope"]["mode"] == "filtered_subset"
+    assert reloaded_manifest["pipeline"]["run_scope"]["year_from"] == 2024
+    assert "cleaning" not in reloaded_manifest["pipeline"]["enabled_steps"]
+    assert reloaded_manifest["pipeline"]["filtering"]["min_term_frequency"] == 3
+    assert reloaded_manifest["pipeline"]["export"]["include_audit"] is False
+    assert reloaded_manifest["pipeline"]["export"]["export_png"] is False
+
+
+def test_save_project_respects_removed_optional_workflow_nodes(isolated_workspace):
+    created = action_create_project({"name": "工作流删节点项目", "description": "workflow graph edit"})
+    project_dir = find_project_dir(created["id"])
+    assert project_dir is not None
+
+    manifest, _ = load_project(project_dir)
+    workflow = manifest["workflow_definitions"][0]
+    workflow["source"] = "manual"
+    workflow["nodes"] = [
+        node
+        for node in workflow["nodes"]
+        if node["node_type"] not in {"clean_text", "filter_terms"}
+    ]
+    workflow["edges"] = [
+        edge
+        for edge in workflow["edges"]
+        if edge["from_node"] not in {"node-clean-text", "node-filter-terms"}
+        and edge["to_node"] not in {"node-clean-text", "node-filter-terms"}
+    ]
+
+    action_save_project(manifest)
+    reloaded_manifest, _ = load_project(project_dir)
+
+    assert "cleaning" not in reloaded_manifest["pipeline"]["enabled_steps"]
+    assert "filtering" not in reloaded_manifest["pipeline"]["enabled_steps"]
+
+
+def test_save_project_disables_steps_when_workflow_inputs_are_disconnected(isolated_workspace):
+    created = action_create_project({"name": "工作流断线项目", "description": "workflow disconnected edges"})
+    project_dir = find_project_dir(created["id"])
+    assert project_dir is not None
+
+    manifest, _ = load_project(project_dir)
+    workflow = manifest["workflow_definitions"][0]
+    workflow["source"] = "manual"
+    workflow["edges"] = [
+        edge
+        for edge in workflow["edges"]
+        if not (
+            (edge["to_node"] == "node-apply-dictionary-rules" and edge["to_port"] == "dictionary_set_in")
+            or str(edge["to_node"]).startswith("node-save-")
+        )
+    ]
+
+    action_save_project(manifest)
+    reloaded_manifest, _ = load_project(project_dir)
+
+    assert "dictionary_application" not in reloaded_manifest["pipeline"]["enabled_steps"]
+    assert "export" not in reloaded_manifest["pipeline"]["enabled_steps"]
 
 
 def test_import_project_files_persists_corpus_and_copies_sources(isolated_workspace, scratch_dir):
@@ -137,6 +269,8 @@ def test_import_project_package_restores_portable_project(isolated_workspace):
 
     manifest, corpus = load_project(imported_project_dir)
     assert manifest["name"].startswith("可携带项目")
+    assert manifest["workflow_definitions"]
+    assert manifest["active_workflow_id"]
     assert corpus == []
 
 
@@ -225,6 +359,8 @@ def test_load_project_normalizes_legacy_run_intent_fields(isolated_workspace):
     manifest["pipeline"].pop("run_scope", None)
     manifest["pipeline"].pop("recipe_id", None)
     manifest["pipeline"].pop("output_bundle_id", None)
+    manifest.pop("workflow_definitions", None)
+    manifest.pop("active_workflow_id", None)
     manifest["run_history"] = [
         {
             "run_id": "run-legacy",
@@ -246,8 +382,13 @@ def test_load_project_normalizes_legacy_run_intent_fields(isolated_workspace):
     assert reloaded_manifest["pipeline"]["run_scope"]["mode"] == "all_documents"
     assert reloaded_manifest["pipeline"]["recipe_id"] == "standard_analysis"
     assert reloaded_manifest["pipeline"]["output_bundle_id"] == "full_report"
+    assert reloaded_manifest["workflow_definitions"]
+    assert reloaded_manifest["active_workflow_id"] == reloaded_manifest["workflow_definitions"][0]["workflow_id"]
     assert run_record["processed_document_count"] == 0
     assert "项目内全部资料" in run_record["run_scope_summary"]
+    assert run_record["workflow_id"] == reloaded_manifest["active_workflow_id"]
+    assert run_record["workflow_name"] == reloaded_manifest["workflow_definitions"][0]["name"]
+    assert run_record["workflow_hash"].startswith("sha256:")
     assert run_record["output_summary"]
 
 
@@ -299,6 +440,8 @@ def test_project_templates_and_import_templates_roundtrip(isolated_workspace):
 
     assert any(item["id"] == saved_project_template["id"] for item in listed_project_templates)
     assert cloned_manifest["pipeline"]["name"] == "模板流程"
+    assert cloned_manifest["workflow_definitions"]
+    assert cloned_manifest["active_workflow_id"]
     assert cloned_manifest["pipeline"]["analysis"]["keyword_cluster_k"] == 6
     assert cloned_manifest["import_template"]["source_profile"] == "wos"
     assert cloned_manifest["dictionary_set"]["version"] == "2.0.0"

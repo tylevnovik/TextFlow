@@ -6,20 +6,23 @@ import os
 import platform
 import re
 import shutil
-import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from .defaults import (
+    compile_pipeline_from_workflow,
     default_dictionary_set,
     default_import_template,
     default_pipeline,
     default_project_manifest,
+    default_workflow_definition,
     empty_result_bundle,
     utc_now_iso,
+    workflow_payload_hash,
 )
+from .node_registry import builtin_node_definitions
 
 PROJECT_FILENAME = "project.json"
 CORPUS_FILENAME = "metadata/corpus.json"
@@ -328,6 +331,179 @@ def normalize_pipeline_record(pipeline: dict[str, Any] | None) -> dict[str, Any]
     return normalized
 
 
+def normalize_workflow_definition_record(
+    workflow_definition: dict[str, Any] | None,
+    pipeline: dict[str, Any],
+    *,
+    source: str = "manual",
+) -> dict[str, Any]:
+    baseline = default_workflow_definition(
+        pipeline,
+        source=source,
+    )
+    if not isinstance(workflow_definition, dict):
+        return baseline
+
+    normalized = deepcopy(baseline)
+    for key, value in workflow_definition.items():
+        if key == "meta" and isinstance(value, dict):
+            normalized["meta"].update(value)
+            continue
+        if key == "viewport" and isinstance(value, dict):
+            normalized["viewport"].update(value)
+            continue
+        normalized[key] = value
+
+    if not isinstance(normalized.get("nodes"), list):
+        normalized["nodes"] = baseline["nodes"]
+    if not isinstance(normalized.get("edges"), list):
+        normalized["edges"] = baseline["edges"]
+    if not isinstance(normalized.get("groups"), list):
+        normalized["groups"] = baseline["groups"]
+    if not isinstance(normalized.get("meta"), dict):
+        normalized["meta"] = deepcopy(baseline["meta"])
+    else:
+        normalized["meta"] = {
+            **deepcopy(baseline["meta"]),
+            **normalized["meta"],
+        }
+    if not isinstance(normalized.get("viewport"), dict):
+        normalized["viewport"] = deepcopy(baseline["viewport"])
+    else:
+        normalized["viewport"] = {
+            **deepcopy(baseline["viewport"]),
+            **normalized["viewport"],
+        }
+
+    normalized["workflow_id"] = str(normalized.get("workflow_id") or baseline["workflow_id"])
+    normalized["name"] = str(normalized.get("name") or baseline["name"])
+    normalized["version"] = str(normalized.get("version") or baseline["version"])
+    normalized["graph_mode"] = str(normalized.get("graph_mode") or baseline["graph_mode"])
+    normalized["source"] = str(normalized.get("source") or source)
+    normalized["created_at"] = str(normalized.get("created_at") or baseline["created_at"])
+    normalized["updated_at"] = str(normalized.get("updated_at") or baseline["updated_at"])
+    normalized["meta"]["template_id"] = str(normalized["meta"].get("template_id") or pipeline.get("recipe_id") or "standard_analysis")
+    normalized["meta"]["output_bundle_id"] = str(
+        normalized["meta"].get("output_bundle_id") or pipeline.get("output_bundle_id") or "full_report"
+    )
+    return normalized
+
+
+def sync_workflow_definition_from_pipeline(
+    workflow_definition: dict[str, Any] | None,
+    pipeline: dict[str, Any],
+) -> dict[str, Any]:
+    current = workflow_definition if isinstance(workflow_definition, dict) else {}
+    source = str(current.get("source") or "migrated_from_pipeline")
+    baseline = default_workflow_definition(
+        pipeline,
+        workflow_id=str(current.get("workflow_id") or "wf-default"),
+        name=str(current.get("name") or "默认工作流"),
+        source=source,
+    )
+
+    viewport = current.get("viewport")
+    if isinstance(viewport, dict):
+        baseline["viewport"].update(viewport)
+    if isinstance(current.get("groups"), list):
+        baseline["groups"] = deepcopy(current["groups"])
+    baseline["created_at"] = str(current.get("created_at") or baseline["created_at"])
+    baseline["updated_at"] = str(current.get("updated_at") or baseline["updated_at"])
+    baseline["version"] = str(current.get("version") or baseline["version"])
+
+    existing_nodes_by_id = {}
+    for node in current.get("nodes", []) if isinstance(current.get("nodes"), list) else []:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("node_id") or "")
+        if node_id:
+            existing_nodes_by_id[node_id] = node
+
+    for node in baseline["nodes"]:
+        existing = existing_nodes_by_id.get(str(node.get("node_id") or ""))
+        if not isinstance(existing, dict):
+            continue
+        if existing.get("label"):
+            node["label"] = str(existing["label"])
+        if isinstance(existing.get("position"), dict):
+            node["position"].update(existing["position"])
+        if isinstance(existing.get("size"), dict):
+            node["size"] = deepcopy(existing["size"])
+        if isinstance(existing.get("ui_state"), dict):
+            node["ui_state"]["collapsed"] = bool(existing["ui_state"].get("collapsed", node["ui_state"]["collapsed"]))
+            if "pinned_preview" in existing["ui_state"]:
+                node["ui_state"]["pinned_preview"] = bool(existing["ui_state"]["pinned_preview"])
+
+    return normalize_workflow_definition_record(baseline, pipeline, source=source)
+
+
+def normalize_workflow_definitions(
+    workflow_definitions: list[dict[str, Any]] | None,
+    pipeline: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not isinstance(workflow_definitions, list) or not workflow_definitions:
+        return [default_workflow_definition(pipeline, source="migrated_from_pipeline")]
+
+    normalized: list[dict[str, Any]] = []
+    seen_workflow_ids: set[str] = set()
+    for item in workflow_definitions:
+        if not isinstance(item, dict):
+            continue
+        workflow = normalize_workflow_definition_record(item, pipeline)
+        workflow_id = workflow["workflow_id"]
+        if workflow_id in seen_workflow_ids:
+            continue
+        seen_workflow_ids.add(workflow_id)
+        normalized.append(workflow)
+
+    if not normalized:
+        return [default_workflow_definition(pipeline, source="migrated_from_pipeline")]
+    return normalized
+
+
+def sync_workflow_definitions_from_pipeline(
+    workflow_definitions: list[dict[str, Any]] | None,
+    pipeline: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not isinstance(workflow_definitions, list) or not workflow_definitions:
+        return [default_workflow_definition(pipeline, source="migrated_from_pipeline")]
+
+    normalized: list[dict[str, Any]] = []
+    seen_workflow_ids: set[str] = set()
+    for item in workflow_definitions:
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("source") or "migrated_from_pipeline")
+        if source == "manual":
+            workflow = normalize_workflow_definition_record(item, pipeline)
+        else:
+            workflow = sync_workflow_definition_from_pipeline(item, pipeline)
+        workflow_id = workflow["workflow_id"]
+        if workflow_id in seen_workflow_ids:
+            continue
+        seen_workflow_ids.add(workflow_id)
+        normalized.append(workflow)
+
+    if not normalized:
+        return [default_workflow_definition(pipeline, source="migrated_from_pipeline")]
+    return normalized
+
+
+def resolve_active_workflow(
+    workflow_definitions: list[dict[str, Any]],
+    active_workflow_id: str | None,
+) -> tuple[str, dict[str, Any]]:
+    lookup = {
+        str(workflow["workflow_id"]): workflow
+        for workflow in workflow_definitions
+        if isinstance(workflow, dict) and workflow.get("workflow_id")
+    }
+    if active_workflow_id and active_workflow_id in lookup:
+        return active_workflow_id, lookup[active_workflow_id]
+    first_workflow = workflow_definitions[0]
+    return str(first_workflow["workflow_id"]), first_workflow
+
+
 def normalize_results_bundle(results: dict[str, Any] | None) -> dict[str, Any]:
     baseline = empty_result_bundle()
     if not isinstance(results, dict):
@@ -360,6 +536,7 @@ def normalize_run_record(
     run_record: dict[str, Any] | None,
     pipeline: dict[str, Any],
     corpus: list[dict[str, Any]],
+    workflow_definition: dict[str, Any],
 ) -> dict[str, Any]:
     normalized = deepcopy(run_record) if isinstance(run_record, dict) else {}
     processed_document_count = normalized.get("processed_document_count")
@@ -375,6 +552,15 @@ def normalize_run_record(
     )
     normalized["output_summary"] = str(
         normalized.get("output_summary") or default_output_summary(pipeline.get("export"))
+    )
+    normalized["workflow_id"] = str(
+        normalized.get("workflow_id") or workflow_definition.get("workflow_id") or "wf-default"
+    )
+    normalized["workflow_name"] = str(
+        normalized.get("workflow_name") or workflow_definition.get("name") or "默认工作流"
+    )
+    normalized["workflow_hash"] = str(
+        normalized.get("workflow_hash") or workflow_payload_hash(workflow_definition)
     )
     normalized.setdefault("logs", [])
     normalized.setdefault("artifacts", [])
@@ -393,7 +579,17 @@ def normalize_project_manifest(
     normalized = deepcopy(baseline)
 
     for key, value in payload.items():
-        if key in {"settings", "paths", "pipeline", "import_template", "dictionary_set", "results", "run_history"}:
+        if key in {
+            "settings",
+            "paths",
+            "pipeline",
+            "import_template",
+            "dictionary_set",
+            "workflow_definitions",
+            "active_workflow_id",
+            "results",
+            "run_history",
+        }:
             continue
         normalized[key] = value
 
@@ -401,10 +597,34 @@ def normalize_project_manifest(
     normalized["paths"].update(payload.get("paths", {}) if isinstance(payload.get("paths"), dict) else {})
     normalized["import_template"] = normalize_import_template_record(payload.get("import_template"))
     normalized["dictionary_set"] = normalize_dictionary_set_record(payload.get("dictionary_set"))
-    normalized["pipeline"] = normalize_pipeline_record(payload.get("pipeline"))
+    pipeline_seed = normalize_pipeline_record(payload.get("pipeline"))
+    workflow_definitions = normalize_workflow_definitions(payload.get("workflow_definitions"), pipeline_seed)
+    active_workflow_id, active_workflow = resolve_active_workflow(
+        workflow_definitions,
+        str(payload.get("active_workflow_id")) if payload.get("active_workflow_id") else None,
+    )
+    active_workflow_source = str(active_workflow.get("source") or "migrated_from_pipeline")
+    if active_workflow_source == "manual":
+        normalized["pipeline"] = normalize_pipeline_record(
+            compile_pipeline_from_workflow(active_workflow, pipeline_seed)
+        )
+        normalized["workflow_definitions"] = normalize_workflow_definitions(
+            workflow_definitions,
+            normalized["pipeline"],
+        )
+    else:
+        normalized["pipeline"] = pipeline_seed
+        normalized["workflow_definitions"] = sync_workflow_definitions_from_pipeline(
+            workflow_definitions,
+            normalized["pipeline"],
+        )
+    normalized["active_workflow_id"], active_workflow = resolve_active_workflow(
+        normalized["workflow_definitions"],
+        active_workflow_id,
+    )
     normalized["results"] = normalize_results_bundle(payload.get("results"))
     normalized["run_history"] = [
-        normalize_run_record(run_record, normalized["pipeline"], corpus)
+        normalize_run_record(run_record, normalized["pipeline"], corpus, active_workflow)
         for run_record in payload.get("run_history", [])
         if isinstance(run_record, dict)
     ]
@@ -439,6 +659,8 @@ def build_project_template(
         "source_profile": manifest["import_template"].get("source_profile", "generic"),
         "settings": deepcopy(manifest.get("settings", {})),
         "pipeline": deepcopy(manifest["pipeline"]),
+        "workflow_definitions": deepcopy(manifest.get("workflow_definitions", [])),
+        "active_workflow_id": manifest.get("active_workflow_id"),
         "dictionary_set": deepcopy(manifest["dictionary_set"]),
         "import_template": deepcopy(manifest["import_template"]),
         "created_at": timestamp,
@@ -455,6 +677,10 @@ def create_project_from_template(
     if template_payload.get("settings"):
         manifest["settings"] = deepcopy(template_payload["settings"])
     manifest["pipeline"] = deepcopy(template_payload["pipeline"])
+    if template_payload.get("workflow_definitions"):
+        manifest["workflow_definitions"] = deepcopy(template_payload["workflow_definitions"])
+    if template_payload.get("active_workflow_id"):
+        manifest["active_workflow_id"] = template_payload["active_workflow_id"]
     manifest["dictionary_set"] = deepcopy(template_payload["dictionary_set"])
     manifest["import_template"] = deepcopy(template_payload["import_template"])
     save_project(project_dir, manifest, [])
@@ -596,14 +822,19 @@ def export_project_package(project_dir: Path, output_path: Path | None = None) -
         output_path = backup_dir / project_package_name(manifest)
     output_path = normalize_project_package_path(output_path.expanduser().resolve())
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_output_path = output_path.with_name(f"{output_path.stem}-{uuid_suffix()}{output_path.suffix}.tmp")
+    if temp_output_path.exists():
+        temp_output_path.unlink()
 
-    with tempfile.TemporaryDirectory(prefix="textflow-project-package-") as temp_dir:
-        zip_path = Path(temp_dir) / "project-package.zip"
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    try:
+        with zipfile.ZipFile(temp_output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for path in _archive_members(project_dir):
                 relative_path = path.relative_to(project_dir)
                 archive.write(path, arcname=str(Path(project_dir.name) / relative_path))
-        shutil.move(str(zip_path), output_path)
+        temp_output_path.replace(output_path)
+    finally:
+        if temp_output_path.exists():
+            temp_output_path.unlink()
 
     return output_path
 
@@ -613,8 +844,12 @@ def import_project_package(package_path: Path) -> tuple[Path, dict[str, Any], li
     if not package_path.exists():
         raise FileNotFoundError(f"Project package not found: {package_path}")
 
-    with tempfile.TemporaryDirectory(prefix="textflow-project-import-") as temp_dir:
-        temp_root = Path(temp_dir)
+    temp_root = projects_root() / f".import-{uuid_suffix()}"
+    if temp_root.exists():
+        shutil.rmtree(temp_root)
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    try:
         shutil.unpack_archive(str(package_path), str(temp_root), format="zip")
         source_project_dir = find_project_root(temp_root)
         manifest = read_json(source_project_dir / PROJECT_FILENAME)
@@ -635,6 +870,9 @@ def import_project_package(package_path: Path) -> tuple[Path, dict[str, Any], li
 
         save_project(target_dir, manifest, corpus)
         return target_dir, manifest, corpus
+    finally:
+        if temp_root.exists():
+            shutil.rmtree(temp_root, ignore_errors=True)
 
 
 def build_project_summary(project_dir: Path, manifest: dict[str, Any], corpus: list[dict[str, Any]]) -> dict[str, Any]:
@@ -724,4 +962,5 @@ def load_workspace_snapshot() -> dict[str, Any]:
         "current_project": current_project,
         "corpus": current_corpus,
         "selected_run": selected_run,
+        "node_definitions": builtin_node_definitions(),
     }

@@ -10,6 +10,7 @@ import type {
   ProjectManifest,
   ProjectSummary,
   RunRecord,
+  WorkflowDefinition,
   WorkspaceSnapshot
 } from "@textflow/shared-types";
 
@@ -155,6 +156,9 @@ const runRecord: RunRecord = {
   run_id: "run-20260416-1810",
   project_id: "project-demo",
   pipeline_version: "1.0.0",
+  workflow_id: "wf-default",
+  workflow_name: "关键词与主题工作流",
+  workflow_hash: "sha256:demo-wf-default",
   dictionary_version: "1.0.0",
   started_at: now,
   ended_at: "2026-04-16T18:12:00+08:00",
@@ -179,14 +183,201 @@ const runRecord: RunRecord = {
   output_summary: "表格包、图表包、HTML 报告、审计表"
 };
 
+const workflowDefinitions: WorkflowDefinition[] = [
+  {
+    workflow_id: "wf-default",
+    name: "关键词与主题工作流",
+    version: "1.0.0",
+    graph_mode: "dag",
+    source: "system_default",
+    meta: {
+      template_id: "keyword_topic",
+      output_bundle_id: "full_report"
+    },
+    nodes: [
+      {
+        node_id: "node-load-project-corpus",
+        node_type: "load_project_corpus",
+        label: "读取项目语料",
+        position: { x: 120, y: 220 },
+        inputs: [],
+        outputs: [{ port_id: "project_corpus", port_type: "ProjectCorpus" }],
+        config: {},
+        ui_state: { collapsed: false, bypassed: false },
+        runtime_meta: { step_id: "resource", node_impl_version: "1.0.0" }
+      },
+      {
+        node_id: "node-filter-corpus",
+        node_type: "filter_corpus",
+        label: "筛选处理对象",
+        position: { x: 360, y: 220 },
+        inputs: [{ port_id: "project_corpus_in", port_type: "ProjectCorpus" }],
+        outputs: [{ port_id: "scoped_corpus", port_type: "ScopedCorpus" }],
+        config: {
+          mode: "filtered_subset",
+          source_values: ["Journal of Digital Humanities", "IncoPat"],
+          institution_values: [],
+          category_values: [],
+          year_from: 2024,
+          year_to: 2025,
+          selected_doc_ids: []
+        },
+        ui_state: { collapsed: false, bypassed: false },
+        runtime_meta: { step_id: "scope", node_impl_version: "1.0.0" }
+      },
+      {
+        node_id: "node-project-dictionary-set",
+        node_type: "project_dictionary_set",
+        label: "项目词表",
+        position: { x: 600, y: 60 },
+        inputs: [],
+        outputs: [{ port_id: "dictionary_set", port_type: "DictionarySet" }],
+        config: {},
+        ui_state: { collapsed: true, bypassed: false },
+        runtime_meta: { step_id: "resource", node_impl_version: "1.0.0" }
+      },
+      {
+        node_id: "node-clean-text",
+        node_type: "clean_text",
+        label: "基础清洗",
+        position: { x: 600, y: 220 },
+        inputs: [{ port_id: "corpus_in", port_type: "ScopedCorpus" }],
+        outputs: [{ port_id: "clean_corpus", port_type: "CleanCorpus" }],
+        config: {
+          strip_html: true,
+          strip_urls: true,
+          normalize_whitespace: true,
+          normalize_punctuation: true
+        },
+        ui_state: { collapsed: false, bypassed: false },
+        runtime_meta: { step_id: "cleaning", node_impl_version: "1.0.0" }
+      },
+      {
+        node_id: "node-normalize-text",
+        node_type: "normalize_text",
+        label: "统一写法",
+        position: { x: 840, y: 220 },
+        inputs: [{ port_id: "corpus_in", port_type: "CleanCorpus" }],
+        outputs: [{ port_id: "normalized_corpus", port_type: "NormalizedCorpus" }],
+        config: {
+          apply_regex_rules: true,
+          convert_traditional_to_simplified: false
+        },
+        ui_state: { collapsed: false, bypassed: false },
+        runtime_meta: { step_id: "normalization", node_impl_version: "1.0.0" }
+      },
+      {
+        node_id: "node-tokenize",
+        node_type: "tokenize",
+        label: "切词",
+        position: { x: 1080, y: 220 },
+        inputs: [{ port_id: "corpus_in", port_type: "NormalizedCorpus" }],
+        outputs: [{ port_id: "token_corpus", port_type: "TokenCorpus" }],
+        config: {
+          language_mode: "mixed",
+          use_custom_lexicon: true,
+          use_phrase_lexicon: true
+        },
+        ui_state: { collapsed: false, bypassed: false },
+        runtime_meta: { step_id: "tokenization", node_impl_version: "1.0.0" }
+      },
+      {
+        node_id: "node-apply-dictionary-rules",
+        node_type: "apply_dictionary_rules",
+        label: "套用词表",
+        position: { x: 1320, y: 220 },
+        inputs: [
+          { port_id: "token_corpus_in", port_type: "TokenCorpus" },
+          { port_id: "dictionary_set_in", port_type: "DictionarySet" }
+        ],
+        outputs: [{ port_id: "token_corpus", port_type: "TokenCorpus" }],
+        config: {
+          apply_standard_terms: true,
+          apply_synonym_map: true,
+          apply_stopwords: true
+        },
+        ui_state: { collapsed: false, bypassed: false },
+        runtime_meta: { step_id: "dictionary_application", node_impl_version: "1.0.0" }
+      },
+      {
+        node_id: "node-filter-terms",
+        node_type: "filter_terms",
+        label: "过滤噪声",
+        position: { x: 1560, y: 220 },
+        inputs: [{ port_id: "token_corpus_in", port_type: "TokenCorpus" }],
+        outputs: [{ port_id: "filtered_token_corpus", port_type: "FilteredTokenCorpus" }],
+        config: {
+          min_token_length: 2,
+          min_term_frequency: 1
+        },
+        ui_state: { collapsed: false, bypassed: false },
+        runtime_meta: { step_id: "filtering", node_impl_version: "1.0.0" }
+      },
+      {
+        node_id: "node-analyze-corpus",
+        node_type: "analyze_corpus",
+        label: "生成分析",
+        position: { x: 1800, y: 220 },
+        inputs: [{ port_id: "token_corpus_in", port_type: "FilteredTokenCorpus" }],
+        outputs: [
+          { port_id: "analysis_bundle", port_type: "AnalysisBundle" },
+          { port_id: "audit_table", port_type: "AuditTable" }
+        ],
+        config: {
+          feature_term_count: 1000,
+          top_k_project: 100,
+          topic_model_k: 3
+        },
+        ui_state: { collapsed: false, bypassed: false },
+        runtime_meta: { step_id: "analysis", node_impl_version: "1.0.0" }
+      },
+      {
+        node_id: "node-export-results",
+        node_type: "export_results",
+        label: "导出结果",
+        position: { x: 2040, y: 220 },
+        inputs: [
+          { port_id: "analysis_bundle_in", port_type: "AnalysisBundle" },
+          { port_id: "audit_table_in", port_type: "AuditTable" }
+        ],
+        outputs: [{ port_id: "export_bundle", port_type: "ExportBundle" }],
+        config: {
+          export_csv: true,
+          export_xlsx: true,
+          export_png: true,
+          export_html_report: true
+        },
+        ui_state: { collapsed: false, bypassed: false },
+        runtime_meta: { step_id: "export", node_impl_version: "1.0.0" }
+      }
+    ],
+    edges: [
+      { edge_id: "edge-1", from_node: "node-load-project-corpus", from_port: "project_corpus", to_node: "node-filter-corpus", to_port: "project_corpus_in" },
+      { edge_id: "edge-2", from_node: "node-filter-corpus", from_port: "scoped_corpus", to_node: "node-clean-text", to_port: "corpus_in" },
+      { edge_id: "edge-3", from_node: "node-clean-text", from_port: "clean_corpus", to_node: "node-normalize-text", to_port: "corpus_in" },
+      { edge_id: "edge-4", from_node: "node-normalize-text", from_port: "normalized_corpus", to_node: "node-tokenize", to_port: "corpus_in" },
+      { edge_id: "edge-5", from_node: "node-tokenize", from_port: "token_corpus", to_node: "node-apply-dictionary-rules", to_port: "token_corpus_in" },
+      { edge_id: "edge-6", from_node: "node-project-dictionary-set", from_port: "dictionary_set", to_node: "node-apply-dictionary-rules", to_port: "dictionary_set_in" },
+      { edge_id: "edge-7", from_node: "node-apply-dictionary-rules", from_port: "token_corpus", to_node: "node-filter-terms", to_port: "token_corpus_in" },
+      { edge_id: "edge-8", from_node: "node-filter-terms", from_port: "filtered_token_corpus", to_node: "node-analyze-corpus", to_port: "token_corpus_in" },
+      { edge_id: "edge-9", from_node: "node-analyze-corpus", from_port: "analysis_bundle", to_node: "node-export-results", to_port: "analysis_bundle_in" },
+      { edge_id: "edge-10", from_node: "node-analyze-corpus", from_port: "audit_table", to_node: "node-export-results", to_port: "audit_table_in" }
+    ],
+    groups: [],
+    viewport: { x: 0, y: 0, zoom: 0.8 },
+    created_at: now,
+    updated_at: now
+  }
+];
+
 const manifest: ProjectManifest = {
   id: "project-demo",
-  schema_version: "1.0.0",
+  schema_version: "2.0.0",
   name: "新能源与生成式语料示例项目",
   description: "用于展示导入、预处理、关键词筛选、机构主题分析和报告输出的 V1 样例。",
   created_at: "2026-04-16T17:30:00+08:00",
   updated_at: now,
-  version: "0.1.0",
+  version: "0.2.0",
   source_files: [
     { id: "source-1", name: "literature_sample.xlsx", source_type: "xlsx", relative_path: "corpus/imported/literature_sample.xlsx", imported_at: now, row_count: 2 },
     { id: "source-2", name: "patent_sample.json", source_type: "json", relative_path: "corpus/imported/patent_sample.json", imported_at: now, row_count: 1 }
@@ -226,6 +417,8 @@ const manifest: ProjectManifest = {
     }
   },
   dictionary_set: dictionarySet,
+  workflow_definitions: workflowDefinitions,
+  active_workflow_id: "wf-default",
   pipeline: {
     id: "pipeline-default",
     name: "默认 V1 流程",
