@@ -1,29 +1,75 @@
 # TextFlow Studio
 
-TextFlow Studio 是一个桌面优先的本地文本预处理与基础文本挖掘工具，面向研究、舆情、内容分析和语料整理场景。当前仓库已经不是“空骨架”，而是具备可运行的 Tauri 桌面端、Python sidecar、项目化数据存储、词表中心、工作流画布、分析导出和自动化测试的开发中版本。
+TextFlow Studio 是一个桌面优先的本地文本预处理与基础文本挖掘工具，面向研究、舆情、内容分析和语料整理场景。项目当前采用 `Tauri + React + TypeScript + Python` 架构，目标是提供一个安装即用、项目化、可复跑、可审计的桌面工作台。
 
-## 当前阶段
+当前仓库已经不是空骨架，而是具备可运行的桌面端、Python sidecar、词表中心、workflow 画布、分析导出和自动化测试基线的开发中版本。
 
-- 版本号：`0.1.0`
-- 代码阶段：开发中，尚未形成正式发行版
-- 当前文档基线：截至 `2026-04-23`
-- 当前目标：把现有能力收敛为稳定可交付的 Windows 桌面版，并保留 macOS 可移植性
+## 项目目标
 
-## 当前已落地能力
+- 稳定可交付优先于炫技功能
+- 以项目为中心组织语料、词表、流程和输出
+- 让文本预处理流程可复跑、可审计、可回看
+- 保持 Windows 首发可交付，同时兼顾 macOS 可移植性
+- 为后续更强的节点式流程编辑器预留架构空间
 
-- `Tauri + React + TypeScript + Python` 的本地桌面架构
+## 当前能力
+
+### 项目与数据
+
 - 工作区与 `.tfproj` 项目目录管理
-- `txt/csv/xlsx/json` 导入、source profile、字段映射、主文本拼接
-- 文档级预览、搜索、编辑、删除
-- 词表中心，支持内置词表快照和项目级自定义词表
-- 文本清洗、标准化、切词、词表规则、过滤
-- 词频、词文档、词年份、共现、特征词、关键词、关键词聚类、机构关键词、机构主题、文档聚类
+- 项目创建、打开、复制、删除、项目包导入导出
+- `txt/csv/xlsx/json` 导入
+- `source profile`、字段映射、主文本拼接
+- 文档搜索、预览、编辑、删除
+- 首次启动自动生成 3 个示例项目
+
+### 文本处理
+
+- 清洗、标准化、切词、词表规则、过滤
+- 自定义词典、短语词典、停用词、同义词、标准词、排除词
+- 内置词表快照与项目级自定义词表资源
+
+### 分析与输出
+
+- 词频、词文档、词年份、共现
+- TF-IDF 特征词
+- YAKE 关键词
+- 关键词聚类、文档聚类
+- 机构关键词、机构主题
 - CSV / XLSX / PNG / HTML 导出
 - 运行历史、参数快照、日志、审计表
-- 工作流画布、节点注册表、兼容 pipeline 编译层
-- 对符合条件的 manual/template workflow 走原生 DAG 执行
+
+### workflow 与运行时
+
+- workflow 画布已成为主流程入口
+- 节点注册表与 schema 驱动前后端同步
+- workflow 到兼容 pipeline 的编译层
+- 对符合条件的 `manual/template` workflow 走 native DAG
+- 节点级缓存与节点级运行摘要
 - 本地纯 Python 插件节点加载
-- 首次启动自动生成 3 个示例项目
+
+## 当前状态
+
+- 版本：`0.1.0`
+- 当前阶段：开发中，已可运行，但仍在持续收敛交付质量
+- 已验证：
+  - `npm run lint`
+  - `npm run test:engine`
+  - `npm run tauri:build --workspace apps/desktop`
+
+最近一次对外版本：
+
+- [GitHub Release v0.1.0](https://github.com/tylevnovik/TextFlow/releases/tag/v0.1.0)
+
+## 技术栈
+
+- Desktop shell: `Tauri 2`
+- Frontend: `React 18 + TypeScript + Vite`
+- Engine: `Python 3.11+`
+- Analysis libs: `jieba`, `pandas`, `scikit-learn`, `matplotlib`, `wordcloud`, `yake`
+- Packaging:
+  - Python sidecar via `PyInstaller`
+  - Windows installer via `NSIS`
 
 ## 仓库结构
 
@@ -41,7 +87,7 @@ TextFlow/
 
 ## 快速开始
 
-### 开发环境
+### 环境要求
 
 - Node.js `24+`
 - npm `11+`
@@ -55,32 +101,34 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-python.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-frontend.ps1
 ```
 
-### 日常开发
+### 本地开发
 
 ```powershell
 npm run dev
+```
+
+### 常用验证命令
+
+```powershell
 npm run lint
 npm run test:engine
 ```
 
-### 打包
+### 构建 sidecar
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-python-sidecar.ps1
+```
+
+### 构建 Windows 安装包
+
+```powershell
 npm run tauri:build --workspace apps/desktop
 ```
 
-`tauri:build` 会先执行 `scripts/build-desktop-release.ps1`，再产出 Windows NSIS 安装包。
+`tauri:build` 会先执行 `scripts/build-desktop-release.ps1`，自动重建 Python sidecar，然后再产出 NSIS 安装包。
 
-## 当前验证快照
-
-以下结果在 `2026-04-23` 本地执行得到：
-
-- `npm run lint`：通过
-- `npm run test:engine`：`48 passed`，耗时约 `7m58s`
-- Python 测试当前有 `3` 条 `scikit-learn` 收敛类 warning，但不影响测试通过
-
-## 文档入口
+## 当前文档
 
 - [文档索引](./docs/README.md)
 - [当前现状](./docs/current-status.md)
@@ -92,3 +140,11 @@ npm run tauri:build --workspace apps/desktop
 - [大规模压测记录](./docs/benchmark.md)
 - [插件节点说明](./plugins/nodes/README.md)
 - [历史方案与旧文档归档](./docs/archive/README.md)
+
+## 已知仍需继续收敛的部分
+
+- workflow 画布的产品化体验
+- 前端自动化测试与 CI
+- Windows 发版链路的持续验证
+- macOS 构建与运行验证
+- native DAG 的并行调度、局部重跑和更完整的 artifact 管理
