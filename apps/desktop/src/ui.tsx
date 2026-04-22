@@ -8,7 +8,7 @@ import type {
   FrequencyRow
 } from "@textflow/shared-types";
 
-export type DocumentPreviewMode = "raw_text" | "clean_text" | "normalized_text" | "filtered_tokens" | "metadata";
+export type DocumentPreviewMode = "raw_text" | "metadata";
 
 export function Panel({
   children,
@@ -111,22 +111,10 @@ export function DocumentPreview({
 }) {
   const previewModes: Array<{ id: DocumentPreviewMode; label: string }> = [
     { id: "raw_text", label: "原文" },
-    { id: "clean_text", label: "清洗后" },
-    { id: "normalized_text", label: "标准化后" },
-    { id: "filtered_tokens", label: "切词" },
     { id: "metadata", label: "元数据" }
   ];
 
   const previewContent = (() => {
-    if (mode === "clean_text") {
-      return doc.clean_text || "还没有生成清洗后文本。";
-    }
-    if (mode === "normalized_text") {
-      return doc.normalized_text || "还没有生成标准化文本。";
-    }
-    if (mode === "filtered_tokens") {
-      return doc.filtered_tokens.length ? doc.filtered_tokens.join(" / ") : "还没有生成切词结果。";
-    }
     if (mode === "metadata") {
       return JSON.stringify(doc.extra_metadata ?? {}, null, 2);
     }
@@ -156,12 +144,7 @@ export function DocumentPreview({
           </button>
         ))}
       </div>
-      {mode === "filtered_tokens" ? (
-        <div className="token-block">
-          <strong>filtered_tokens</strong>
-          <p>{previewContent}</p>
-        </div>
-      ) : mode === "metadata" ? (
+      {mode === "metadata" ? (
         <pre className="code-box preview-code">{previewContent}</pre>
       ) : (
         <p className="body-copy preview-copy">{previewContent}</p>

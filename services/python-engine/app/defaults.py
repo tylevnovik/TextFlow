@@ -2,19 +2,81 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
+from functools import lru_cache
 import hashlib
 import json
 from typing import Any
 from uuid import uuid4
+
+from .builtin_dictionary_data import builtin_dictionary_table_specs
+
+DICTIONARY_KIND_ORDER = [
+    "stopwords",
+    "custom_lexicon",
+    "phrase_lexicon",
+    "synonym_map",
+    "near_synonym_map",
+    "standard_terms",
+    "exclusion_terms",
+    "regex_rules",
+]
+
+DICTIONARY_COLLECTION_META: dict[str, dict[str, str]] = {
+    "stopwords": {
+        "name": "停用词",
+        "description": "过滤无分析意义的虚词、常用词和套话。",
+    },
+    "custom_lexicon": {
+        "name": "自定义词典",
+        "description": "告诉切词器哪些术语和专名应该整体保留。",
+    },
+    "phrase_lexicon": {
+        "name": "短语词典",
+        "description": "把多词短语或固定表达当成一个整体处理。",
+    },
+    "synonym_map": {
+        "name": "同义词表",
+        "description": "把别名、区域说法和常见替代表达归并成统一写法。",
+    },
+    "near_synonym_map": {
+        "name": "近义词表",
+        "description": "保留可选的扩展归并资源，适合更强的术语合并。",
+    },
+    "standard_terms": {
+        "name": "标准词库",
+        "description": "用确定的一对一规则做词形和标准写法归一。",
+    },
+    "exclusion_terms": {
+        "name": "排除词表",
+        "description": "在当前课题无关时可整批排除的人名、地名或噪声词。",
+    },
+    "regex_rules": {
+        "name": "Regex 规则",
+        "description": "用于清洗和标准化的正则表达式规则。",
+    },
+}
 
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat()
 
 
-def make_dictionary_entry(source: str, target: str | None = None, hits: int = 0) -> dict[str, Any]:
+def unpack_dictionary_row(row: tuple[Any, ...]) -> tuple[str, str | None, int, str | None]:
+    source = str(row[0])
+    target = row[1] if len(row) > 1 else None
+    hits = int(row[2]) if len(row) > 2 else 0
+    entry_id = str(row[3]) if len(row) > 3 and row[3] else None
+    return source, target, hits, entry_id
+
+
+def make_dictionary_entry(
+    source: str,
+    target: str | None = None,
+    hits: int = 0,
+    entry_id: str | None = None,
+) -> dict[str, Any]:
     return {
-        "id": str(uuid4()),
+        "id": entry_id or str(uuid4()),
         "source": source,
         "target": target,
         "tags": [],
@@ -24,13 +86,87 @@ def make_dictionary_entry(source: str, target: str | None = None, hits: int = 0)
     }
 
 
-def make_sheet(kind: str, name: str, rows: list[tuple[str, str | None, int]]) -> dict[str, Any]:
+def make_sheet(kind: str, name: str, rows: list[tuple[Any, ...]]) -> dict[str, Any]:
     return {
         "kind": kind,
         "name": name,
         "version": "1.0.0",
-        "entries": [make_dictionary_entry(source, target, hits) for source, target, hits in rows],
+        "entries": [make_dictionary_entry(*unpack_dictionary_row(row)) for row in rows],
     }
+
+
+def make_dictionary_table_resource(
+    kind: str,
+    table_id: str,
+    name: str,
+    rows: list[tuple[Any, ...]],
+    *,
+    description: str = "",
+    source_url: str | None = None,
+    built_in: bool = False,
+    editable: bool = True,
+    enabled: bool = True,
+    tags: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": table_id,
+        "kind": kind,
+        "name": name,
+        "version": "2.0.0",
+        "description": description,
+        "source_url": source_url,
+        "built_in": built_in,
+        "editable": editable,
+        "enabled": enabled,
+        "tags": list(tags or []),
+        "entries": [make_dictionary_entry(*unpack_dictionary_row(row)) for row in rows],
+    }
+
+
+def make_dictionary_collection(kind: str, tables: list[dict[str, Any]]) -> dict[str, Any]:
+    meta = DICTIONARY_COLLECTION_META[kind]
+    return {
+        "kind": kind,
+        "name": meta["name"],
+        "description": meta["description"],
+        "tables": tables,
+    }
+
+
+def dictionary_entry_signature(entry: dict[str, Any], fallback_key: str) -> str:
+    source = str(entry.get("source") or "").strip()
+    target = str(entry.get("target") or "").strip()
+    if not source:
+        return fallback_key
+    return f"{source.casefold()}::{target.casefold()}"
+
+
+def build_dictionary_sheets_from_collections(collections: dict[str, Any]) -> dict[str, Any]:
+    sheets: dict[str, Any] = {}
+    for kind in DICTIONARY_KIND_ORDER:
+        collection = collections.get(kind) if isinstance(collections, dict) else None
+        collection_meta = DICTIONARY_COLLECTION_META[kind]
+        entries: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        if isinstance(collection, dict):
+            for table in collection.get("tables", []):
+                if not isinstance(table, dict) or not table.get("enabled", True):
+                    continue
+                for index, entry in enumerate(table.get("entries", [])):
+                    if not isinstance(entry, dict) or not entry.get("enabled", True):
+                        continue
+                    signature = dictionary_entry_signature(entry, f"{kind}:{table.get('id') or 'table'}:{index}")
+                    if signature in seen:
+                        continue
+                    seen.add(signature)
+                    entries.append(entry)
+        sheets[kind] = {
+            "kind": kind,
+            "name": str((collection or {}).get("name") or collection_meta["name"]),
+            "version": "2.0.0",
+            "entries": entries,
+        }
+    return sheets
 
 
 def profile_import_template(source_profile: str) -> dict[str, Any]:
@@ -131,24 +267,52 @@ def profile_import_template(source_profile: str) -> dict[str, Any]:
     return deepcopy(templates.get(source_profile, templates["generic"]))
 
 
-def default_dictionary_set() -> dict[str, Any]:
-    sheets = {
-        "stopwords": make_sheet("stopwords", "停用词表", [("的", None, 0), ("和", None, 0), ("but", None, 0)]),
-        "custom_lexicon": make_sheet("custom_lexicon", "自定义词典", [("智能制造", None, 0), ("battery recycling", None, 0)]),
-        "phrase_lexicon": make_sheet("phrase_lexicon", "短语词典", [("supply chain", "supply_chain", 0), ("学术规范", "学术规范", 0)]),
-        "synonym_map": make_sheet("synonym_map", "同义词表", [("generative ai", "生成式", 0), ("battery recycling", "battery_recycling", 0)]),
-        "near_synonym_map": make_sheet("near_synonym_map", "近义词表", [("文本挖掘", "分析", 0), ("知识抽取", "工艺知识", 0)]),
-        "standard_terms": make_sheet("standard_terms", "标准词库", [("供应链", "supply_chain", 0), ("机构主题", "topic", 0)]),
-        "exclusion_terms": make_sheet("exclusion_terms", "排除词表", [("etc", None, 0), ("misc", None, 0)]),
-        "regex_rules": make_sheet("regex_rules", "Regex 规则表", [(r"\d{4}年", "YEAR_TOKEN", 0), (r"https?://\S+", "", 0)]),
-    }
-    return {
+@lru_cache(maxsize=1)
+def default_dictionary_set_seed() -> dict[str, Any]:
+    builtin_specs = builtin_dictionary_table_specs()
+    collections: dict[str, Any] = {}
+    for kind in DICTIONARY_KIND_ORDER:
+        project_custom = make_dictionary_table_resource(
+            kind,
+            f"{kind}-project-custom",
+            "项目自定义",
+            [],
+            description="项目内可直接编辑、删除、导入和新增的自定义词表资源。",
+            built_in=False,
+            editable=True,
+            enabled=True,
+        )
+        builtin_tables = [
+            make_dictionary_table_resource(
+                kind,
+                spec["id"],
+                spec["name"],
+                list(spec.get("rows") or []),
+                description=str(spec.get("description") or ""),
+                source_url=str(spec.get("source_url") or "") or None,
+                built_in=bool(spec.get("built_in", True)),
+                editable=bool(spec.get("editable", False)),
+                enabled=bool(spec.get("enabled", True)),
+                tags=list(spec.get("tags") or []),
+            )
+            for spec in builtin_specs.get(kind, [])
+            if isinstance(spec, dict)
+        ]
+        collections[kind] = make_dictionary_collection(kind, [project_custom, *builtin_tables])
+
+    dictionary_set = {
         "id": "dict-default",
         "name": "默认词表集",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "bound_to_project": True,
-        "sheets": sheets,
+        "collections": collections,
     }
+    dictionary_set["sheets"] = build_dictionary_sheets_from_collections(collections)
+    return dictionary_set
+
+
+def default_dictionary_set() -> dict[str, Any]:
+    return deepcopy(default_dictionary_set_seed())
 
 
 def default_import_template(source_profile: str = "generic") -> dict[str, Any]:
@@ -226,6 +390,16 @@ def default_pipeline() -> dict[str, Any]:
             "topic_model_k": 4,
             "keyword_cluster_k": 4,
             "document_cluster_k": 4,
+            "include_frequency_statistics": True,
+            "include_term_document_relations": True,
+            "include_term_year_relations": True,
+            "include_cooccurrence_analysis": True,
+            "include_feature_term_selection": True,
+            "include_keyword_extraction": True,
+            "include_keyword_clustering": True,
+            "include_institution_keyword_analysis": True,
+            "include_institution_topic_analysis": True,
+            "include_document_clustering": True,
         },
         "export": {
             "export_csv": True,
@@ -293,11 +467,15 @@ def default_workflow_definition(
         "apply_dictionary_rules": {"x": 2060, "y": 330},
         "filter_terms": {"x": 2460, "y": 330},
         "frequency_statistics": {"x": 2860, "y": 80},
-        "term_year_analysis": {"x": 2860, "y": 340},
-        "cooccurrence_analysis": {"x": 2860, "y": 600},
-        "keyword_extraction": {"x": 2860, "y": 860},
-        "keyword_clustering": {"x": 3240, "y": 860},
-        "institution_topic_analysis": {"x": 3240, "y": 600},
+        "term_document_analysis": {"x": 2860, "y": 340},
+        "term_year_analysis": {"x": 2860, "y": 600},
+        "cooccurrence_analysis": {"x": 2860, "y": 860},
+        "feature_term_selection": {"x": 2860, "y": 1120},
+        "keyword_extraction": {"x": 3240, "y": 80},
+        "keyword_clustering": {"x": 3240, "y": 340},
+        "institution_keyword_analysis": {"x": 3240, "y": 600},
+        "institution_topic_analysis": {"x": 3240, "y": 860},
+        "document_clustering": {"x": 3240, "y": 1120},
         "save_csv": {"x": 3620, "y": 80},
         "save_xlsx": {"x": 3620, "y": 340},
         "save_png": {"x": 3620, "y": 600},
@@ -496,6 +674,15 @@ def default_workflow_definition(
                 "analysis",
             ),
             workflow_node(
+                "node-term-document-analysis",
+                "term_document_analysis",
+                "词项文档分析",
+                [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
+                [workflow_port("term_document_table", "TermDocumentTable", "词项文档表")],
+                {},
+                "analysis",
+            ),
+            workflow_node(
                 "node-term-year-analysis",
                 "term_year_analysis",
                 "词项年份分析",
@@ -517,6 +704,17 @@ def default_workflow_definition(
                 "analysis",
             ),
             workflow_node(
+                "node-feature-term-selection",
+                "feature_term_selection",
+                "特征词筛选",
+                [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
+                [workflow_port("feature_term_table", "FeatureTermTable", "特征词表")],
+                {
+                    "feature_term_count": (pipeline_definition.get("analysis") or {}).get("feature_term_count", 1000),
+                },
+                "analysis",
+            ),
+            workflow_node(
                 "node-keyword-extraction",
                 "keyword_extraction",
                 "关键词提取",
@@ -532,7 +730,7 @@ def default_workflow_definition(
                 "node-keyword-clustering",
                 "keyword_clustering",
                 "关键词聚类",
-                [workflow_port("keyword_table_in", "KeywordTable", "关键词输入")],
+                [workflow_port("feature_term_table_in", "FeatureTermTable", "特征词输入")],
                 [workflow_port("keyword_cluster_table", "KeywordClusterTable", "关键词聚类表")],
                 {
                     "keyword_cluster_k": int((pipeline_definition.get("analysis") or {}).get("keyword_cluster_k", 4)),
@@ -541,13 +739,33 @@ def default_workflow_definition(
                 "analysis",
             ),
             workflow_node(
+                "node-institution-keyword-analysis",
+                "institution_keyword_analysis",
+                "机构关键词分析",
+                [workflow_port("keyword_table_in", "KeywordTable", "关键词输入")],
+                [workflow_port("institution_keyword_table", "InstitutionKeywordTable", "机构关键词表")],
+                {},
+                "analysis",
+            ),
+            workflow_node(
                 "node-institution-topic-analysis",
                 "institution_topic_analysis",
                 "机构主题分析",
-                [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
+                [workflow_port("keyword_cluster_table_in", "KeywordClusterTable", "主题输入")],
                 [workflow_port("institution_topic_table", "InstitutionTopicTable", "机构主题表")],
                 {
                     "topic_model_k": int((pipeline_definition.get("analysis") or {}).get("topic_model_k", 4)),
+                },
+                "analysis",
+            ),
+            workflow_node(
+                "node-document-clustering",
+                "document_clustering",
+                "文档聚类",
+                [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
+                [workflow_port("document_cluster_table", "DocumentClusterTable", "文档聚类表")],
+                {
+                    "document_cluster_k": int((pipeline_definition.get("analysis") or {}).get("document_cluster_k", 4)),
                 },
                 "analysis",
             ),
@@ -659,16 +877,34 @@ def default_workflow_definition(
 
     for analysis_type in [
         "frequency_statistics",
+        "term_document_analysis",
         "term_year_analysis",
         "cooccurrence_analysis",
+        "feature_term_selection",
         "keyword_extraction",
         "keyword_clustering",
+        "institution_keyword_analysis",
         "institution_topic_analysis",
+        "document_clustering",
     ]:
         analysis_node = node_by_type.get(analysis_type)
         if not analysis_node:
             continue
         if analysis_type == "keyword_clustering":
+            feature_term_node = node_by_type.get("feature_term_selection")
+            if feature_term_node:
+                edges.append(
+                    make_edge(
+                        f"edge-{edge_counter}",
+                        str(feature_term_node["node_id"]),
+                        "feature_term_table",
+                        str(analysis_node["node_id"]),
+                        "feature_term_table_in",
+                    )
+                )
+                edge_counter += 1
+            continue
+        if analysis_type == "institution_keyword_analysis":
             keyword_node = node_by_type.get("keyword_extraction")
             if keyword_node:
                 edges.append(
@@ -678,6 +914,20 @@ def default_workflow_definition(
                         "keyword_table",
                         str(analysis_node["node_id"]),
                         "keyword_table_in",
+                    )
+                )
+                edge_counter += 1
+            continue
+        if analysis_type == "institution_topic_analysis":
+            cluster_node = node_by_type.get("keyword_clustering")
+            if cluster_node:
+                edges.append(
+                    make_edge(
+                        f"edge-{edge_counter}",
+                        str(cluster_node["node_id"]),
+                        "keyword_cluster_table",
+                        str(analysis_node["node_id"]),
+                        "keyword_cluster_table_in",
                     )
                 )
                 edge_counter += 1
@@ -700,34 +950,46 @@ def default_workflow_definition(
     sink_mappings = {
         "save_csv": [
             "frequency_statistics",
+            "term_document_analysis",
             "term_year_analysis",
             "cooccurrence_analysis",
+            "feature_term_selection",
             "keyword_extraction",
             "keyword_clustering",
+            "institution_keyword_analysis",
             "institution_topic_analysis",
+            "document_clustering",
         ],
         "save_xlsx": [
             "frequency_statistics",
+            "term_document_analysis",
             "term_year_analysis",
             "cooccurrence_analysis",
+            "feature_term_selection",
             "keyword_extraction",
             "keyword_clustering",
+            "institution_keyword_analysis",
             "institution_topic_analysis",
+            "document_clustering",
         ],
         "save_png": [
             "frequency_statistics",
-            "term_year_analysis",
-            "cooccurrence_analysis",
-            "keyword_clustering",
-            "institution_topic_analysis",
-        ],
-        "save_html_report": [
-            "frequency_statistics",
-            "term_year_analysis",
-            "cooccurrence_analysis",
             "keyword_extraction",
             "keyword_clustering",
             "institution_topic_analysis",
+            "document_clustering",
+        ],
+        "save_html_report": [
+            "frequency_statistics",
+            "term_document_analysis",
+            "term_year_analysis",
+            "cooccurrence_analysis",
+            "feature_term_selection",
+            "keyword_extraction",
+            "keyword_clustering",
+            "institution_keyword_analysis",
+            "institution_topic_analysis",
+            "document_clustering",
         ],
     }
 
@@ -796,15 +1058,20 @@ def workflow_port_compatible(source_type: str, target_type: str) -> bool:
         "TermDocumentTable",
         "TermYearTable",
         "CooccurrenceTable",
+        "FeatureTermTable",
         "KeywordTable",
         "KeywordClusterTable",
+        "InstitutionKeywordTable",
         "InstitutionTopicTable",
+        "DocumentClusterTable",
         "AuditTable",
     }
     renderable_source_types = {
         "FrequencyTable",
+        "KeywordTable",
         "TermYearTable",
         "CooccurrenceTable",
+        "DocumentClusterTable",
         "KeywordClusterTable",
         "InstitutionTopicTable",
         "AnalysisBundle",
@@ -999,204 +1266,9 @@ def compile_pipeline_from_workflow(
     workflow_definition: dict[str, Any] | None,
     pipeline: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    compiled = deepcopy(pipeline if isinstance(pipeline, dict) else default_pipeline())
-    execution_order = list(compiled.get("execution_order") or default_pipeline()["execution_order"])
-    enabled_steps: list[str] = ["ingestion"]
-    nodes = workflow_definition.get("nodes") if isinstance(workflow_definition, dict) else []
+    from .node_compilers import compile_pipeline_from_workflow as compile_pipeline_with_registry
 
-    if isinstance(nodes, list):
-        normalized_nodes = [node for node in nodes if isinstance(node, dict) and node.get("node_id")]
-        normalized_edges = normalize_workflow_edges(workflow_definition, normalized_nodes)
-        reachable_node_ids = workflow_reachable_node_ids(normalized_nodes, normalized_edges)
-        active_node_ids = workflow_active_node_ids_from_sinks(normalized_nodes, normalized_edges, reachable_node_ids)
-        if not active_node_ids:
-            active_node_ids = set(reachable_node_ids)
-
-        export_config = deepcopy(compiled.get("export") or {})
-        export_config.update(
-            {
-                "export_csv": False,
-                "export_xlsx": False,
-                "export_png": False,
-                "export_html_report": False,
-            }
-        )
-
-        for node in normalized_nodes:
-            node_id = str(node.get("node_id") or "")
-            if node_id not in active_node_ids:
-                continue
-            if not isinstance(node, dict):
-                continue
-            node_type = str(node.get("node_type") or "")
-            config = node.get("config")
-            if not isinstance(config, dict):
-                config = {}
-            ui_state = node.get("ui_state")
-            bypassed = bool(ui_state.get("bypassed")) if isinstance(ui_state, dict) else False
-            if bypassed:
-                continue
-
-            if node_type in {"corpus_input", "filter_corpus"}:
-                compiled["run_scope"] = {
-                    **deepcopy(compiled.get("run_scope") or {}),
-                    **config,
-                }
-                continue
-
-            if node_type == "dictionary_input":
-                compiled["tokenization"] = {
-                    **deepcopy(compiled.get("tokenization") or {}),
-                    "use_custom_lexicon": bool(config.get("use_custom_lexicon", (compiled.get("tokenization") or {}).get("use_custom_lexicon", True))),
-                    "use_phrase_lexicon": bool(config.get("use_phrase_lexicon", (compiled.get("tokenization") or {}).get("use_phrase_lexicon", True))),
-                }
-                compiled["normalization"] = {
-                    **deepcopy(compiled.get("normalization") or {}),
-                    "apply_regex_rules": bool(config.get("apply_regex_rules", (compiled.get("normalization") or {}).get("apply_regex_rules", True))),
-                }
-                compiled["dictionary"] = {
-                    **deepcopy(compiled.get("dictionary") or {}),
-                    "apply_standard_terms": bool(config.get("apply_standard_terms", (compiled.get("dictionary") or {}).get("apply_standard_terms", True))),
-                    "apply_synonym_map": bool(config.get("apply_synonym_map", (compiled.get("dictionary") or {}).get("apply_synonym_map", True))),
-                    "apply_near_synonym_map": bool(config.get("apply_near_synonym_map", (compiled.get("dictionary") or {}).get("apply_near_synonym_map", True))),
-                    "apply_stopwords": bool(config.get("apply_stopwords", (compiled.get("dictionary") or {}).get("apply_stopwords", True))),
-                    "apply_exclusion_terms": bool(config.get("apply_exclusion_terms", (compiled.get("dictionary") or {}).get("apply_exclusion_terms", True))),
-                }
-                continue
-
-            if node_type == "clean_text":
-                compiled["cleaning"] = {**deepcopy(compiled.get("cleaning") or {}), **config}
-                if "cleaning" not in enabled_steps:
-                    enabled_steps.append("cleaning")
-                continue
-
-            if node_type == "normalize_text":
-                compiled["normalization"] = {**deepcopy(compiled.get("normalization") or {}), **config}
-                if "normalization" not in enabled_steps:
-                    enabled_steps.append("normalization")
-                continue
-
-            if node_type == "tokenize":
-                compiled["tokenization"] = {**deepcopy(compiled.get("tokenization") or {}), **config}
-                if "tokenization" not in enabled_steps:
-                    enabled_steps.append("tokenization")
-                continue
-
-            if node_type == "apply_dictionary_rules":
-                compiled["dictionary"] = {**deepcopy(compiled.get("dictionary") or {}), **config}
-                if "dictionary_application" not in enabled_steps:
-                    enabled_steps.append("dictionary_application")
-                continue
-
-            if node_type == "filter_terms":
-                compiled["filtering"] = {**deepcopy(compiled.get("filtering") or {}), **config}
-                if "filtering" not in enabled_steps:
-                    enabled_steps.append("filtering")
-                continue
-
-            if node_type == "analyze_corpus":
-                compiled["analysis"] = {**deepcopy(compiled.get("analysis") or {}), **config}
-                if "analysis" not in enabled_steps:
-                    enabled_steps.append("analysis")
-                continue
-
-            if node_type == "frequency_statistics":
-                compiled["analysis"] = {**deepcopy(compiled.get("analysis") or {}), "top_n": int(config.get("top_n") or (compiled.get("analysis") or {}).get("top_n", 200))}
-                if "analysis" not in enabled_steps:
-                    enabled_steps.append("analysis")
-                continue
-
-            if node_type == "term_year_analysis":
-                if "analysis" not in enabled_steps:
-                    enabled_steps.append("analysis")
-                continue
-
-            if node_type == "cooccurrence_analysis":
-                compiled["analysis"] = {
-                    **deepcopy(compiled.get("analysis") or {}),
-                    "cooccurrence_window": int(config.get("cooccurrence_window") or (compiled.get("analysis") or {}).get("cooccurrence_window", 5)),
-                    "min_cooccurrence": int(config.get("min_cooccurrence") or (compiled.get("analysis") or {}).get("min_cooccurrence", 2)),
-                }
-                if "analysis" not in enabled_steps:
-                    enabled_steps.append("analysis")
-                continue
-
-            if node_type == "keyword_extraction":
-                compiled["analysis"] = {
-                    **deepcopy(compiled.get("analysis") or {}),
-                    "top_k_per_doc": int(config.get("top_k_per_doc") or (compiled.get("analysis") or {}).get("top_k_per_doc", 10)),
-                    "top_k_project": int(config.get("top_k_project") or (compiled.get("analysis") or {}).get("top_k_project", 100)),
-                }
-                if "analysis" not in enabled_steps:
-                    enabled_steps.append("analysis")
-                continue
-
-            if node_type == "keyword_clustering":
-                compiled["analysis"] = {
-                    **deepcopy(compiled.get("analysis") or {}),
-                    "keyword_cluster_k": int(config.get("keyword_cluster_k") or (compiled.get("analysis") or {}).get("keyword_cluster_k", 4)),
-                    "topic_model_k": int(config.get("topic_model_k") or (compiled.get("analysis") or {}).get("topic_model_k", 4)),
-                }
-                if "analysis" not in enabled_steps:
-                    enabled_steps.append("analysis")
-                continue
-
-            if node_type == "institution_topic_analysis":
-                compiled["analysis"] = {
-                    **deepcopy(compiled.get("analysis") or {}),
-                    "topic_model_k": int(config.get("topic_model_k") or (compiled.get("analysis") or {}).get("topic_model_k", 4)),
-                }
-                if "analysis" not in enabled_steps:
-                    enabled_steps.append("analysis")
-                continue
-
-            if node_type == "save_csv":
-                export_config["export_csv"] = True
-                if "export" not in enabled_steps:
-                    enabled_steps.append("export")
-                continue
-
-            if node_type == "save_xlsx":
-                export_config["export_xlsx"] = True
-                if "export" not in enabled_steps:
-                    enabled_steps.append("export")
-                continue
-
-            if node_type == "save_png":
-                export_config["export_png"] = True
-                export_config["chart_dpi"] = int(config.get("chart_dpi") or export_config.get("chart_dpi", 320))
-                if "export" not in enabled_steps:
-                    enabled_steps.append("export")
-                continue
-
-            if node_type == "save_html_report":
-                export_config["export_html_report"] = True
-                export_config["include_audit"] = bool(config.get("include_audit", export_config.get("include_audit", True)))
-                if "export" not in enabled_steps:
-                    enabled_steps.append("export")
-                continue
-
-            if node_type == "export_results":
-                export_config = {**export_config, **config}
-                if "export" not in enabled_steps:
-                    enabled_steps.append("export")
-
-        compiled["export"] = export_config
-
-    meta = workflow_definition.get("meta") if isinstance(workflow_definition, dict) else {}
-    if isinstance(meta, dict):
-        compiled["recipe_id"] = str(meta.get("template_id") or compiled.get("recipe_id") or "standard_analysis")
-        compiled["output_bundle_id"] = str(
-            meta.get("output_bundle_id") or compiled.get("output_bundle_id") or "full_report"
-        )
-
-    compiled["enabled_steps"] = [
-        step_id
-        for step_id in execution_order
-        if step_id == "ingestion" or step_id in enabled_steps
-    ]
-    compiled["execution_order"] = execution_order
-    return compiled
+    return compile_pipeline_with_registry(workflow_definition, pipeline)
 
 
 def empty_result_bundle() -> dict[str, Any]:

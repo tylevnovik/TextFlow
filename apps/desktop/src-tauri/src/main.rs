@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 use reqwest::Client;
 use rfd::FileDialog;
@@ -48,6 +50,7 @@ struct TaskSnapshot {
     status: String,
     progress: f64,
     message: String,
+    detail: Option<Value>,
     result: Option<Value>,
     error: Option<String>,
 }
@@ -59,6 +62,7 @@ struct EngineProgressEvent {
     status: String,
     progress: f64,
     message: String,
+    detail: Option<Value>,
 }
 
 fn workspace_root_from_manifest_dir(manifest_dir: &Path) -> Result<PathBuf, String> {
@@ -385,6 +389,7 @@ async fn engine_request(
             status: snapshot.status.clone(),
             progress: snapshot.progress,
             message: snapshot.message.clone(),
+            detail: snapshot.detail.clone(),
         };
         let _ = app.emit("engine-progress", event);
 
@@ -423,6 +428,7 @@ fn open_path_with_default_app(path: &Path) -> Result<(), String> {
         } else {
             let mut cmd = Command::new("cmd");
             cmd.arg("/C").arg("start").arg("").arg(path);
+            cmd.creation_flags(0x08000000);
             cmd
         };
         command
@@ -705,6 +711,7 @@ async fn export_dictionary_sheet(
     state: tauri::State<'_, EngineState>,
     project_id: String,
     kind: String,
+    table_id: String,
     path: String,
 ) -> Result<Value, String> {
     engine_request(
@@ -714,6 +721,7 @@ async fn export_dictionary_sheet(
         json!({
             "project_id": project_id,
             "kind": kind,
+            "table_id": table_id,
             "path": path
         }),
     )

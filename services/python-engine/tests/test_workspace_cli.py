@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import json
+import shutil
+import textwrap
+
+import pytest
 
 from app.cli import (
     action_create_project,
     action_create_project_from_template,
     action_delete_corpus_document,
     action_delete_project,
+    action_export_dictionary_sheet,
     action_export_project,
     action_duplicate_project,
     action_export_project_backup,
+    action_import_dictionary_sheet,
     action_import_project_package,
     action_import_project_files,
     action_list_import_templates,
@@ -22,7 +28,29 @@ from app.cli import (
     action_save_project_template,
     action_update_corpus_document,
 )
-from app.project_store import CORPUS_FILENAME, PROJECT_FILENAME, find_project_dir, load_project, load_workspace_state, workspace_state_path
+from app.defaults import compile_pipeline_from_workflow, default_pipeline, normalize_workflow_edges
+from app.node_registry import build_node_registry
+from app.project_store import CORPUS_FILENAME, PROJECT_FILENAME, find_project_dir, load_project, load_workspace_snapshot, load_workspace_state, save_project, workspace_state_path
+
+
+@pytest.fixture(scope="session")
+def workspace_cli_template(tmp_path_factory):
+    workspace = tmp_path_factory.mktemp("workspace-cli-template")
+    env = pytest.MonkeyPatch()
+    try:
+        env.setenv("TEXTFLOW_WORKSPACE_ROOT", str(workspace))
+        action_load_workspace()
+    finally:
+        env.undo()
+    return workspace
+
+
+@pytest.fixture
+def isolated_workspace(monkeypatch, scratch_dir, workspace_cli_template):
+    workspace = scratch_dir / "workspace"
+    shutil.copytree(workspace_cli_template, workspace, dirs_exist_ok=True)
+    monkeypatch.setenv("TEXTFLOW_WORKSPACE_ROOT", str(workspace))
+    return workspace
 
 
 def test_workspace_cli_persists_current_project_and_recent_order(isolated_workspace):
@@ -49,17 +77,114 @@ def test_workspace_cli_persists_current_project_and_recent_order(isolated_worksp
     assert created["id"] in workspace_state["recent_project_ids"]
 
 
+def test_workspace_snapshot_only_fully_loads_current_project(isolated_workspace, monkeypatch):
+    first = action_create_project({"name": "性能测试 A", "description": "A"})
+    second = action_create_project({"name": "性能测试 B", "description": "B"})
+    load_calls: list[str] = []
+
+    original_load_project = load_project
+
+    def tracked_load_project(project_dir):
+        load_calls.append(str(project_dir))
+        return original_load_project(project_dir)
+
+    monkeypatch.setattr("app.project_store.load_project", tracked_load_project)
+
+    snapshot = load_workspace_snapshot()
+
+    assert snapshot["current_project"] is not None
+    assert snapshot["current_project"]["id"] == second["id"]
+    assert len(snapshot["recent_projects"]) >= 2
+    assert len(load_calls) == 1
+
+
 def test_bootstrap_project_guides_first_run(isolated_workspace):
     snapshot = action_load_workspace()
+    sample_names = {project["name"] for project in snapshot["recent_projects"] if "示例项目" in project["name"]}
 
-    assert snapshot["current_project"]["name"] == "新能源与生成式语料示例项目"
-    assert "新手上手示例" in snapshot["current_project"]["description"]
-    assert len(snapshot["corpus"]) >= 3
-    assert snapshot["selected_run"] is not None
-    assert snapshot["current_project"]["results"]["frequency_table"]
+    assert snapshot["current_project"]["name"] == "示例项目 - 学术摘要机构主题"
+    assert len(sample_names) == 3
+    assert {
+        "示例项目 - 学术摘要机构主题",
+        "示例项目 - 新闻组主题聚类",
+        "示例项目 - 短信词频与共现",
+    }.issubset(sample_names)
+    assert "OpenAlex" in snapshot["current_project"]["description"]
+    assert len(snapshot["corpus"]) >= 6
+    assert snapshot["selected_run"] is None
+    assert snapshot["current_project"]["results"]["frequency_table"] == []
+    assert snapshot["current_project"]["run_history"] == []
+    assert any(
+        len(str(item.get("raw_text") or "")) > len(str(item.get("title") or ""))
+        for item in snapshot["corpus"]
+    )
     assert snapshot["node_definitions"]
     assert any(node["type"] == "corpus_input" for node in snapshot["node_definitions"])
     assert any(node["type"] == "save_html_report" for node in snapshot["node_definitions"])
+
+
+def test_workspace_snapshot_loads_python_node_plugins(isolated_workspace, scratch_dir, monkeypatch):
+    plugin_root = scratch_dir / "plugins" / "nodes"
+    plugin_root.mkdir(parents=True, exist_ok=True)
+    (plugin_root / "demo_plugin.py").write_text(
+        textwrap.dedent(
+            """
+            def _compile(context, node):
+                context.merge_section("analysis", {"top_n": int(node.get("config", {}).get("top_n", 77))})
+                context.enable_step("analysis")
+
+
+            def register_nodes(builder):
+                builder.register_node(
+                    {
+                        "type": "demo_plugin_node",
+                        "title": "Demo Plugin Node",
+                        "category": "analysis",
+                        "description": "Loaded from plugins/nodes.",
+                        "inputs": [],
+                        "outputs": [{"port_id": "plugin_out", "port_type": "KeywordTable", "label": "插件输出"}],
+                        "params": [{"param_id": "top_n", "label": "Top N", "kind": "number", "default_value": 77}],
+                        "runtime": {
+                            "step_id": "analysis",
+                            "executor": "plugin.demo",
+                            "cacheable": False,
+                            "previewable": False,
+                            "output_node": False,
+                        },
+                    },
+                    compiler=_compile,
+                    executor=lambda *_args, **_kwargs: {"status": "ok"},
+                )
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TEXTFLOW_NODE_PLUGIN_DIR", str(plugin_root))
+
+    snapshot = action_load_workspace()
+    assert any(node["type"] == "demo_plugin_node" for node in snapshot["node_definitions"])
+
+    compiled = compile_pipeline_from_workflow(
+        {
+            "nodes": [
+                {
+                    "node_id": "node-demo-plugin",
+                    "node_type": "demo_plugin_node",
+                    "label": "Demo Plugin Node",
+                    "inputs": [],
+                    "outputs": [{"port_id": "plugin_out", "port_type": "KeywordTable", "label": "插件输出"}],
+                    "config": {"top_n": 88},
+                    "ui_state": {"collapsed": False, "bypassed": False},
+                    "runtime_meta": {"node_impl_version": "1.0.0"},
+                }
+            ],
+            "edges": [],
+            "meta": {},
+        },
+        default_pipeline(),
+    )
+    assert compiled["analysis"]["top_n"] == 88
+    assert "analysis" in compiled["enabled_steps"]
 
 
 def test_new_project_has_default_workflow_definition(isolated_workspace):
@@ -76,10 +201,348 @@ def test_new_project_has_default_workflow_definition(isolated_workspace):
     assert workflow["graph_mode"] == "dag"
     assert "corpus_input" in node_types
     assert "dictionary_input" in node_types
+    assert "term_document_analysis" in node_types
+    assert "feature_term_selection" in node_types
     assert "keyword_extraction" in node_types
+    assert "institution_keyword_analysis" in node_types
+    assert "document_clustering" in node_types
     assert "save_html_report" in node_types
     assert "analyze_corpus" not in node_types
     assert "export_results" not in node_types
+
+
+def test_project_storage_compacts_builtin_dictionary_entries_and_rehydrates_on_load(isolated_workspace):
+    created = action_create_project({"name": "词表轻量存储项目", "description": "dictionary storage"})
+    project_dir = find_project_dir(created["id"])
+    assert project_dir is not None
+
+    raw_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
+    assert "sheets" not in raw_manifest["dictionary_set"]
+
+    raw_stopword_collection = raw_manifest["dictionary_set"]["collections"]["stopwords"]
+    raw_stopword_table = next(table for table in raw_stopword_collection["tables"] if table["id"] == "builtin-stopwords-zh")
+    assert raw_stopword_table["entries"] == []
+
+    manifest, corpus = load_project(project_dir)
+    hydrated_stopword_table = next(
+        table
+        for table in manifest["dictionary_set"]["collections"]["stopwords"]["tables"]
+        if table["id"] == "builtin-stopwords-zh"
+    )
+    hydrated_lookup = {entry["source"]: entry for entry in hydrated_stopword_table["entries"]}
+    assert len(hydrated_lookup) >= 700
+    assert "的" in hydrated_lookup
+
+    hydrated_lookup["的"]["hits"] = 9
+    save_project(project_dir, manifest, corpus)
+
+    raw_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
+    raw_stopword_collection = raw_manifest["dictionary_set"]["collections"]["stopwords"]
+    raw_stopword_table = next(table for table in raw_stopword_collection["tables"] if table["id"] == "builtin-stopwords-zh")
+    assert len(raw_stopword_table["entries"]) == 1
+    assert raw_stopword_table["entries"][0]["source"] == "的"
+    assert raw_stopword_table["entries"][0]["hits"] == 9
+
+    reloaded_manifest, _ = load_project(project_dir)
+    reloaded_entries = reloaded_manifest["dictionary_set"]["sheets"]["stopwords"]["entries"]
+    reloaded_lookup = {entry["source"]: entry for entry in reloaded_entries}
+    assert len(reloaded_lookup) > 1500
+    assert reloaded_lookup["的"]["hits"] == 9
+    assert "about" in reloaded_lookup
+
+
+def test_workspace_snapshot_backfills_legacy_project_summary_counts(isolated_workspace):
+    snapshot = action_load_workspace()
+    sample_project = next(project for project in snapshot["recent_projects"] if "示例项目" in project["name"])
+    project_dir = find_project_dir(sample_project["id"])
+    assert project_dir is not None
+
+    raw_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
+    raw_manifest.pop("document_count", None)
+    raw_manifest.pop("run_count", None)
+    (project_dir / PROJECT_FILENAME).write_text(json.dumps(raw_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    refreshed = load_workspace_snapshot()
+    refreshed_summary = next(project for project in refreshed["recent_projects"] if project["id"] == sample_project["id"])
+    reloaded_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
+
+    assert refreshed_summary["document_count"] > 0
+    assert refreshed_summary["run_count"] == 0
+    assert reloaded_manifest["document_count"] == refreshed_summary["document_count"]
+    assert reloaded_manifest["run_count"] == refreshed_summary["run_count"]
+
+
+def test_builtin_toolbox_nodes_have_registered_compilers_and_executors():
+    registry = build_node_registry(default_pipeline())
+    visible_definitions = [
+        definition
+        for definition in registry.definitions
+        if not definition.get("hidden_from_toolbox") and definition.get("category") != "utility"
+    ]
+
+    for definition in visible_definitions:
+        node_type = str(definition["type"])
+        runtime = definition.get("runtime") or {}
+        executor_id = str(runtime.get("executor") or "")
+        assert node_type in registry.compilers, f"{node_type} 缺少 compiler 注册"
+        assert executor_id in registry.executors, f"{node_type} 缺少 executor 注册"
+
+
+def test_compile_pipeline_from_workflow_scopes_analysis_outputs_to_connected_nodes():
+    compiled = compile_pipeline_from_workflow(
+        {
+            "nodes": [
+                {
+                    "node_id": "node-corpus",
+                    "node_type": "corpus_input",
+                    "label": "语料输入",
+                    "inputs": [],
+                    "outputs": [{"port_id": "corpus", "port_type": "CorpusTable", "label": "语料"}],
+                    "config": {"mode": "all_documents", "source_values": [], "institution_values": [], "category_values": [], "selected_doc_ids": []},
+                    "ui_state": {"collapsed": False, "bypassed": False},
+                    "runtime_meta": {"node_impl_version": "2.0.0"},
+                },
+                {
+                    "node_id": "node-clean",
+                    "node_type": "clean_text",
+                    "label": "文本清洗",
+                    "inputs": [{"port_id": "corpus_in", "port_type": "CorpusTable", "label": "语料输入"}],
+                    "outputs": [{"port_id": "clean_corpus", "port_type": "CleanCorpus", "label": "清洗语料"}],
+                    "config": {},
+                    "ui_state": {"collapsed": False, "bypassed": False},
+                    "runtime_meta": {"node_impl_version": "2.0.0"},
+                },
+                {
+                    "node_id": "node-normalize",
+                    "node_type": "normalize_text",
+                    "label": "文本标准化",
+                    "inputs": [{"port_id": "clean_corpus_in", "port_type": "CleanCorpus", "label": "清洗语料"}],
+                    "outputs": [{"port_id": "normalized_corpus", "port_type": "NormalizedCorpus", "label": "标准化语料"}],
+                    "config": {},
+                    "ui_state": {"collapsed": False, "bypassed": False},
+                    "runtime_meta": {"node_impl_version": "2.0.0"},
+                },
+                {
+                    "node_id": "node-tokenize",
+                    "node_type": "tokenize",
+                    "label": "分词",
+                    "inputs": [{"port_id": "normalized_corpus_in", "port_type": "NormalizedCorpus", "label": "标准化语料"}],
+                    "outputs": [{"port_id": "token_corpus", "port_type": "TokenCorpus", "label": "Token 语料"}],
+                    "config": {},
+                    "ui_state": {"collapsed": False, "bypassed": False},
+                    "runtime_meta": {"node_impl_version": "2.0.0"},
+                },
+                {
+                    "node_id": "node-token-filtered",
+                    "node_type": "filter_terms",
+                    "label": "过滤词项",
+                    "inputs": [{"port_id": "token_corpus_in", "port_type": "TokenCorpus", "label": "Token 输入"}],
+                    "outputs": [{"port_id": "filtered_token_corpus", "port_type": "FilteredTokenCorpus", "label": "分析词项"}],
+                    "config": {"min_term_frequency": 2},
+                    "ui_state": {"collapsed": False, "bypassed": False},
+                    "runtime_meta": {"node_impl_version": "2.0.0"},
+                },
+                {
+                    "node_id": "node-feature-terms",
+                    "node_type": "feature_term_selection",
+                    "label": "特征词筛选",
+                    "inputs": [{"port_id": "token_corpus_in", "port_type": "FilteredTokenCorpus", "label": "分析词项"}],
+                    "outputs": [{"port_id": "feature_term_table", "port_type": "FeatureTermTable", "label": "特征词表"}],
+                    "config": {"feature_term_count": "500"},
+                    "ui_state": {"collapsed": False, "bypassed": False},
+                    "runtime_meta": {"node_impl_version": "2.0.0"},
+                },
+                {
+                    "node_id": "node-clusters",
+                    "node_type": "keyword_clustering",
+                    "label": "关键词聚类",
+                    "inputs": [{"port_id": "feature_term_table_in", "port_type": "FeatureTermTable", "label": "特征词输入"}],
+                    "outputs": [{"port_id": "keyword_cluster_table", "port_type": "KeywordClusterTable", "label": "关键词聚类表"}],
+                    "config": {"keyword_cluster_k": 6, "topic_model_k": 6},
+                    "ui_state": {"collapsed": False, "bypassed": False},
+                    "runtime_meta": {"node_impl_version": "2.0.0"},
+                },
+                {
+                    "node_id": "node-save-xlsx",
+                    "node_type": "save_xlsx",
+                    "label": "保存 XLSX",
+                    "inputs": [{"port_id": "table_in", "port_type": "AnyTable", "label": "表格输入", "allow_multiple": True}],
+                    "outputs": [{"port_id": "artifact", "port_type": "ExportArtifact", "label": "导出产物"}],
+                    "config": {"file_prefix": "tables"},
+                    "ui_state": {"collapsed": False, "bypassed": False},
+                    "runtime_meta": {"node_impl_version": "2.0.0"},
+                },
+            ],
+            "edges": [
+                {"edge_id": "edge-0", "from_node": "node-corpus", "from_port": "corpus", "to_node": "node-clean", "to_port": "corpus_in"},
+                {"edge_id": "edge-0b", "from_node": "node-clean", "from_port": "clean_corpus", "to_node": "node-normalize", "to_port": "clean_corpus_in"},
+                {"edge_id": "edge-0c", "from_node": "node-normalize", "from_port": "normalized_corpus", "to_node": "node-tokenize", "to_port": "normalized_corpus_in"},
+                {"edge_id": "edge-0d", "from_node": "node-tokenize", "from_port": "token_corpus", "to_node": "node-token-filtered", "to_port": "token_corpus_in"},
+                {"edge_id": "edge-1", "from_node": "node-token-filtered", "from_port": "filtered_token_corpus", "to_node": "node-feature-terms", "to_port": "token_corpus_in"},
+                {"edge_id": "edge-2", "from_node": "node-feature-terms", "from_port": "feature_term_table", "to_node": "node-clusters", "to_port": "feature_term_table_in"},
+                {"edge_id": "edge-3", "from_node": "node-clusters", "from_port": "keyword_cluster_table", "to_node": "node-save-xlsx", "to_port": "table_in"},
+            ],
+            "meta": {},
+        },
+        default_pipeline(),
+    )
+
+    assert "analysis" in compiled["enabled_steps"]
+    assert compiled["analysis"]["include_feature_term_selection"] is True
+    assert compiled["analysis"]["include_keyword_clustering"] is True
+    assert compiled["analysis"]["include_keyword_extraction"] is False
+    assert compiled["analysis"]["include_frequency_statistics"] is False
+    assert compiled["analysis"]["feature_term_count"] == 500
+    assert compiled["analysis"]["keyword_cluster_k"] == 6
+
+
+def test_compile_pipeline_from_workflow_keeps_document_clustering_edges_to_export_sinks():
+    workflow_definition = {
+        "nodes": [
+            {
+                "node_id": "node-corpus",
+                "node_type": "corpus_input",
+                "label": "语料输入",
+                "inputs": [],
+                "outputs": [{"port_id": "corpus", "port_type": "CorpusTable", "label": "语料"}],
+                "config": {
+                    "mode": "all_documents",
+                    "source_values": [],
+                    "institution_values": [],
+                    "category_values": [],
+                    "selected_doc_ids": [],
+                },
+                "ui_state": {"collapsed": False, "bypassed": False},
+                "runtime_meta": {"node_impl_version": "2.0.0"},
+            },
+            {
+                "node_id": "node-clean",
+                "node_type": "clean_text",
+                "label": "文本清洗",
+                "inputs": [{"port_id": "corpus_in", "port_type": "CorpusTable", "label": "语料输入"}],
+                "outputs": [{"port_id": "clean_corpus", "port_type": "CleanCorpus", "label": "清洗语料"}],
+                "config": {},
+                "ui_state": {"collapsed": False, "bypassed": False},
+                "runtime_meta": {"node_impl_version": "2.0.0"},
+            },
+            {
+                "node_id": "node-normalize",
+                "node_type": "normalize_text",
+                "label": "文本标准化",
+                "inputs": [{"port_id": "clean_corpus_in", "port_type": "CleanCorpus", "label": "清洗语料"}],
+                "outputs": [{"port_id": "normalized_corpus", "port_type": "NormalizedCorpus", "label": "标准化语料"}],
+                "config": {},
+                "ui_state": {"collapsed": False, "bypassed": False},
+                "runtime_meta": {"node_impl_version": "2.0.0"},
+            },
+            {
+                "node_id": "node-tokenize",
+                "node_type": "tokenize",
+                "label": "分词",
+                "inputs": [{"port_id": "normalized_corpus_in", "port_type": "NormalizedCorpus", "label": "标准化语料"}],
+                "outputs": [{"port_id": "token_corpus", "port_type": "TokenCorpus", "label": "Token 语料"}],
+                "config": {},
+                "ui_state": {"collapsed": False, "bypassed": False},
+                "runtime_meta": {"node_impl_version": "2.0.0"},
+            },
+            {
+                "node_id": "node-token-filtered",
+                "node_type": "filter_terms",
+                "label": "过滤词项",
+                "inputs": [{"port_id": "token_corpus_in", "port_type": "TokenCorpus", "label": "Token 输入"}],
+                "outputs": [{"port_id": "filtered_token_corpus", "port_type": "FilteredTokenCorpus", "label": "分析词项"}],
+                "config": {"min_term_frequency": 2},
+                "ui_state": {"collapsed": False, "bypassed": False},
+                "runtime_meta": {"node_impl_version": "2.0.0"},
+            },
+            {
+                "node_id": "node-document-clusters",
+                "node_type": "document_clustering",
+                "label": "文档聚类",
+                "inputs": [{"port_id": "token_corpus_in", "port_type": "FilteredTokenCorpus", "label": "分析词项"}],
+                "outputs": [{"port_id": "document_cluster_table", "port_type": "DocumentClusterTable", "label": "文档聚类表"}],
+                "config": {"document_cluster_k": 7},
+                "ui_state": {"collapsed": False, "bypassed": False},
+                "runtime_meta": {"node_impl_version": "2.0.0"},
+            },
+            {
+                "node_id": "node-save-csv",
+                "node_type": "save_csv",
+                "label": "保存 CSV",
+                "inputs": [{"port_id": "table_in", "port_type": "AnyTable", "label": "表格输入", "allow_multiple": True}],
+                "outputs": [{"port_id": "artifact", "port_type": "ExportArtifact", "label": "导出产物"}],
+                "config": {"file_prefix": "tables"},
+                "ui_state": {"collapsed": False, "bypassed": False},
+                "runtime_meta": {"node_impl_version": "2.0.0"},
+            },
+            {
+                "node_id": "node-save-png",
+                "node_type": "save_png",
+                "label": "保存 PNG",
+                "inputs": [{"port_id": "render_in", "port_type": "AnyRenderable", "label": "图像输入", "allow_multiple": True}],
+                "outputs": [{"port_id": "artifact", "port_type": "ExportArtifact", "label": "导出产物"}],
+                "config": {"chart_dpi": 320},
+                "ui_state": {"collapsed": False, "bypassed": False},
+                "runtime_meta": {"node_impl_version": "2.0.0"},
+            },
+            {
+                "node_id": "node-save-report",
+                "node_type": "save_html_report",
+                "label": "保存 HTML 报告",
+                "inputs": [{"port_id": "report_in", "port_type": "AnyAnalysisResult", "label": "报告输入", "allow_multiple": True}],
+                "outputs": [{"port_id": "artifact", "port_type": "ExportArtifact", "label": "导出产物"}],
+                "config": {"include_audit": False},
+                "ui_state": {"collapsed": False, "bypassed": False},
+                "runtime_meta": {"node_impl_version": "2.0.0"},
+            },
+        ],
+        "edges": [
+            {"edge_id": "edge-0", "from_node": "node-corpus", "from_port": "corpus", "to_node": "node-clean", "to_port": "corpus_in"},
+            {"edge_id": "edge-1", "from_node": "node-clean", "from_port": "clean_corpus", "to_node": "node-normalize", "to_port": "clean_corpus_in"},
+            {"edge_id": "edge-2", "from_node": "node-normalize", "from_port": "normalized_corpus", "to_node": "node-tokenize", "to_port": "normalized_corpus_in"},
+            {"edge_id": "edge-3", "from_node": "node-tokenize", "from_port": "token_corpus", "to_node": "node-token-filtered", "to_port": "token_corpus_in"},
+            {"edge_id": "edge-4", "from_node": "node-token-filtered", "from_port": "filtered_token_corpus", "to_node": "node-document-clusters", "to_port": "token_corpus_in"},
+            {"edge_id": "edge-5", "from_node": "node-document-clusters", "from_port": "document_cluster_table", "to_node": "node-save-csv", "to_port": "table_in"},
+            {"edge_id": "edge-6", "from_node": "node-document-clusters", "from_port": "document_cluster_table", "to_node": "node-save-png", "to_port": "render_in"},
+            {"edge_id": "edge-7", "from_node": "node-document-clusters", "from_port": "document_cluster_table", "to_node": "node-save-report", "to_port": "report_in"},
+        ],
+        "meta": {},
+    }
+
+    normalized_edges = normalize_workflow_edges(workflow_definition, workflow_definition["nodes"])
+    normalized_edge_pairs = {
+        (edge["from_node"], edge["from_port"], edge["to_node"], edge["to_port"])
+        for edge in normalized_edges
+    }
+
+    assert (
+        "node-document-clusters",
+        "document_cluster_table",
+        "node-save-csv",
+        "table_in",
+    ) in normalized_edge_pairs
+    assert (
+        "node-document-clusters",
+        "document_cluster_table",
+        "node-save-png",
+        "render_in",
+    ) in normalized_edge_pairs
+    assert (
+        "node-document-clusters",
+        "document_cluster_table",
+        "node-save-report",
+        "report_in",
+    ) in normalized_edge_pairs
+
+    compiled = compile_pipeline_from_workflow(workflow_definition, default_pipeline())
+
+    assert "analysis" in compiled["enabled_steps"]
+    assert "export" in compiled["enabled_steps"]
+    assert compiled["analysis"]["include_document_clustering"] is True
+    assert compiled["analysis"]["document_cluster_k"] == 7
+    assert compiled["export"]["export_csv"] is True
+    assert compiled["export"]["export_png"] is True
+    assert compiled["export"]["export_html_report"] is True
 
 
 def test_save_project_compiles_active_workflow_into_pipeline(isolated_workspace):
@@ -287,14 +750,16 @@ def test_delete_project_removes_workspace_entry_and_files(isolated_workspace):
 
     snapshot = action_load_workspace()
     assert all(item["id"] != created["id"] for item in snapshot["recent_projects"])
-    assert snapshot["current_project"] is None
+    assert snapshot["current_project"] is not None
+    assert snapshot["current_project"]["id"] != created["id"]
 
 
 def test_bootstrap_project_is_not_recreated_after_manual_delete(isolated_workspace):
     snapshot = action_load_workspace()
-    bootstrap_id = snapshot["current_project"]["id"]
+    bootstrap_ids = [project["id"] for project in snapshot["recent_projects"] if "示例项目" in project["name"]]
 
-    action_delete_project({"project_id": bootstrap_id})
+    for project_id in bootstrap_ids:
+        action_delete_project({"project_id": project_id})
     after_delete = action_load_workspace()
 
     assert after_delete["recent_projects"] == []
@@ -445,3 +910,63 @@ def test_project_templates_and_import_templates_roundtrip(isolated_workspace):
     assert cloned_manifest["pipeline"]["analysis"]["keyword_cluster_k"] == 6
     assert cloned_manifest["import_template"]["source_profile"] == "wos"
     assert cloned_manifest["dictionary_set"]["version"] == "2.0.0"
+
+
+def test_dictionary_table_import_and_export_roundtrip(isolated_workspace, tmp_path):
+    created = action_create_project({"name": "词表导入导出项目", "description": "dictionary import/export"})
+    project_dir = find_project_dir(created["id"])
+    assert project_dir is not None
+
+    import_path = tmp_path / "synonym-table.json"
+    import_payload = {
+        "id": "synonym-table-demo",
+        "name": "导入同义词表",
+        "description": "用于测试分类下新增资源表。",
+        "entries": [
+            {
+                "id": "entry-1",
+                "source": "生成式AI",
+                "target": "生成式 AI",
+                "enabled": True,
+                "hits": 0,
+                "tags": ["imported"],
+                "notes": "",
+            }
+        ],
+    }
+    import_path.write_text(json.dumps(import_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    imported = action_import_dictionary_sheet(
+        {
+            "project_id": created["id"],
+            "kind": "synonym_map",
+            "path": str(import_path),
+        }
+    )
+
+    manifest, _ = load_project(project_dir)
+    collection = manifest["dictionary_set"]["collections"]["synonym_map"]
+    imported_table = next(table for table in collection["tables"] if table["id"] == imported["id"])
+
+    assert imported["id"] == "synonym-table-demo"
+    assert imported_table["name"] == "导入同义词表"
+    assert imported_table["editable"] is True
+    assert imported_table["built_in"] is False
+    assert any(entry["source"] == "生成式AI" and entry["target"] == "生成式 AI" for entry in imported_table["entries"])
+    assert any(entry["source"] == "生成式AI" for entry in manifest["dictionary_set"]["sheets"]["synonym_map"]["entries"])
+
+    export_path = tmp_path / "exported-synonym-table.json"
+    exported = action_export_dictionary_sheet(
+        {
+            "project_id": created["id"],
+            "kind": "synonym_map",
+            "table_id": imported["id"],
+            "path": str(export_path),
+        }
+    )
+    exported_payload = json.loads(export_path.read_text(encoding="utf-8"))
+
+    assert exported["table_id"] == imported["id"]
+    assert exported_payload["id"] == imported["id"]
+    assert exported_payload["name"] == "导入同义词表"
+    assert exported_payload["entries"][0]["source"] == "生成式AI"

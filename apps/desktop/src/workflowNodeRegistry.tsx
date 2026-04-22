@@ -330,12 +330,28 @@ export function renderWorkflowNodePreview(context: WorkflowNodeEditorContext) {
     return <small>Top: {results.frequency_table.slice(0, 3).map((row) => row.term).join(" / ") || "暂无结果"}</small>;
   }
 
+  if (context.node.node_type === "term_document_analysis") {
+    return <small>词项-文档: {results.term_document_table.slice(0, 2).map((row) => `${row.term}@${row.doc_id}`).join(" / ") || "暂无结果"}</small>;
+  }
+
   if (context.node.node_type === "cooccurrence_analysis") {
     return <small>共现: {results.cooccurrence_table.slice(0, 3).map((row) => `${row.term_a}×${row.term_b}`).join(" / ") || "暂无结果"}</small>;
   }
 
+  if (context.node.node_type === "feature_term_selection") {
+    return <small>特征词: {results.selected_feature_terms.slice(0, 3).map((row) => row.term).join(" / ") || "暂无结果"}</small>;
+  }
+
   if (context.node.node_type === "keyword_clustering") {
     return <small>聚类: {results.keyword_cluster_result.slice(0, 2).map((row) => row.topic_label ?? `簇${row.cluster_id}`).join(" / ") || "暂无结果"}</small>;
+  }
+
+  if (context.node.node_type === "institution_keyword_analysis") {
+    return <small>机构词: {results.institution_keyword_cooccurrence.slice(0, 2).map((row) => `${row.institution}:${row.keyword}`).join(" / ") || "暂无结果"}</small>;
+  }
+
+  if (context.node.node_type === "document_clustering") {
+    return <small>文档聚类: {results.clustering_result.slice(0, 2).map((row) => `${row.title}→簇${row.cluster_id}`).join(" / ") || "暂无结果"}</small>;
   }
 
   if (context.node.node_type === "save_html_report" || context.node.node_type === "save_png" || context.node.node_type === "save_csv" || context.node.node_type === "save_xlsx") {

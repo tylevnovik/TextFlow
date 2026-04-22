@@ -31,7 +31,7 @@ export type RunStatus = "idle" | "running" | "completed" | "failed" | "cancelled
 export type ExportFormat = "csv" | "xlsx" | "png" | "html";
 export type WorkflowGraphMode = "dag";
 export type WorkflowSource = "system_default" | "migrated_from_pipeline" | "manual" | "template";
-export type WorkflowNodeType =
+export type BuiltinWorkflowNodeType =
   | "corpus_input"
   | "dictionary_input"
   | "merge_corpora"
@@ -44,11 +44,15 @@ export type WorkflowNodeType =
   | "apply_dictionary_rules"
   | "filter_terms"
   | "frequency_statistics"
+  | "term_document_analysis"
   | "term_year_analysis"
   | "cooccurrence_analysis"
+  | "feature_term_selection"
   | "keyword_extraction"
   | "keyword_clustering"
+  | "institution_keyword_analysis"
   | "institution_topic_analysis"
+  | "document_clustering"
   | "analyze_corpus"
   | "save_csv"
   | "save_xlsx"
@@ -57,6 +61,7 @@ export type WorkflowNodeType =
   | "export_results"
   | "note"
   | "group";
+export type WorkflowNodeType = BuiltinWorkflowNodeType | (string & {});
 export type WorkflowPortType =
   | "CorpusResource"
   | "CorpusTable"
@@ -74,9 +79,12 @@ export type WorkflowPortType =
   | "TermDocumentTable"
   | "TermYearTable"
   | "CooccurrenceTable"
+  | "FeatureTermTable"
   | "KeywordTable"
   | "KeywordClusterTable"
+  | "InstitutionKeywordTable"
   | "InstitutionTopicTable"
+  | "DocumentClusterTable"
   | "AnalysisBundle"
   | "AuditTable"
   | "ExportBundle"
@@ -188,11 +196,33 @@ export interface DictionarySheet {
   entries: DictionaryEntry[];
 }
 
+export interface DictionaryTableResource {
+  id: string;
+  kind: DictionaryKind;
+  name: string;
+  version: string;
+  description?: string;
+  source_url?: string;
+  built_in: boolean;
+  editable: boolean;
+  enabled: boolean;
+  tags?: string[];
+  entries: DictionaryEntry[];
+}
+
+export interface DictionaryCollection {
+  kind: DictionaryKind;
+  name: string;
+  description?: string;
+  tables: DictionaryTableResource[];
+}
+
 export interface DictionarySet {
   id: string;
   name: string;
   version: string;
   bound_to_project: boolean;
+  collections: Record<DictionaryKind, DictionaryCollection>;
   sheets: Record<DictionaryKind, DictionarySheet>;
 }
 
@@ -257,6 +287,16 @@ export interface AnalysisParameters {
   topic_model_k: number;
   keyword_cluster_k: number;
   document_cluster_k: number;
+  include_frequency_statistics: boolean;
+  include_term_document_relations: boolean;
+  include_term_year_relations: boolean;
+  include_cooccurrence_analysis: boolean;
+  include_feature_term_selection: boolean;
+  include_keyword_extraction: boolean;
+  include_keyword_clustering: boolean;
+  include_institution_keyword_analysis: boolean;
+  include_institution_topic_analysis: boolean;
+  include_document_clustering: boolean;
 }
 
 export interface ExportParameters {
@@ -422,6 +462,71 @@ export interface StepArtifactSummary {
   cache_hit: boolean;
 }
 
+export interface NodeRunSummary {
+  node_id: string;
+  node_type: WorkflowNodeType;
+  label: string;
+  status: "completed" | "cached" | "failed" | "skipped";
+  started_at: string;
+  ended_at?: string;
+  duration_ms: number;
+  cache_hit: boolean;
+  cache_key?: string;
+  cache_path?: string;
+  output_ports: string[];
+  output_summary?: string;
+  sample_outputs?: string[];
+  error?: string;
+}
+
+export type WorkflowNodeRuntimeStatus = NodeRunSummary["status"] | "pending" | "running";
+
+export interface WorkflowNodeRuntimeState {
+  node_id: string;
+  node_type: WorkflowNodeType;
+  label: string;
+  status: WorkflowNodeRuntimeStatus;
+  node_index: number;
+  total_nodes: number;
+  progress: number;
+  started_at?: string;
+  ended_at?: string;
+  duration_ms?: number;
+  cache_hit?: boolean;
+  cache_key?: string;
+  cache_path?: string;
+  output_ports?: string[];
+  output_summary?: string;
+  sample_outputs?: string[];
+  detail?: string;
+  error?: string;
+}
+
+export type WorkflowRunStage =
+  | "preparing"
+  | "running"
+  | "exporting"
+  | "saving"
+  | "completed"
+  | "failed";
+
+export interface WorkflowRunProgressDetail {
+  kind: "workflow_run";
+  run_id?: string;
+  workflow_id?: string;
+  workflow_name?: string;
+  stage: WorkflowRunStage;
+  total_nodes: number;
+  completed_nodes: number;
+  current_node_id?: string;
+  current_node_label?: string;
+  current_node_index?: number;
+  last_completed_node_id?: string;
+  elapsed_ms?: number;
+  detail?: string;
+  node_states: Record<string, WorkflowNodeRuntimeState>;
+}
+
 export interface RunRecord {
   run_id: string;
   project_id: string;
@@ -437,6 +542,7 @@ export interface RunRecord {
   errors: string[];
   logs: RunLogEntry[];
   artifacts: StepArtifactSummary[];
+  node_runs?: NodeRunSummary[];
   params_snapshot_path: string;
   processed_document_count: number;
   run_scope_summary: string;

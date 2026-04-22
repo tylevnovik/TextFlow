@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -37,18 +38,86 @@ from .project_store import (
     save_project,
     write_json,
 )
+from .sample_projects import FIRST_BUILTIN_SAMPLE_PROJECT_NAME, create_builtin_sample_projects
 
-ProgressCallback = Callable[[float, str], None]
+ProgressCallback = Callable[[float, str, dict[str, Any] | None], None]
 
 
 def emit(payload: Any) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False))
 
 
-def notify(progress_callback: ProgressCallback | None, progress: float, message: str) -> None:
+def notify(
+    progress_callback: ProgressCallback | None,
+    progress: float,
+    message: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
     if progress_callback is None:
         return
-    progress_callback(progress, message)
+    progress_callback(progress, message, detail)
+
+
+def workflow_progress_detail_from_run_record(
+    run_record: dict[str, Any],
+    *,
+    stage: str,
+    detail_message: str,
+) -> dict[str, Any]:
+    node_runs = [
+        node_run
+        for node_run in run_record.get("node_runs", [])
+        if isinstance(node_run, dict) and node_run.get("node_id")
+    ]
+    node_states = {
+        str(node_run["node_id"]): {
+            "node_id": str(node_run["node_id"]),
+            "node_type": str(node_run.get("node_type") or ""),
+            "label": str(node_run.get("label") or node_run.get("node_type") or "节点"),
+            "status": str(node_run.get("status") or "completed"),
+            "node_index": index,
+            "total_nodes": max(len(node_runs), 1),
+            "progress": 1.0,
+            "started_at": node_run.get("started_at"),
+            "ended_at": node_run.get("ended_at"),
+            "duration_ms": node_run.get("duration_ms"),
+            "cache_hit": bool(node_run.get("cache_hit")),
+            "cache_key": node_run.get("cache_key"),
+            "cache_path": node_run.get("cache_path"),
+            "output_ports": list(node_run.get("output_ports") or []),
+            "output_summary": node_run.get("output_summary"),
+            "sample_outputs": list(node_run.get("sample_outputs") or []),
+            "error": node_run.get("error"),
+        }
+        for index, node_run in enumerate(node_runs, start=1)
+    }
+    last_completed = node_runs[-1] if node_runs else None
+    started_at = str(run_record.get("started_at") or "")
+    ended_at = str(run_record.get("ended_at") or "")
+    elapsed_ms: float | None = None
+    if started_at and ended_at:
+        try:
+            started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+            ended = datetime.fromisoformat(ended_at.replace("Z", "+00:00"))
+            elapsed_ms = round(max(0.0, (ended - started).total_seconds()) * 1000, 3)
+        except ValueError:
+            elapsed_ms = None
+    return {
+        "kind": "workflow_run",
+        "run_id": run_record.get("run_id"),
+        "workflow_id": run_record.get("workflow_id"),
+        "workflow_name": run_record.get("workflow_name"),
+        "stage": stage,
+        "total_nodes": max(len(node_runs), 1),
+        "completed_nodes": len(node_runs),
+        "current_node_id": None,
+        "current_node_label": None,
+        "current_node_index": None,
+        "last_completed_node_id": last_completed.get("node_id") if isinstance(last_completed, dict) else None,
+        "elapsed_ms": elapsed_ms,
+        "detail": detail_message,
+        "node_states": node_states,
+    }
 
 
 def parse_payload() -> dict[str, Any]:
@@ -66,16 +135,13 @@ def ensure_bootstrap_project() -> None:
     if workspace_state.get("bootstrap_completed"):
         return
 
-    sample_files = ensure_sample_files()
-    project_dir, manifest = create_project(
-        "新能源与生成式语料示例项目",
-        "新手上手示例：先看导入资料，再看词表如何影响切词与标准化，最后运行流程并导出结果。",
+    created = create_builtin_sample_projects()
+    starter_manifest = next(
+        (manifest for _project_dir, manifest in created if manifest.get("name") == FIRST_BUILTIN_SAMPLE_PROJECT_NAME),
+        created[0][1] if created else None,
     )
-    corpus, source_files, _issues = import_files(sample_files, manifest["import_template"], project_dir=project_dir)
-    manifest["source_files"] = source_files
-    manifest, corpus, _ = run_project_pipeline(project_dir, manifest, corpus)
-    save_project(project_dir, manifest, corpus)
-    remember_project(manifest["id"], set_current=True)
+    if starter_manifest is not None:
+        remember_project(starter_manifest["id"], set_current=True)
     mark_workspace_bootstrapped()
 
 
@@ -233,7 +299,14 @@ def action_import_project_files(payload: dict[str, Any], progress_callback: Prog
 
 
 def action_run_pipeline(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
-    notify(progress_callback, 0.05, "正在准备流程")
+    notify(progress_callback, 0.05, "正在准备流程", {
+        "kind": "workflow_run",
+        "stage": "preparing",
+        "total_nodes": 1,
+        "completed_nodes": 0,
+        "detail": "正在准备流程",
+        "node_states": {},
+    })
     ensure_bootstrap_project()
     project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
     if not corpus:
@@ -246,10 +319,28 @@ def action_run_pipeline(payload: dict[str, Any], progress_callback: ProgressCall
         corpus,
         progress_callback=progress_callback,
     )
-    notify(progress_callback, 0.95, "正在保存运行结果")
+    notify(
+        progress_callback,
+        0.95,
+        "正在保存运行结果",
+        workflow_progress_detail_from_run_record(
+            run_record,
+            stage="saving",
+            detail_message="正在保存运行结果",
+        ),
+    )
     save_project(project_dir, manifest, corpus)
     remember_project(manifest["id"], set_current=True)
-    notify(progress_callback, 1.0, "流程运行完成")
+    notify(
+        progress_callback,
+        1.0,
+        "流程运行完成",
+        workflow_progress_detail_from_run_record(
+            run_record,
+            stage="completed",
+            detail_message="流程运行完成",
+        ),
+    )
     return run_record
 
 
@@ -467,21 +558,40 @@ def action_import_dictionary_sheet(payload: dict[str, Any], progress_callback: P
     project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
     kind = payload["kind"]
     source_path = Path(payload["path"])
-    imported_sheet = read_json(source_path)
-    if not isinstance(imported_sheet, dict):
+    imported_table = read_json(source_path)
+    if not isinstance(imported_table, dict):
         raise ValueError(f"Invalid dictionary sheet: {source_path}")
 
-    existing_sheet = manifest["dictionary_set"]["sheets"][kind]
-    imported_sheet["kind"] = kind
-    imported_sheet.setdefault("name", existing_sheet["name"])
-    imported_sheet.setdefault("version", existing_sheet["version"])
-    imported_sheet.setdefault("entries", [])
-    manifest["dictionary_set"]["sheets"][kind] = imported_sheet
+    collection = manifest["dictionary_set"]["collections"][kind]
+    existing_ids = {
+        str(table.get("id") or "")
+        for table in collection.get("tables", [])
+        if isinstance(table, dict)
+    }
+    base_id = str(imported_table.get("id") or f"{kind}-imported-{source_path.stem}")
+    table_id = base_id
+    suffix = 2
+    while table_id in existing_ids:
+        table_id = f"{base_id}-{suffix}"
+        suffix += 1
+
+    imported_table["id"] = table_id
+    imported_table["kind"] = kind
+    imported_table.setdefault("name", source_path.stem or "导入词表")
+    imported_table.setdefault("version", "2.0.0")
+    imported_table.setdefault("description", f"从 {source_path.name} 导入的词表资源。")
+    imported_table.setdefault("source_url", None)
+    imported_table["built_in"] = False
+    imported_table["editable"] = True
+    imported_table["enabled"] = bool(imported_table.get("enabled", True))
+    imported_table.setdefault("tags", ["imported"])
+    imported_table.setdefault("entries", [])
+    collection.setdefault("tables", []).append(imported_table)
     notify(progress_callback, 0.7, "正在写入项目词表")
     save_project(project_dir, manifest, corpus)
     remember_project(manifest["id"], set_current=True)
     notify(progress_callback, 1.0, "词表已导入")
-    return imported_sheet
+    return imported_table
 
 
 def action_export_dictionary_sheet(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
@@ -489,12 +599,24 @@ def action_export_dictionary_sheet(payload: dict[str, Any], progress_callback: P
     ensure_bootstrap_project()
     _project_dir, manifest, _corpus = load_project_or_fail(payload["project_id"])
     kind = payload["kind"]
+    table_id = str(payload["table_id"])
     output_path = payload["path"]
-    write_json(Path(output_path), manifest["dictionary_set"]["sheets"][kind])
+    table = next(
+        (
+            item
+            for item in manifest["dictionary_set"]["collections"][kind].get("tables", [])
+            if isinstance(item, dict) and str(item.get("id") or "") == table_id
+        ),
+        None,
+    )
+    if table is None:
+        raise ValueError(f"Dictionary table {table_id} not found in {kind}")
+    write_json(Path(output_path), table)
     remember_project(manifest["id"], set_current=True)
     notify(progress_callback, 1.0, "词表已导出")
     return {
         "kind": kind,
+        "table_id": table_id,
         "path": output_path,
     }
 

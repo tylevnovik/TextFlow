@@ -6,6 +6,7 @@ import os
 import re
 from collections import Counter, defaultdict
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -16,7 +17,7 @@ import numpy as np
 import pandas as pd
 import yake
 from sklearn.cluster import KMeans
-from sklearn.decomposition import NMF, PCA
+from sklearn.decomposition import NMF, TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from .defaults import compile_pipeline_from_workflow, empty_result_bundle, utc_now_iso, workflow_payload_hash
@@ -92,7 +93,18 @@ DEFAULT_PIPELINE_ORDER = [
     "export",
 ]
 
-ProgressCallback = Callable[[float, str], None]
+ProgressCallback = Callable[[float, str, dict[str, Any] | None], None]
+
+
+@dataclass
+class TfidfAnalysisBundle:
+    doc_ids: list[str]
+    terms: list[str]
+    matrix: Any | None
+
+    @property
+    def empty(self) -> bool:
+        return self.matrix is None or not self.doc_ids or not self.terms
 
 
 def normalize_run_scope(scope: dict[str, Any] | None) -> dict[str, Any]:
@@ -441,8 +453,9 @@ def tokenize_text(text: str, dictionary_set: dict[str, Any], params: dict[str, A
     return [token for token in tokens if len(token) >= min_length], phrase_hits
 
 
-def build_dictionary_maps(dictionary_set: dict[str, Any]) -> dict[str, dict[str, str | None]]:
+def build_dictionary_runtime_state(dictionary_set: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
     maps: dict[str, dict[str, str | None]] = {}
+    hit_entries: dict[str, dict[str, dict[str, Any]]] = {}
     for kind in [
         "standard_terms",
         "synonym_map",
@@ -450,15 +463,35 @@ def build_dictionary_maps(dictionary_set: dict[str, Any]) -> dict[str, dict[str,
         "stopwords",
         "exclusion_terms",
     ]:
-        maps[kind] = {}
+        kind_map: dict[str, str | None] = {}
+        kind_hits: dict[str, dict[str, Any]] = {}
         for entry in sheet_entries(dictionary_set, kind):
-            maps[kind][entry["source"].lower()] = entry.get("target")
-    return maps
+            lowered = entry["source"].lower()
+            kind_map[lowered] = entry.get("target")
+            kind_hits[lowered] = entry
+        maps[kind] = kind_map
+        hit_entries[kind] = kind_hits
+    return {"maps": maps, "hit_entries": hit_entries}
 
 
-def increment_dictionary_hit(dictionary_set: dict[str, Any], kind: str, source: str) -> None:
+def build_dictionary_maps(dictionary_set: dict[str, Any]) -> dict[str, dict[str, str | None]]:
+    return build_dictionary_runtime_state(dictionary_set)["maps"]
+
+
+def increment_dictionary_hit(
+    dictionary_set: dict[str, Any],
+    kind: str,
+    source: str,
+    runtime_state: dict[str, Any] | None = None,
+) -> None:
+    lowered = source.lower()
+    if runtime_state:
+        entry = ((runtime_state.get("hit_entries") or {}).get(kind) or {}).get(lowered)
+        if isinstance(entry, dict):
+            entry["hits"] = int(entry.get("hits", 0)) + 1
+            return
     for entry in sheet_entries(dictionary_set, kind):
-        if entry["source"].lower() == source.lower():
+        if entry["source"].lower() == lowered:
             entry["hits"] = int(entry.get("hits", 0)) + 1
             return
 
@@ -468,8 +501,10 @@ def apply_dictionary(
     tokens: list[str],
     dictionary_set: dict[str, Any],
     params: dict[str, Any],
+    runtime_state: dict[str, Any] | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
-    maps = build_dictionary_maps(dictionary_set)
+    runtime_state = runtime_state or build_dictionary_runtime_state(dictionary_set)
+    maps = runtime_state["maps"]
     result: list[str] = []
     audits: list[dict[str, Any]] = []
 
@@ -477,7 +512,7 @@ def apply_dictionary(
         lowered = token.lower()
 
         if params.get("apply_exclusion_terms", True) and lowered in maps["exclusion_terms"]:
-            increment_dictionary_hit(dictionary_set, "exclusion_terms", lowered)
+            increment_dictionary_hit(dictionary_set, "exclusion_terms", lowered, runtime_state)
             audits.append(
                 audit_row(doc_id, position, token, None, "exclusion_terms", "exclusion_terms.json", lowered, "drop")
             )
@@ -491,21 +526,21 @@ def apply_dictionary(
 
         if params.get("apply_standard_terms", True) and lowered in maps["standard_terms"]:
             target = maps["standard_terms"][lowered] or token
-            increment_dictionary_hit(dictionary_set, "standard_terms", lowered)
+            increment_dictionary_hit(dictionary_set, "standard_terms", lowered, runtime_state)
             action = "replace"
             rule_type = "standard_terms"
             rule_source = "standard_terms.json"
             rule_key = lowered
         elif params.get("apply_synonym_map", True) and lowered in maps["synonym_map"]:
             target = maps["synonym_map"][lowered] or token
-            increment_dictionary_hit(dictionary_set, "synonym_map", lowered)
+            increment_dictionary_hit(dictionary_set, "synonym_map", lowered, runtime_state)
             action = "replace"
             rule_type = "synonym_map"
             rule_source = "synonym_map.json"
             rule_key = lowered
         elif params.get("apply_near_synonym_map", True) and lowered in maps["near_synonym_map"]:
             target = maps["near_synonym_map"][lowered] or token
-            increment_dictionary_hit(dictionary_set, "near_synonym_map", lowered)
+            increment_dictionary_hit(dictionary_set, "near_synonym_map", lowered, runtime_state)
             action = "replace"
             rule_type = "near_synonym_map"
             rule_source = "near_synonym_map.json"
@@ -513,14 +548,15 @@ def apply_dictionary(
 
         target_lower = str(target).lower()
         if params.get("apply_stopwords", True) and target_lower in maps["stopwords"]:
-            increment_dictionary_hit(dictionary_set, "stopwords", target_lower)
+            increment_dictionary_hit(dictionary_set, "stopwords", target_lower, runtime_state)
             audits.append(
                 audit_row(doc_id, position, token, str(target), "stopwords", "stopwords.json", target_lower, "drop")
             )
             continue
 
         result.append(str(target))
-        audits.append(audit_row(doc_id, position, token, str(target), rule_type, rule_source, rule_key, action))
+        if action != "keep":
+            audits.append(audit_row(doc_id, position, token, str(target), rule_type, rule_source, rule_key, action))
 
     return result, audits
 
@@ -628,14 +664,22 @@ def term_year_table(df_tokens: pd.DataFrame) -> list[dict[str, Any]]:
     return grouped.sort_values(["tf_in_year", "df_in_year"], ascending=False).to_dict(orient="records")
 
 
-def cooccurrence_table(corpus: list[dict[str, Any]], window_size: int, min_cooccurrence: int) -> list[dict[str, Any]]:
+def cooccurrence_table(
+    corpus: list[dict[str, Any]],
+    window_size: int,
+    min_cooccurrence: int,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
     counter: Counter[tuple[str, str]] = Counter()
-    for item in corpus:
+    total = len(corpus)
+    for index, item in enumerate(corpus, start=1):
         tokens = item["filtered_tokens"]
         for start in range(len(tokens)):
             window = tokens[start : start + window_size]
             for a, b in itertools.combinations(sorted(set(window)), 2):
                 counter[(a, b)] += 1
+        if progress_callback is not None and (index == total or index % 250 == 0):
+            progress_callback(index, total)
 
     rows = [
         {
@@ -694,24 +738,34 @@ def fallback_keywords(tokens: list[str], top_k: int) -> list[tuple[str, float]]:
     return rows
 
 
-def yake_keyword_rows(corpus: list[dict[str, Any]], analysis_params: dict[str, Any]) -> list[dict[str, Any]]:
+def yake_keyword_rows(
+    corpus: list[dict[str, Any]],
+    analysis_params: dict[str, Any],
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
     top_k_doc = max(1, int(analysis_params.get("top_k_per_doc", 10)))
     top_k_project = max(1, int(analysis_params.get("top_k_project", 100)))
     doc_keyword_rows: list[dict[str, Any]] = []
     project_scores: dict[str, dict[str, float | str | int]] = {}
+    extractors: dict[str, Any] = {}
+    total = len(corpus)
 
-    for item in corpus:
+    for index, item in enumerate(corpus, start=1):
         text = build_analysis_text(item)
         ranked: list[tuple[str, float]] = []
         if text:
-            extractor = yake.KeywordExtractor(
-                lan=yake_language(text),
-                n=3,
-                dedupLim=0.85,
-                dedupFunc="seqm",
-                windowsSize=2,
-                top=max(top_k_doc * 3, top_k_doc),
-            )
+            language = yake_language(text)
+            extractor = extractors.get(language)
+            if extractor is None:
+                extractor = yake.KeywordExtractor(
+                    lan=language,
+                    n=3,
+                    dedupLim=0.85,
+                    dedupFunc="seqm",
+                    windowsSize=2,
+                    top=max(top_k_doc * 3, top_k_doc),
+                )
+                extractors[language] = extractor
             seen: set[str] = set()
             for candidate, raw_score in extractor.extract_keywords(text):
                 normalized = normalize_keyword_candidate(candidate)
@@ -745,6 +799,8 @@ def yake_keyword_rows(corpus: list[dict[str, Any]], analysis_params: dict[str, A
             if keyword not in doc_seen:
                 payload["doc_count"] = int(payload["doc_count"]) + 1
                 doc_seen.add(keyword)
+        if progress_callback is not None and (index == total or index % 100 == 0):
+            progress_callback(index, total)
 
     project_keyword_rows: list[dict[str, Any]] = []
     ranked_project_keywords = sorted(
@@ -770,10 +826,118 @@ def yake_keyword_rows(corpus: list[dict[str, Any]], analysis_params: dict[str, A
     return [*doc_keyword_rows, *project_keyword_rows]
 
 
-def tfidf_analysis(corpus: list[dict[str, Any]], analysis_params: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], pd.DataFrame]:
+def should_use_fast_keyword_extraction(corpus: list[dict[str, Any]]) -> bool:
+    if len(corpus) >= 2000:
+        return True
+    token_count = sum(len(item.get("filtered_tokens") or []) for item in corpus)
+    return token_count >= 150000
+
+
+def tfidf_keyword_rows(
+    corpus: list[dict[str, Any]],
+    tfidf_bundle: TfidfAnalysisBundle,
+    analysis_params: dict[str, Any],
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
+    if tfidf_bundle.empty:
+        return []
+
+    top_k_doc = max(1, int(analysis_params.get("top_k_per_doc", 10)))
+    top_k_project = max(1, int(analysis_params.get("top_k_project", 100)))
+    doc_keyword_rows: list[dict[str, Any]] = []
+    project_scores: dict[str, dict[str, float | str | int]] = {}
+    matrix = tfidf_bundle.matrix.tocsr() if hasattr(tfidf_bundle.matrix, "tocsr") else tfidf_bundle.matrix
+    terms = list(tfidf_bundle.terms)
+    total = len(corpus)
+
+    for index, item in enumerate(corpus, start=1):
+        ranked: list[tuple[str, float]] = []
+        row = matrix.getrow(index - 1) if hasattr(matrix, "getrow") else matrix[index - 1]
+        indices = getattr(row, "indices", [])
+        values = getattr(row, "data", [])
+
+        if len(indices):
+            ranking = np.argsort(values)[::-1]
+            seen: set[str] = set()
+            for position in ranking:
+                term = terms[int(indices[position])]
+                keyword = normalize_keyword_candidate(term)
+                if not keyword or keyword in seen:
+                    continue
+                seen.add(keyword)
+                ranked.append((keyword, round(float(values[position]), 6)))
+                if len(ranked) >= top_k_doc:
+                    break
+
+        if not ranked:
+            ranked = fallback_keywords(item.get("filtered_tokens", []), top_k_doc)
+
+        doc_seen: set[str] = set()
+        for rank, (keyword, score) in enumerate(ranked[:top_k_doc], start=1):
+            doc_keyword_rows.append(
+                {
+                    "scope": "doc",
+                    "doc_id": item["doc_id"],
+                    "keyword": keyword,
+                    "score": float(score),
+                    "rank": rank,
+                }
+            )
+            payload = project_scores.setdefault(
+                keyword,
+                {"keyword": keyword, "score_total": 0.0, "doc_count": 0, "best_score": 0.0},
+            )
+            payload["score_total"] = float(payload["score_total"]) + float(score)
+            payload["best_score"] = max(float(payload["best_score"]), float(score))
+            if keyword not in doc_seen:
+                payload["doc_count"] = int(payload["doc_count"]) + 1
+                doc_seen.add(keyword)
+
+        if progress_callback is not None and (index == total or index % 250 == 0):
+            progress_callback(index, total)
+
+    project_keyword_rows: list[dict[str, Any]] = []
+    ranked_project_keywords = sorted(
+        project_scores.values(),
+        key=lambda item: (
+            (float(item["score_total"]) / max(int(item["doc_count"]), 1)) * (1.0 + math.log(int(item["doc_count"]) + 1)),
+            int(item["doc_count"]),
+            float(item["best_score"]),
+        ),
+        reverse=True,
+    )
+    for rank, item in enumerate(ranked_project_keywords[:top_k_project], start=1):
+        mean_score = float(item["score_total"]) / max(int(item["doc_count"]), 1)
+        project_keyword_rows.append(
+            {
+                "scope": "project",
+                "keyword": str(item["keyword"]),
+                "score": round(mean_score * (1.0 + math.log(int(item["doc_count"]) + 1)), 6),
+                "rank": rank,
+            }
+        )
+
+    return [*doc_keyword_rows, *project_keyword_rows]
+
+
+def extract_keyword_rows(
+    corpus: list[dict[str, Any]],
+    analysis_params: dict[str, Any],
+    tfidf_bundle: TfidfAnalysisBundle | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
+    if should_use_fast_keyword_extraction(corpus) and tfidf_bundle is not None and not tfidf_bundle.empty:
+        return tfidf_keyword_rows(corpus, tfidf_bundle, analysis_params, progress_callback)
+    return yake_keyword_rows(corpus, analysis_params, progress_callback)
+
+
+def tfidf_feature_bundle(
+    corpus: list[dict[str, Any]],
+    analysis_params: dict[str, Any],
+) -> tuple[list[dict[str, Any]], TfidfAnalysisBundle]:
     documents = [" ".join(item["filtered_tokens"]) for item in corpus]
     if not any(documents):
-        return [], [], pd.DataFrame()
+        return [], TfidfAnalysisBundle(doc_ids=[], terms=[], matrix=None)
 
     vectorizer = TfidfVectorizer(tokenizer=str.split, preprocessor=None, token_pattern=None, lowercase=False)
     matrix = vectorizer.fit_transform(documents)
@@ -795,25 +959,35 @@ def tfidf_analysis(corpus: list[dict[str, Any]], analysis_params: dict[str, Any]
             }
         )
 
-    keyword_rows = yake_keyword_rows(corpus, analysis_params)
-
-    term_doc_df = pd.DataFrame(
-        matrix.toarray().T,
-        index=terms,
-        columns=[item["doc_id"] for item in corpus],
+    selected_indices = [int(index) for index in ranking[:selected_limit]]
+    selected_terms = [str(terms[index]) for index in selected_indices]
+    selected_matrix = matrix[:, selected_indices] if selected_indices else None
+    tfidf_bundle = TfidfAnalysisBundle(
+        doc_ids=[str(item["doc_id"]) for item in corpus],
+        terms=selected_terms,
+        matrix=selected_matrix,
     )
-    return feature_rows, keyword_rows, term_doc_df
+    return feature_rows, tfidf_bundle
+
+
+def tfidf_analysis(
+    corpus: list[dict[str, Any]],
+    analysis_params: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], TfidfAnalysisBundle]:
+    feature_rows, tfidf_bundle = tfidf_feature_bundle(corpus, analysis_params)
+    keyword_rows = extract_keyword_rows(corpus, analysis_params, tfidf_bundle)
+    return feature_rows, keyword_rows, tfidf_bundle
 
 
 def nmf_topic_model(
     corpus: list[dict[str, Any]],
-    term_doc_df: pd.DataFrame,
+    tfidf_bundle: TfidfAnalysisBundle,
     analysis_params: dict[str, Any],
 ) -> tuple[dict[int, dict[str, Any]], dict[str, dict[str, Any]]]:
-    if term_doc_df.empty:
+    if tfidf_bundle.empty:
         return {}, {}
 
-    document_matrix = term_doc_df.T.to_numpy()
+    document_matrix = tfidf_bundle.matrix
     if document_matrix.size == 0:
         return {}, {}
 
@@ -823,7 +997,7 @@ def nmf_topic_model(
     model = NMF(n_components=topic_count, init=init, random_state=42, max_iter=400)
     doc_topic_matrix = model.fit_transform(document_matrix)
 
-    terms = term_doc_df.index.to_list()
+    terms = tfidf_bundle.terms
     topic_lookup: dict[int, dict[str, Any]] = {}
     for topic_id, weights in enumerate(model.components_):
         ranking = np.argsort(weights)[::-1]
@@ -850,18 +1024,20 @@ def nmf_topic_model(
 
 def keyword_clusters(
     feature_rows: list[dict[str, Any]],
-    term_doc_df: pd.DataFrame,
+    tfidf_bundle: TfidfAnalysisBundle,
     cluster_k: int,
 ) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]]]:
-    selected = [row for row in feature_rows if row["selected"]]
-    if not selected or term_doc_df.empty:
+    if tfidf_bundle.empty:
         return [], {}
 
-    selected_terms = [row["term"] for row in selected if row["term"] in term_doc_df.index]
+    selected = [row for row in feature_rows if row["selected"]]
+    term_index_lookup = {term: index for index, term in enumerate(tfidf_bundle.terms)}
+    selected_terms = [row["term"] for row in selected if row["term"] in term_index_lookup]
     if not selected_terms:
         return [], {}
 
-    feature_matrix = term_doc_df.loc[selected_terms].to_numpy()
+    selected_indices = [term_index_lookup[term] for term in selected_terms]
+    feature_matrix = tfidf_bundle.matrix[:, selected_indices].T.toarray()
     cluster_count = max(1, min(cluster_k, len(selected_terms)))
     model = KMeans(n_clusters=cluster_count, random_state=42, n_init="auto")
     labels = model.fit_predict(feature_matrix)
@@ -948,11 +1124,11 @@ def institution_keyword_and_topic(
     return keyword_rows_out, topic_rows_out
 
 
-def document_clusters(corpus: list[dict[str, Any]], term_doc_df: pd.DataFrame, cluster_k: int) -> list[dict[str, Any]]:
-    if term_doc_df.empty:
+def document_clusters(corpus: list[dict[str, Any]], tfidf_bundle: TfidfAnalysisBundle, cluster_k: int) -> list[dict[str, Any]]:
+    if tfidf_bundle.empty:
         return []
 
-    document_matrix = term_doc_df.T.to_numpy()
+    document_matrix = tfidf_bundle.matrix
     doc_count = len(corpus)
     cluster_count = max(1, min(cluster_k, doc_count))
 
@@ -969,12 +1145,15 @@ def document_clusters(corpus: list[dict[str, Any]], term_doc_df: pd.DataFrame, c
             }
         ]
 
+    dense_matrix = document_matrix.toarray() if hasattr(document_matrix, "toarray") else document_matrix
     model = KMeans(n_clusters=cluster_count, random_state=42, n_init="auto")
-    labels = model.fit_predict(document_matrix)
-    reducer = PCA(n_components=2)
-    coords = reducer.fit_transform(document_matrix) if document_matrix.shape[1] >= 2 else np.pad(document_matrix, ((0, 0), (0, 2 - document_matrix.shape[1])))
-    if coords.shape[1] > 2:
-        coords = coords[:, :2]
+    labels = model.fit_predict(dense_matrix)
+    if document_matrix.shape[1] >= 2:
+        coords = TruncatedSVD(n_components=2, random_state=42).fit_transform(document_matrix)
+    else:
+        coords = np.pad(dense_matrix, ((0, 0), (0, max(0, 2 - dense_matrix.shape[1]))))
+    if coords.shape[1] < 2:
+        coords = np.pad(coords, ((0, 0), (0, 2 - coords.shape[1])))
 
     rows = []
     for index, item in enumerate(corpus):
@@ -1033,13 +1212,18 @@ def update_log(logs: list[dict[str, Any]], step: str, message: str, level: str =
     logs.append({"timestamp": utc_now_iso(), "level": level, "step": step, "message": message})
 
 
-def notify_progress(progress_callback: ProgressCallback | None, progress: float, message: str) -> None:
+def notify_progress(
+    progress_callback: ProgressCallback | None,
+    progress: float,
+    message: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
     if progress_callback is None:
         return
-    progress_callback(progress, message)
+    progress_callback(progress, message, detail)
 
 
-def run_project_pipeline(
+def run_project_pipeline_bridge(
     project_dir: Path,
     manifest: dict[str, Any],
     corpus: list[dict[str, Any]],
@@ -1178,37 +1362,83 @@ def run_project_pipeline(
     institution_keyword_rows: list[dict[str, Any]] = []
     institution_topic_rows: list[dict[str, Any]] = []
     clustering_rows: list[dict[str, Any]] = []
-    term_doc_df = pd.DataFrame()
+    tfidf_bundle = TfidfAnalysisBundle(doc_ids=[], terms=[], matrix=None)
 
     if step_enabled(pipeline_definition, "analysis"):
         notify_progress(progress_callback, 0.72, "正在生成统计与关键词结果")
-        df_tokens = explode_tokens(scoped_corpus)
-        frequency = frequency_table(df_tokens)
-        term_doc = term_document_table(df_tokens)
-        term_year = term_year_table(df_tokens)
-        cooccur = cooccurrence_table(
-            scoped_corpus,
-            pipeline_definition["analysis"]["cooccurrence_window"],
-            pipeline_definition["analysis"]["min_cooccurrence"],
+        analysis_params = pipeline_definition["analysis"]
+        include_frequency = bool(analysis_params.get("include_frequency_statistics", True))
+        include_term_document = bool(analysis_params.get("include_term_document_relations", True))
+        include_term_year = bool(analysis_params.get("include_term_year_relations", True))
+        include_cooccurrence = bool(analysis_params.get("include_cooccurrence_analysis", True))
+        include_feature_terms = bool(analysis_params.get("include_feature_term_selection", True))
+        include_keywords = bool(analysis_params.get("include_keyword_extraction", True))
+        include_keyword_clusters = bool(analysis_params.get("include_keyword_clustering", True))
+        include_institution_keywords = bool(analysis_params.get("include_institution_keyword_analysis", True))
+        include_institution_topics = bool(analysis_params.get("include_institution_topic_analysis", True))
+        include_document_clusters = bool(analysis_params.get("include_document_clustering", True))
+
+        needs_token_dataframe = include_frequency or include_term_document or include_term_year
+        needs_tfidf = (
+            include_feature_terms
+            or include_keywords
+            or include_keyword_clusters
+            or include_institution_keywords
+            or include_institution_topics
+            or include_document_clusters
         )
-        feature_rows, keyword_rows, term_doc_df = tfidf_analysis(scoped_corpus, pipeline_definition["analysis"])
-        cluster_rows, topic_lookup = keyword_clusters(
-            feature_rows,
-            term_doc_df,
-            pipeline_definition["analysis"]["keyword_cluster_k"],
-        )
-        nmf_topics, doc_topics = nmf_topic_model(scoped_corpus, term_doc_df, pipeline_definition["analysis"])
-        institution_keyword_rows, institution_topic_rows = institution_keyword_and_topic(
-            scoped_corpus,
-            keyword_rows,
-            doc_topics,
-            nmf_topics,
-        )
-        clustering_rows = document_clusters(
-            scoped_corpus,
-            term_doc_df,
-            pipeline_definition["analysis"]["document_cluster_k"],
-        )
+        needs_topic_model = include_keyword_clusters or include_institution_topics
+        needs_institution_tables = include_institution_keywords or include_institution_topics
+
+        df_tokens = explode_tokens(scoped_corpus) if needs_token_dataframe else pd.DataFrame()
+        if include_frequency:
+            frequency = frequency_table(df_tokens)
+        if include_term_document:
+            term_doc = term_document_table(df_tokens)
+        if include_term_year:
+            term_year = term_year_table(df_tokens)
+        if include_cooccurrence:
+            cooccur = cooccurrence_table(
+                scoped_corpus,
+                analysis_params["cooccurrence_window"],
+                analysis_params["min_cooccurrence"],
+            )
+        if needs_tfidf:
+            feature_rows, keyword_rows, tfidf_bundle = tfidf_analysis(scoped_corpus, analysis_params)
+        if not include_feature_terms:
+            feature_rows = []
+        if not include_keywords:
+            keyword_rows = []
+
+        topic_lookup: dict[int, dict[str, Any]] = {}
+        doc_topics: dict[str, dict[str, Any]] = {}
+        if include_keyword_clusters:
+            cluster_rows, topic_lookup = keyword_clusters(
+                feature_rows,
+                tfidf_bundle,
+                analysis_params["keyword_cluster_k"],
+            )
+        if needs_topic_model:
+            nmf_topics, doc_topics = nmf_topic_model(scoped_corpus, tfidf_bundle, analysis_params)
+            if not topic_lookup:
+                topic_lookup = nmf_topics
+        if needs_institution_tables:
+            institution_keyword_rows, institution_topic_rows = institution_keyword_and_topic(
+                scoped_corpus,
+                keyword_rows,
+                doc_topics,
+                topic_lookup,
+            )
+        if not include_institution_keywords:
+            institution_keyword_rows = []
+        if not include_institution_topics:
+            institution_topic_rows = []
+        if include_document_clusters:
+            clustering_rows = document_clusters(
+                scoped_corpus,
+                tfidf_bundle,
+                analysis_params["document_cluster_k"],
+            )
 
         result_bundle["frequency_table"] = frequency
         result_bundle["term_document_table"] = term_doc
@@ -1220,10 +1450,26 @@ def run_project_pipeline(
         result_bundle["institution_keyword_cooccurrence"] = institution_keyword_rows
         result_bundle["institution_topic_cooccurrence"] = institution_topic_rows
         result_bundle["clustering_result"] = clustering_rows
+        selected_outputs = [
+            label
+            for label, enabled in {
+                "词频": include_frequency,
+                "词项-文档": include_term_document,
+                "词项-年份": include_term_year,
+                "共现": include_cooccurrence,
+                "特征词": include_feature_terms,
+                "关键词": include_keywords,
+                "关键词聚类": include_keyword_clusters,
+                "机构关键词": include_institution_keywords,
+                "机构主题": include_institution_topics,
+                "文档聚类": include_document_clusters,
+            }.items()
+            if enabled
+        ]
         update_log(
             logs,
             "analysis",
-            f"已使用 YAKE 生成关键词、使用 NMF 生成主题，并产出 {len(frequency)} 条高频词结果和 {len(cluster_rows)} 条关键词聚类结果。",
+            f"已按节点选择生成分析结果：{', '.join(selected_outputs) or '无'}。",
         )
         notify_progress(progress_callback, 0.88, "分析结果已生成")
     else:
@@ -1249,7 +1495,19 @@ def run_project_pipeline(
     )
     update_log(logs, "export", export_message)
     notify_progress(progress_callback, 0.94, "正在写出运行记录与导出文件")
-    report_files = write_run_outputs(project_dir, run_record["run_id"], manifest, scoped_corpus, result_bundle, run_record)
+    report_files = write_run_outputs(
+        project_dir,
+        run_record["run_id"],
+        manifest,
+        scoped_corpus,
+        result_bundle,
+        run_record,
+        progress_callback=(
+            (lambda fraction, message: notify_progress(progress_callback, min(0.995, 0.94 + fraction * 0.055), message))
+            if progress_callback is not None
+            else None
+        ),
+    )
     result_bundle["report_files"] = report_files
     snapshot_prefix = f"runs/{run_record['run_id']}"
     snapshot_files = [
@@ -1276,3 +1534,28 @@ def run_project_pipeline(
     manifest.setdefault("run_history", []).append(run_record)
     notify_progress(progress_callback, 1.0, "本次运行已完成")
     return manifest, corpus, run_record
+
+
+def run_project_pipeline(
+    project_dir: Path,
+    manifest: dict[str, Any],
+    corpus: list[dict[str, Any]],
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    from .dag_runtime import run_project_workflow_native, supports_native_execution
+    from .node_registry import build_node_registry
+
+    workflow_definitions = [
+        workflow
+        for workflow in manifest.get("workflow_definitions", [])
+        if isinstance(workflow, dict) and workflow.get("workflow_id")
+    ]
+    active_workflow_id = str(manifest.get("active_workflow_id") or "")
+    workflow_lookup = {str(workflow["workflow_id"]): workflow for workflow in workflow_definitions}
+    active_workflow = workflow_lookup.get(active_workflow_id) or (workflow_definitions[0] if workflow_definitions else {})
+    active_workflow_source = str(active_workflow.get("source") or "migrated_from_pipeline")
+    registry = build_node_registry(manifest.get("pipeline"))
+
+    if active_workflow_source in {"manual", "template"} and supports_native_execution(active_workflow, registry):
+        return run_project_workflow_native(project_dir, manifest, corpus, progress_callback)
+    return run_project_pipeline_bridge(project_dir, manifest, corpus, progress_callback)

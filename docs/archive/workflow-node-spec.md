@@ -27,6 +27,7 @@
 - `artifacts` 目前是 run 级摘要，不是节点级 artifact registry。
 - `cache_hit` 字段已存在，但当前后端没有节点缓存实现，实际恒为 `false`。
 - Python sidecar 已经提供内置 `node_definitions` 注册表，工作区快照会把当前可用节点协议一起返回给前端。
+- Python sidecar 现已把节点系统拆成 `node_definitions / node_compilers / node_executors / node_plugins / node_registry`，并支持扫描本地纯 Python 插件节点。
 - 前端“处理与分析”页已经切到 workflow shell：当前是沉浸式画布壳层，支持自由拖拽、空白区域平移、滚轮缩放、自动整理和位置持久化。
 - 当前画布已取消独立 inspector；节点预览、常用参数、深度参数和删除/跳过动作都下沉到节点卡片内。
 - 当前画布已支持左侧 rail + dock、dock 收起、右下角 mini-map、顶部浮动运行栏，以及工具箱拖拽投放节点。
@@ -35,8 +36,8 @@
 - 当前画布已支持端口级连线编辑：可从输出端发起连线、点击兼容输入端接线、选中连线删除、恢复推荐连线。
 - 当前 mini-map 已支持点击和拖拽视口框进行实时导航，不再只是一次性跳转。
 - 当前 workflow 草稿、视口和基础画布 UI 状态会在页面切换后恢复，不再因为切到别页而回到初始壳层。
-- 当前运行时已经按“输出节点回溯活跃子图”的方式编译 workflow，但真正执行仍会回落到线性 `pipeline`。
-- 当前运行时仍未支持真正的 `merge_corpora`、局部重跑、节点缓存和 artifact registry。
+- 当前运行时已经按“输出节点回溯活跃子图”的方式编译 workflow；`manual / template` workflow 会走原生 DAG，legacy workflow 才回退到线性 `pipeline`。
+- 当前运行时仍未支持局部重跑、并行调度和完整 artifact registry；`merge_corpora` 与节点缓存已接入 native DAG。
 
 V2 规格必须建立在这些事实之上。
 
@@ -81,7 +82,7 @@ V2 引入 `WorkflowDefinition` 作为新的流程组织单位。用户编辑的�
 
 - 节点已经按输入 / 处理 / 分析 / 输出拆开，不再保留不可删除的系统节点。
 - 这些分析节点在运行时仍会共同编译回当前单段式 `analysis` 步骤，因此“节点拆开”先是编排层升级，不是后端已经拥有完全独立的分析执行器。
-- `Merge Corpora` 已经进入图模型和节点注册表，但当前运行器尚未真正执行多语料汇合。
+- `Merge Corpora` 已经进入图模型、节点注册表和原生 DAG 执行链，可用于把多路语料先汇合再进入下游处理。
 
 ### 3.4 DAG 原则保留，但首版执行图进一步收紧
 
@@ -89,8 +90,7 @@ V2 仍以 DAG 为上限，不支持循环。
 
 同时，基于当前运行器真实能力，首版可执行图仍有几个约束：
 
-- 只支持一个活跃 `Corpus Input`
-- `Merge Corpora` 目前只作为图组织节点存在，尚未进入真实执行
+- 多个活跃 `Corpus Input` 需要先经过 `Merge Corpora` 收敛，不能直接并入同一条执行链
 - 活跃子图必须能回溯到至少一个输出节点
 - 分析分支和多输出已经允许存在，但它们最终会一起编译回线性 `analysis/export` 语义
 
@@ -116,7 +116,7 @@ V2 仍以 DAG 为上限，不支持循环。
 - `Feature Term Selector` 的强交互独立节点
 - `Keyword Clustering`、`Institution-Topic Analysis` 等独立可执行节点
 - `Reroute`、复杂自动补线
-- 插件化 node registry
+- 第三方二进制依赖插件与签名分发
 
 这些能力并不是不要做，而是当前仓库还没有支撑它们的运行时和持久化基础。
 
@@ -300,6 +300,13 @@ V2 仍以 DAG 为上限，不支持循环。
 - `Export Results / Full Report`
 
 首版不做子流程模板市场。
+
+不过当前仓库已经支持一层更轻量的本地插件能力：
+
+- 后端会扫描 `plugins/nodes`
+- 插件可注册自己的 schema、compiler hook、executor id
+- 前端工具箱会优先读取后端返回的 `node_definitions`
+- 插件节点当前主要走泛型表单渲染，少量内置节点保留 custom renderer
 
 ## 9. 与当前 V1 的兼容策略
 

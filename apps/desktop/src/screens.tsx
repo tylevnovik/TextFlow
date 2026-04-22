@@ -1,26 +1,32 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
 import type {
   CorpusItem,
+  DictionaryCollection,
   DictionaryEntry,
   DictionaryKind,
   DictionarySet,
+  DictionaryTableResource,
   FieldMappingRule,
   ImportTemplate,
+  NodeRunSummary,
   OutputBundleId,
   PipelineDefinition,
   PipelineRecipeId,
   PipelineStepId,
   PageId,
   ProjectManifest,
+  RegisteredWorkflowNodeDefinition,
   ResultBundle,
   RunScopeDefinition,
   WorkflowDefinition,
   WorkflowNodeInstance,
+  WorkflowNodeRuntimeState,
+  WorkflowRunProgressDetail,
   WorkflowPortType
 } from "@textflow/shared-types";
 import { sourceProfileImportTemplates, sourceProfiles } from "@textflow/shared-types";
 import type { ImportProjectFilesResponse } from "./bridge/desktopBridge";
-import { useWorkspace } from "./store/workspaceStore";
+import { useTaskProgress, useWorkspace } from "./store/workspaceStore";
 import {
   addWorkflowNodeByType,
   autoLayoutWorkflow,
@@ -42,13 +48,11 @@ import {
   workflowNodeCanRemove,
   workflowNodeDefinition,
   workflowNodeDescriptionForType,
-  workflowOptionalToolboxNodes,
   workflowNodeStepId
 } from "./workflow";
 import type { WorkflowValidation } from "./workflow";
 import {
   AuditTable,
-  DictionaryTable,
   DocumentPreview,
   EmptyState,
   FrequencyTable,
@@ -238,7 +242,7 @@ const outputBundleCards: Array<{
     output: "按当前导出开关执行"
   }
 ];
-const sampleProjectName = "新能源与生成式语料示例项目";
+const sampleProjectName = "示例项目 - 学术摘要机构主题";
 const sampleJourneySteps = [
   "先打开示例项目，在“导入资料”里抽查 3 个来源文件和导入后的文档。",
   "再到“词表规则”看 8 张词表分别在切词、统一写法和套用词表时怎么生效。",
@@ -347,6 +351,126 @@ function cloneTemplate(template: ImportTemplate): ImportTemplate {
 
 function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+const dictionaryKindOrder: DictionaryKind[] = [
+  "stopwords",
+  "custom_lexicon",
+  "phrase_lexicon",
+  "synonym_map",
+  "near_synonym_map",
+  "standard_terms",
+  "exclusion_terms",
+  "regex_rules"
+];
+
+const dictionaryCollectionMeta: Record<DictionaryKind, { name: string; description: string }> = {
+  stopwords: { name: "停用词", description: "过滤虚词、套话和无分析意义的常用词。" },
+  custom_lexicon: { name: "自定义词典", description: "告诉切词器哪些术语与专名要整体保留。" },
+  phrase_lexicon: { name: "短语词典", description: "把固定搭配或多词短语作为一个整体处理。" },
+  synonym_map: { name: "同义词表", description: "归并别名、替代表达和区域说法。" },
+  near_synonym_map: { name: "近义词表", description: "保留更宽松的扩展归并规则，按需启用。" },
+  standard_terms: { name: "标准词库", description: "把词形和写法统一成固定标准词。" },
+  exclusion_terms: { name: "排除词表", description: "整批排除当前课题不想保留的人名、地名或噪声词。" },
+  regex_rules: { name: "Regex 规则", description: "在清洗和标准化阶段使用的正则规则。" }
+};
+
+const DICTIONARY_ENTRY_PAGE_SIZE = 200;
+
+function cloneDictionaryEntry(entry: DictionaryEntry, fallbackId: string): DictionaryEntry {
+  return {
+    ...entry,
+    id: entry.id || fallbackId,
+    source: entry.source ?? "",
+    target: entry.target ?? "",
+    enabled: Boolean(entry.enabled ?? true),
+    hits: Number(entry.hits ?? 0),
+    tags: [...(entry.tags ?? [])],
+    notes: entry.notes ?? ""
+  };
+}
+
+function cloneDictionaryCollectionsForDraft(dictionarySet: DictionarySet): Record<DictionaryKind, DictionaryCollection> {
+  const collections = {} as Record<DictionaryKind, DictionaryCollection>;
+
+  dictionaryKindOrder.forEach((kind) => {
+    const existingCollection = dictionarySet.collections?.[kind];
+    if (existingCollection && Array.isArray(existingCollection.tables)) {
+      collections[kind] = {
+        kind,
+        name: existingCollection.name || dictionaryCollectionMeta[kind].name,
+        description: existingCollection.description || dictionaryCollectionMeta[kind].description,
+        tables: existingCollection.tables.map((table, tableIndex) => ({
+          id: table.id || `${kind}-table-${tableIndex + 1}`,
+          kind,
+          name: table.name || `${dictionaryCollectionMeta[kind].name} ${tableIndex + 1}`,
+          version: table.version || "2.0.0",
+          description: table.description || "",
+          source_url: table.source_url,
+          built_in: Boolean(table.built_in),
+          editable: Boolean(table.editable ?? !table.built_in),
+          enabled: Boolean(table.enabled ?? true),
+          tags: [...(table.tags ?? [])],
+          entries: table.editable
+            ? (table.entries ?? []).map((entry, entryIndex) =>
+                cloneDictionaryEntry(entry, `${kind}-entry-${tableIndex}-${entryIndex}`)
+              )
+            : (table.entries ?? [])
+        }))
+      };
+      return;
+    }
+
+    const legacySheet = dictionarySet.sheets?.[kind];
+    collections[kind] = {
+      kind,
+      name: legacySheet?.name || dictionaryCollectionMeta[kind].name,
+      description: dictionaryCollectionMeta[kind].description,
+      tables: [
+        {
+          id: `${kind}-project-custom`,
+          kind,
+          name: "项目自定义",
+          version: legacySheet?.version || "2.0.0",
+          description: "从旧版单表结构自动迁移的项目内词表资源。",
+          source_url: undefined,
+          built_in: false,
+          editable: true,
+          enabled: true,
+          tags: [],
+          entries: (legacySheet?.entries ?? []).map((entry, entryIndex) =>
+            cloneDictionaryEntry(entry, `${kind}-legacy-${entryIndex}`)
+          )
+        }
+      ]
+    };
+  });
+
+  return collections;
+}
+
+function normalizeDictionaryDraft(dictionarySet: DictionarySet): DictionarySet {
+  return {
+    ...dictionarySet,
+    version: dictionarySet.version || "2.0.0",
+    collections: cloneDictionaryCollectionsForDraft(dictionarySet)
+  };
+}
+
+function createEmptyDictionaryTable(kind: DictionaryKind, tableName = "新建资源表"): DictionaryTableResource {
+  return {
+    id: `${kind}-table-${Date.now()}`,
+    kind,
+    name: tableName,
+    version: "2.0.0",
+    description: "",
+    source_url: undefined,
+    built_in: false,
+    editable: true,
+    enabled: true,
+    tags: [],
+    entries: []
+  };
 }
 
 function emptyMappingRule(): FieldMappingRule {
@@ -582,7 +706,7 @@ function workflowNodeSummary(node: WorkflowNodeInstance, pipeline: PipelineDefin
     case "dictionary_input":
       return "引用项目词表资源";
     case "merge_corpora":
-      return `合并策略：${String(config.strategy ?? "append")}`;
+      return `合并策略：${String(config.strategy ?? "append") === "dedupe" ? "按 doc_id 去重" : "直接追加"}`;
     case "clean_text":
       return `${countEnabledFlags(config, cleaningToggleItems)} 个清洗开关`;
     case "normalize_text":
@@ -655,7 +779,7 @@ function workflowNodeBadge(node: WorkflowNodeInstance, validation?: WorkflowVali
   if (!stepId) {
     return node.node_type === "filter_corpus" ? "范围" : "辅助";
   }
-  return stepId === "analysis" ? "分析" : "处理中";
+  return stepId === "analysis" ? "分析" : "处理";
 }
 
 function workflowNodeTitle(nodeType: WorkflowNodeInstance["node_type"]): string {
@@ -977,6 +1101,64 @@ function edgeDataSummary(
   }
 }
 
+function runtimeStatusLabel(status: WorkflowNodeRuntimeState["status"]): string {
+  switch (status) {
+    case "running":
+      return "运行中";
+    case "completed":
+      return "已完成";
+    case "cached":
+      return "命中缓存";
+    case "failed":
+      return "失败";
+    case "skipped":
+      return "已跳过";
+    default:
+      return "等待中";
+  }
+}
+
+function formatRuntimeDuration(durationMs?: number): string {
+  if (!Number.isFinite(durationMs ?? NaN) || durationMs === undefined) {
+    return "进行中";
+  }
+  if (durationMs < 1000) {
+    return `${Math.round(durationMs)} ms`;
+  }
+  return `${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)} s`;
+}
+
+function historicalRuntimeState(nodeRun: NodeRunSummary, index: number, totalNodes: number): WorkflowNodeRuntimeState {
+  return {
+    node_id: nodeRun.node_id,
+    node_type: nodeRun.node_type,
+    label: nodeRun.label,
+    status: nodeRun.status,
+    node_index: index,
+    total_nodes: totalNodes,
+    progress: 1,
+    started_at: nodeRun.started_at,
+    ended_at: nodeRun.ended_at,
+    duration_ms: nodeRun.duration_ms,
+    cache_hit: nodeRun.cache_hit,
+    cache_key: nodeRun.cache_key,
+    cache_path: nodeRun.cache_path,
+    output_ports: nodeRun.output_ports,
+    output_summary: nodeRun.output_summary,
+    sample_outputs: nodeRun.sample_outputs,
+    error: nodeRun.error,
+  };
+}
+
+function workflowRuntimeProgress(detail: WorkflowRunProgressDetail): number {
+  if (!detail.total_nodes) {
+    return 0;
+  }
+  const currentNode = detail.current_node_id ? detail.node_states[detail.current_node_id] : undefined;
+  const currentProgress = currentNode?.status === "running" ? (currentNode.progress ?? 0) : 0;
+  return Math.max(0, Math.min(1, (detail.completed_nodes + currentProgress) / detail.total_nodes));
+}
+
 function runScopeSummary(scope: RunScopeDefinition, totalCount: number, matchedCount: number): string {
   if (scope.mode === "selected_documents") {
     return `已手动选择 ${scope.selected_doc_ids.length} 篇文档，当前能命中 ${matchedCount}/${totalCount} 篇。`;
@@ -1031,7 +1213,7 @@ function corpusMatchesRunScope(item: CorpusItem, scope: RunScopeDefinition): boo
   return true;
 }
 
-export function PageView({ page }: { page: PageId }) {
+export const PageView = memo(function PageView({ page }: { page: PageId }) {
   switch (page) {
     case "home":
       return <HomePage />;
@@ -1054,7 +1236,7 @@ export function PageView({ page }: { page: PageId }) {
     default:
       return null;
   }
-}
+});
 
 function HomePage() {
   const {
@@ -1329,7 +1511,7 @@ function ProjectPage() {
                   <span className={`badge ${run.status}`}>{run.status}</span>
                 </div>
                 <p>
-                  {run.started_at} → {run.ended_at ?? "处理中"}
+                  {run.started_at} → {run.ended_at ?? "处理"}
                 </p>
                 <p className="muted">{run.run_scope_summary ?? "处理对象：项目内全部资料"}</p>
                 <ul className="micro-list">
@@ -1822,16 +2004,16 @@ function DataPage() {
                 />
               </label>
 
-              <div className="status-panel">
-                <strong>来源追踪</strong>
-                <p>
-                  文件：{String(draftDocument.extra_metadata["_source_file_name"] ?? "—")} · 行号：
-                  {String(draftDocument.extra_metadata["_source_row_index"] ?? "—")}
-                </p>
-                <p>保存后会清空旧的清洗/切词结果，等你重新运行处理流程。</p>
+                <div className="status-panel">
+                  <strong>来源追踪</strong>
+                  <p>
+                    文件：{String(draftDocument.extra_metadata["_source_file_name"] ?? "—")} · 行号：
+                    {String(draftDocument.extra_metadata["_source_row_index"] ?? "—")}
+                  </p>
+                  <p>保存后，下一次运行当前 workflow 时会基于最新文档内容重新处理。</p>
+                </div>
               </div>
-            </div>
-          ) : (
+            ) : (
             <EmptyState title="暂无文档" body="导入后就能在这里逐篇查看、修改和删除。" />
           )}
         </Panel>
@@ -2146,7 +2328,7 @@ function PipelinePageLegacyOld() {
           />
           <span>导出水印</span>
         </label>
-        <p className="body-copy">PNG 图表会同时生成高频词柱状图、项目关键词图、关键词词云、机构主题热力图和文档聚类图，并自动处理中文字体。</p>
+        <p className="body-copy">PNG 图表会同时生成高频词柱状图、项目关键词图、关键词词云、机构主题热力图和文档聚类图，并自动适配中文字体。</p>
       </Panel>
     );
   };
@@ -3194,6 +3376,7 @@ function WorkflowPipelinePage() {
     runPipeline,
     setActivePage
   } = useWorkspace();
+  const taskProgress = useTaskProgress();
   const project = snapshot.current_project;
   const activeWorkflow = project ? resolveActiveWorkflow(project) : null;
   const [draftWorkflow, setDraftWorkflow] = useState<WorkflowDefinition | null>(
@@ -3383,6 +3566,29 @@ function WorkflowPipelinePage() {
     ? `${selectedEdgeSourceNode?.label ?? selectedEdge.from_node} -> ${selectedEdgeTargetNode?.label ?? selectedEdge.to_node}`
     : "";
   const latestRun = project.run_history.at(-1);
+  const liveWorkflowRun = taskProgress.action === "run-pipeline"
+    && taskProgress.detail?.kind === "workflow_run"
+    && (!taskProgress.detail.workflow_id || taskProgress.detail.workflow_id === draftWorkflow.workflow_id)
+    ? taskProgress.detail
+    : null;
+  const historicalRuntimeStates = useMemo<Record<string, WorkflowNodeRuntimeState>>(() => {
+    const nodeRuns = latestRun?.node_runs ?? [];
+    const totalNodes = Math.max(nodeRuns.length, 1);
+    return nodeRuns.reduce<Record<string, WorkflowNodeRuntimeState>>((accumulator, nodeRun, index) => {
+      accumulator[nodeRun.node_id] = historicalRuntimeState(nodeRun, index + 1, totalNodes);
+      return accumulator;
+    }, {});
+  }, [latestRun?.run_id, latestRun?.node_runs]);
+  const runtimeNodeStates = liveWorkflowRun?.node_states ?? historicalRuntimeStates;
+  const liveRuntimeProgress = liveWorkflowRun ? workflowRuntimeProgress(liveWorkflowRun) : (latestRun?.node_runs?.length ? 1 : 0);
+  const runtimeCompletedNodes = liveWorkflowRun?.completed_nodes
+    ?? Object.values(runtimeNodeStates).filter((nodeRun) => nodeRun.status !== "pending" && nodeRun.status !== "running").length;
+  const runtimeTotalNodes = liveWorkflowRun?.total_nodes
+    ?? (latestRun?.node_runs?.length ?? workflowValidation.active_node_ids.length);
+  const activeRuntimeNode = liveWorkflowRun?.current_node_id ? runtimeNodeStates[liveWorkflowRun.current_node_id] : undefined;
+  const lastCompletedRuntimeNode = liveWorkflowRun?.last_completed_node_id
+    ? runtimeNodeStates[liveWorkflowRun.last_completed_node_id]
+    : undefined;
   const availableSources = Array.from(new Set(snapshot.corpus.map((item) => item.source).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
   const availableInstitutions = Array.from(new Set(snapshot.corpus.map((item) => item.institution).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
   const availableCategories = Array.from(new Set(snapshot.corpus.map((item) => item.category_or_tag).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
@@ -3418,7 +3624,11 @@ function WorkflowPipelinePage() {
   const estimatedEffort = matchedDocuments.length <= 20 ? "短" : matchedDocuments.length <= 80 ? "中" : "长";
   const canRun = !loading && matchedDocuments.length > 0 && workflowValidation.valid;
   const runSummary = runScopeSummary(workflowRunScope, snapshot.corpus.length, matchedDocuments.length);
-  const toolboxNodeTypes = workflowOptionalToolboxNodes();
+  const toolboxDefinitions = (snapshot.node_definitions ?? [])
+    .filter((definition) => !definition.hidden_from_toolbox)
+    .sort((left, right) => left.category.localeCompare(right.category) || left.title.localeCompare(right.title, "zh-CN"));
+  const toolboxDefinitionByType = new Map(toolboxDefinitions.map((definition) => [definition.type, definition]));
+  const toolboxNodeTypes = toolboxDefinitions.map((definition) => definition.type);
   const toolboxSections = [
     { id: "input", title: "输入节点" },
     { id: "process", title: "处理节点" },
@@ -3428,10 +3638,11 @@ function WorkflowPipelinePage() {
   ]
     .map((section) => ({
       ...section,
-      items: toolboxNodeTypes.filter((nodeType) => workflowNodeDefinition(nodeType).category === section.id)
+      items: toolboxDefinitions.filter((definition) => definition.category === section.id)
     }))
     .filter((section) => section.items.length > 0);
   const registeredNodeCount = snapshot.node_definitions?.length ?? 0;
+  const selectedNodeRuntime = selectedNode ? runtimeNodeStates[selectedNode.node_id] : undefined;
 
   const activateDock = (view: "library" | "nodes" | "status") => {
     setDockView(view);
@@ -3442,6 +3653,32 @@ function WorkflowPipelinePage() {
     setSelectedNodeId(nodeId);
     setSelectedEdgeId("");
     setPendingConnection(null);
+  };
+
+  const focusNodeOnCanvas = (nodeId: string) => {
+    const node = nodeLookup.get(nodeId);
+    const canvasElement = canvasScrollRef.current;
+    if (!node || !canvasElement) {
+      return;
+    }
+
+    const nodeFrame = workflowNodeCanvasFrame(node);
+    const nodeCenterX = canvasOrigin.x + node.position.x + nodeFrame.w / 2;
+    const nodeCenterY = canvasOrigin.y + node.position.y + nodeFrame.h / 2;
+    const focusViewportY = Math.max(
+      Math.min(canvasElement.clientHeight / 2, canvasElement.clientHeight * 0.42),
+      canvasOverlayOffset + 72
+    );
+
+    updateWorkflow((current) => updateWorkflowViewport(current, {
+      x: canvasElement.clientWidth / 2 - nodeCenterX * viewport.zoom,
+      y: focusViewportY - nodeCenterY * viewport.zoom
+    }));
+  };
+
+  const selectAndFocusNode = (nodeId: string) => {
+    selectNode(nodeId);
+    focusNodeOnCanvas(nodeId);
   };
 
   const selectEdge = (edgeId: string) => {
@@ -3582,7 +3819,11 @@ function WorkflowPipelinePage() {
           const frame = workflowNodeCanvasFrame(toolboxDragStateRef.current.nodeType);
           const x = (event.clientX - rect.left - viewport.x) / viewport.zoom - canvasOrigin.x - frame.w / 2;
           const y = (event.clientY - rect.top - viewport.y) / viewport.zoom - canvasOrigin.y - frame.h / 3;
-          addWorkflowNode(toolboxDragStateRef.current.nodeType, { x, y });
+          addWorkflowNode(
+            toolboxDragStateRef.current.nodeType,
+            toolboxDefinitionByType.get(toolboxDragStateRef.current.nodeType),
+            { x, y }
+          );
         }
       }
       toolboxDragStateRef.current = null;
@@ -3597,7 +3838,7 @@ function WorkflowPipelinePage() {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [draggedToolboxNodeType, viewport.x, viewport.y, viewport.zoom, canvasOrigin.x, canvasOrigin.y]);
+  }, [draggedToolboxNodeType, viewport.x, viewport.y, viewport.zoom, canvasOrigin.x, canvasOrigin.y, toolboxDefinitionByType]);
 
   const updateWorkflow = (updater: (current: WorkflowDefinition) => WorkflowDefinition) => {
     setDraftWorkflow((current) => current ? updater(current) : current);
@@ -3605,11 +3846,12 @@ function WorkflowPipelinePage() {
 
   const addWorkflowNode = (
     nodeType: WorkflowNodeInstance["node_type"],
+    registeredDefinition?: RegisteredWorkflowNodeDefinition,
     position?: { x: number; y: number }
   ) => {
     let nextSelectedNodeId = "";
     updateWorkflow((current) => {
-      let next = addWorkflowNodeByType(current, nodeType, draftPipeline);
+      let next = addWorkflowNodeByType(current, nodeType, draftPipeline, registeredDefinition);
       const previousNodeIds = new Set(current.nodes.map((node) => node.node_id));
       nextSelectedNodeId = next.nodes.find((node) => !previousNodeIds.has(node.node_id))?.node_id ?? "";
       if (position && nextSelectedNodeId) {
@@ -3708,7 +3950,7 @@ function WorkflowPipelinePage() {
   };
 
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (loading || event.button !== 0) {
+    if (event.button !== 0) {
       return;
     }
     const target = event.target as HTMLElement;
@@ -3794,7 +4036,12 @@ function WorkflowPipelinePage() {
   };
 
   const handleCanvasNodePointerDown = (event: ReactPointerEvent<HTMLElement>, node: WorkflowNodeInstance) => {
-    if (loading || event.button !== 0) {
+    if (event.button !== 0) {
+      return;
+    }
+    if (loading) {
+      selectNode(node.node_id);
+      event.preventDefault();
       return;
     }
     dragStateRef.current = {
@@ -3899,6 +4146,9 @@ function WorkflowPipelinePage() {
       pipeline: compiledPipeline,
       workflow_definitions: nextWorkflowDefinitions,
       active_workflow_id: normalizedWorkflow.workflow_id
+    }, {
+      refresh: false,
+      actionLabel: "保存工作流"
     });
   };
 
@@ -4006,12 +4256,12 @@ function WorkflowPipelinePage() {
     if (selectedNode.node_type === "merge_corpora") {
       return (
         <Panel title="合并语料">
-          <p className="body-copy">合并节点已经开放建图，但当前运行时还不能真正执行多语料汇合。你可以先用它组织画布结构，后续 DAG 引擎会直接接管。</p>
+          <p className="body-copy">合并节点已经接入原生 DAG 执行。多条语料支路会先在这里汇总，再继续流向后续清洗、切词和分析节点。</p>
           <label className="field">
             <span>合并策略</span>
             <select value={String(selectedNode.config.strategy ?? "append")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { strategy: event.target.value })} disabled={loading}>
               <option value="append">直接追加</option>
-              <option value="deduplicate_doc_id">按 doc_id 去重</option>
+              <option value="dedupe">按 doc_id 去重</option>
             </select>
           </label>
         </Panel>
@@ -4364,15 +4614,30 @@ function WorkflowPipelinePage() {
               <span className="pill">{sortedNodes.length}</span>
             </div>
             <div className="workflow-node-list">
-              {sortedNodes.map((node) => (
-                <button key={node.node_id} type="button" className={`workflow-node-list-item ${selectedNode?.node_id === node.node_id && !selectedEdge ? "is-active" : ""}`} onClick={() => selectNode(node.node_id)}>
-                  <div>
-                    <strong>{node.label}</strong>
-                    <p>{workflowNodeSummary(node, draftPipeline, runSummary)}</p>
-                  </div>
-                  <span className="pill">{workflowNodeBadge(node, workflowValidation)}</span>
-                </button>
-              ))}
+              {sortedNodes.map((node) => {
+                const nodeRuntime = runtimeNodeStates[node.node_id];
+                return (
+                    <button
+                      key={node.node_id}
+                      type="button"
+                      className={`workflow-node-list-item ${selectedNode?.node_id === node.node_id && !selectedEdge ? "is-active" : ""} ${nodeRuntime ? `is-${nodeRuntime.status}` : ""}`.trim()}
+                      onClick={() => selectAndFocusNode(node.node_id)}
+                    >
+                      <div>
+                        <strong>{node.label}</strong>
+                        <p>{nodeRuntime?.output_summary ?? workflowNodeSummary(node, draftPipeline, runSummary)}</p>
+                    </div>
+                    <div className="workflow-node-list-item-meta">
+                      {nodeRuntime && <span className={`pill runtime-${nodeRuntime.status}`}>{runtimeStatusLabel(nodeRuntime.status)}</span>}
+                      <span className="pill">
+                        {nodeRuntime
+                          ? (nodeRuntime.status === "running" ? `${Math.round((nodeRuntime.progress ?? 0) * 100)}%` : formatRuntimeDuration(nodeRuntime.duration_ms))
+                          : workflowNodeBadge(node, workflowValidation)}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -4400,32 +4665,91 @@ function WorkflowPipelinePage() {
           <div className="workflow-dock-card">
             <div className="workflow-dock-card-head">
               <div>
-                <p className="eyebrow">Graph</p>
-                <h4>图状态</h4>
-                <p className="body-copy">系统会从输出节点回溯活跃子图，未接到输出的支路不会进入这次执行。</p>
+                <p className="eyebrow">{liveWorkflowRun ? "Runtime" : "Graph"}</p>
+                <h4>{liveWorkflowRun ? "运行态" : "图状态"}</h4>
+                <p className="body-copy">
+                  {liveWorkflowRun
+                    ? "节点会按当前活跃子图依次执行；这里会实时显示当前节点、耗时和最近完成的产物摘要。"
+                    : "系统会从输出节点回溯活跃子图，未接到输出的支路不会进入这次执行。"}
+                </p>
               </div>
-              <span className="pill">{workflowValidation.valid ? "可运行" : `${workflowValidation.issues.length} 个问题`}</span>
+              <span className="pill">
+                {liveWorkflowRun
+                  ? `${Math.round(liveRuntimeProgress * 100)}%`
+                  : (workflowValidation.valid ? "可运行" : `${workflowValidation.issues.length} 个问题`)}
+              </span>
             </div>
             <div className="workflow-validation-stack">
-              <div className="status-panel"><strong>活跃执行链</strong><span>{workflowValidation.active_node_ids.length} 个节点</span></div>
-              <div className="status-panel"><strong>输出节点</strong><span>{workflowValidation.sink_node_ids.length} 个</span></div>
-              <div className="status-panel"><strong>当前范围</strong><span>{runSummary}</span></div>
-              {workflowValidation.issues.length ? workflowValidation.issues.slice(0, 5).map((issue) => (
-                <div key={issue} className="status-panel warning"><span>{issue}</span></div>
-              )) : (
-                <div className="status-panel success"><span>当前主链已经接通，可以直接保存并运行。</span></div>
+              {liveWorkflowRun ? (
+                <>
+                  <div className="status-panel"><strong>图进度</strong><span>{runtimeCompletedNodes}/{runtimeTotalNodes} 个节点</span></div>
+                  <div className="status-panel"><strong>当前节点</strong><span>{activeRuntimeNode?.label ?? "正在整理运行结果"}</span></div>
+                  <div className="status-panel"><strong>已运行</strong><span>{formatRuntimeDuration(liveWorkflowRun.elapsed_ms)}</span></div>
+                  <div className="status-panel"><strong>最近完成</strong><span>{lastCompletedRuntimeNode ? `${lastCompletedRuntimeNode.label} · ${lastCompletedRuntimeNode.output_summary ?? runtimeStatusLabel(lastCompletedRuntimeNode.status)}` : "尚无完成节点"}</span></div>
+                </>
+              ) : (
+                <>
+                  <div className="status-panel"><strong>活跃执行链</strong><span>{workflowValidation.active_node_ids.length} 个节点</span></div>
+                  <div className="status-panel"><strong>输出节点</strong><span>{workflowValidation.sink_node_ids.length} 个</span></div>
+                  <div className="status-panel"><strong>当前范围</strong><span>{runSummary}</span></div>
+                  {workflowValidation.issues.length ? workflowValidation.issues.slice(0, 5).map((issue) => (
+                    <div key={issue} className="status-panel warning"><span>{issue}</span></div>
+                  )) : (
+                    <div className="status-panel success"><span>当前主链已经接通，可以直接保存并运行。</span></div>
+                  )}
+                </>
               )}
+            </div>
+            <div className="workflow-runtime-list">
+              {sortedNodes
+                .filter((node) => activeNodeIds.has(node.node_id) || runtimeNodeStates[node.node_id])
+                .map((node) => {
+                  const nodeRuntime = runtimeNodeStates[node.node_id];
+                  return (
+                    <div key={`runtime-${node.node_id}`} className={`workflow-runtime-row ${nodeRuntime ? `is-${nodeRuntime.status}` : ""} ${activeRuntimeNode?.node_id === node.node_id ? "is-current" : ""}`.trim()}>
+                      <div>
+                        <strong>{node.label}</strong>
+                        <p>{nodeRuntime?.output_summary ?? workflowNodeSummary(node, draftPipeline, runSummary)}</p>
+                      </div>
+                      <div className="workflow-runtime-row-meta">
+                        <span className={`pill ${nodeRuntime ? `runtime-${nodeRuntime.status}` : ""}`.trim()}>
+                          {nodeRuntime ? runtimeStatusLabel(nodeRuntime.status) : "待执行"}
+                        </span>
+                        <small>{nodeRuntime ? (nodeRuntime.status === "running" ? `${Math.round((nodeRuntime.progress ?? 0) * 100)}%` : formatRuntimeDuration(nodeRuntime.duration_ms)) : "--"}</small>
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
           </div>
 
           <div className="workflow-dock-card">
             <div className="workflow-dock-card-head">
               <div>
-                <h4>最近一次运行</h4>
-                <p className="body-copy">右下角 mini-map 和节点预览都基于当前画布或最近一次运行结果。</p>
+                <h4>{selectedNode ? `节点详情 · ${selectedNode.label}` : "最近一次运行"}</h4>
+                <p className="body-copy">
+                  {selectedNode
+                    ? "这里会同时展示节点最近一次执行状态和当前项目快照预览。"
+                    : "右下角 mini-map 和节点预览都基于当前画布或最近一次运行结果。"}
+                </p>
               </div>
             </div>
-            {latestRun ? (
+            {selectedNode ? (
+              <>
+                <div className="workflow-validation-stack">
+                  <div className="status-panel"><strong>节点状态</strong><span>{selectedNodeRuntime ? runtimeStatusLabel(selectedNodeRuntime.status) : "尚未执行"}</span></div>
+                  <div className="status-panel"><strong>节点耗时</strong><span>{selectedNodeRuntime ? formatRuntimeDuration(selectedNodeRuntime.duration_ms) : "--"}</span></div>
+                  <div className="status-panel"><strong>输出摘要</strong><span>{selectedNodeRuntime?.output_summary ?? "当前还没有节点级结果摘要。"}</span></div>
+                  {selectedNodeRuntime?.sample_outputs?.length ? (
+                    <div className="status-panel"><strong>样本输出</strong><span>{selectedNodeRuntime.sample_outputs.join(" / ")}</span></div>
+                  ) : null}
+                  {selectedNodeRuntime?.error ? (
+                    <div className="status-panel warning"><strong>错误</strong><span>{selectedNodeRuntime.error}</span></div>
+                  ) : null}
+                </div>
+                {renderSelectedNodePreview()}
+              </>
+            ) : latestRun ? (
               <div className="workflow-validation-stack">
                 <div className="status-panel"><strong>工作流</strong><span>{latestRun.workflow_name}</span></div>
                 <div className="status-panel"><strong>处理文档</strong><span>{latestRun.processed_document_count ?? snapshot.corpus.length} 篇</span></div>
@@ -4472,17 +4796,17 @@ function WorkflowPipelinePage() {
                   <span>{section.items.length}</span>
                 </div>
                 <div className="workflow-toolbox-grid">
-                  {section.items.map((nodeType) => (
+                  {section.items.map((definition) => (
                     <button
-                      key={nodeType}
+                      key={definition.type}
                       type="button"
-                      className={`workflow-toolbox-item ${draggedToolboxNodeType === nodeType ? "is-dragging" : ""}`}
-                      onClick={() => addWorkflowNode(nodeType)}
-                      onPointerDown={(event) => handleToolboxPointerDown(event, nodeType)}
+                      className={`workflow-toolbox-item ${draggedToolboxNodeType === definition.type ? "is-dragging" : ""}`}
+                      onClick={() => addWorkflowNode(definition.type, definition)}
+                      onPointerDown={(event) => handleToolboxPointerDown(event, definition.type)}
                       disabled={loading}
                     >
-                      <strong>{workflowNodeTitle(nodeType)}</strong>
-                      <span>{workflowNodeDescription({ node_type: nodeType } as WorkflowNodeInstance)}</span>
+                      <strong>{definition.title}</strong>
+                      <span>{definition.description || workflowNodeDescription({ node_type: definition.type } as WorkflowNodeInstance)}</span>
                       <small>点击插入 / 拖到画布投放</small>
                     </button>
                   ))}
@@ -4519,11 +4843,17 @@ function WorkflowPipelinePage() {
               <div className="workflow-title-stack">
                 <p className="eyebrow">Node Workflow</p>
                 <h3>{draftWorkflow.name}</h3>
-                <span>{pendingConnection ? "点击高亮输入端完成连线" : "滚轮缩放，拖拽空白区域平移，节点内部直接改常用参数。"}</span>
+                <span>
+                  {liveWorkflowRun
+                    ? `${activeRuntimeNode?.label ?? "正在整理运行结果"} · ${liveWorkflowRun.detail ?? "运行中"}`
+                    : (pendingConnection ? "点击高亮输入端完成连线" : "滚轮缩放，拖拽空白区域平移，节点内部直接改常用参数。")}
+                </span>
               </div>
               <div className="workflow-floating-pills">
                 <span className="pill">{workflowValidation.valid ? "图已连通" : "仍需补线"}</span>
                 <span className="pill">{workflowValidation.active_node_ids.length} 个活跃节点</span>
+                {liveWorkflowRun && <span className="pill">{runtimeCompletedNodes}/{runtimeTotalNodes} 节点</span>}
+                {liveWorkflowRun && <span className="pill">{Math.round(liveRuntimeProgress * 100)}%</span>}
                 <span className="pill">{Math.round(viewport.zoom * 100)}%</span>
               </div>
             </div>
@@ -4600,6 +4930,7 @@ function WorkflowPipelinePage() {
                   </svg>
                 {sortedNodes.map((node, index) => {
                   const nodeSelected = selectedNode?.node_id === node.node_id;
+                  const nodeRuntime = runtimeNodeStates[node.node_id];
                   const nodeStepId = workflowNodeStepId(node);
                   const nodeCanBypass = Boolean(nodeStepId && optionalPipelineSteps.includes(nodeStepId));
                   const nodeFrame = workflowNodeCanvasFrame(node);
@@ -4629,7 +4960,7 @@ function WorkflowPipelinePage() {
                   return (
                     <div
                       key={node.node_id}
-                      className={`workflow-node-card workflow-node-card-canvas ${nodeSelected ? "is-selected" : ""} ${node.ui_state.bypassed ? "is-bypassed" : ""} ${draggingNodeId === node.node_id ? "is-dragging" : ""}`}
+                      className={`workflow-node-card workflow-node-card-canvas ${nodeSelected ? "is-selected" : ""} ${node.ui_state.bypassed ? "is-bypassed" : ""} ${draggingNodeId === node.node_id ? "is-dragging" : ""} ${nodeRuntime ? `is-runtime-${nodeRuntime.status}` : ""} ${activeRuntimeNode?.node_id === node.node_id ? "is-runtime-current" : ""}`.trim()}
                       style={{
                         left: canvasOrigin.x + node.position.x,
                         top: canvasOrigin.y + node.position.y,
@@ -4714,6 +5045,20 @@ function WorkflowPipelinePage() {
                         <strong>{node.label}</strong>
                         <p>{workflowNodeDescription(node)}</p>
                         <small>{workflowNodeSummary(node, draftPipeline, runSummary)}</small>
+                        {nodeRuntime && (
+                          <div className={`workflow-node-runtime-card is-${nodeRuntime.status}`}>
+                            <div className="workflow-node-runtime-head">
+                              <span className={`pill runtime-${nodeRuntime.status}`}>{runtimeStatusLabel(nodeRuntime.status)}</span>
+                              <span>{nodeRuntime.status === "running" ? `${Math.round((nodeRuntime.progress ?? 0) * 100)}%` : formatRuntimeDuration(nodeRuntime.duration_ms)}</span>
+                            </div>
+                            <small>{nodeRuntime.detail ?? nodeRuntime.output_summary ?? "正在等待节点结果摘要。"}</small>
+                            {nodeRuntime.status === "running" && (
+                              <div className="workflow-node-runtime-track" aria-hidden="true">
+                                <div className="workflow-node-runtime-fill" style={{ width: `${Math.max(6, (nodeRuntime.progress ?? 0) * 100)}%` }} />
+                              </div>
+                            )}
+                          </div>
+                        )}
                         {nodeInlinePreview}
                         {!reachableNodeIds.has(node.node_id) && node.inputs.length > 0 && (
                           <span className="workflow-node-inline-warning">当前未接入有效链路</span>
@@ -4778,7 +5123,7 @@ function WorkflowPipelinePage() {
                 {sortedNodes.map((node) => (
                   <div
                     key={`mini-${node.node_id}`}
-                    className={`workflow-minimap-node ${selectedNode?.node_id === node.node_id ? "is-active" : ""}`}
+                    className={`workflow-minimap-node ${selectedNode?.node_id === node.node_id ? "is-active" : ""} ${runtimeNodeStates[node.node_id] ? `is-${runtimeNodeStates[node.node_id].status}` : ""} ${activeRuntimeNode?.node_id === node.node_id ? "is-current" : ""}`.trim()}
                     style={{
                       left: (canvasOrigin.x + node.position.x) * miniMap.scale,
                       top: (canvasOrigin.y + node.position.y) * miniMap.scale,
@@ -4808,90 +5153,203 @@ function WorkflowPipelinePage() {
 function DictionariesPage() {
   const {
     state: { snapshot, loading },
-    exportDictionarySheet,
-    importDictionarySheet,
+    exportDictionaryTable,
+    importDictionaryTable,
     pickJsonFile,
     saveJsonFilePath,
     saveProject,
     setActivePage
   } = useWorkspace();
   const project = snapshot.current_project;
-  const [activeSheet, setActiveSheet] = useState<DictionaryKind>("stopwords");
-  const [draftSet, setDraftSet] = useState<DictionarySet | null>(project ? deepClone(project.dictionary_set) : null);
+  const [activeKind, setActiveKind] = useState<DictionaryKind>("stopwords");
+  const [activeTableId, setActiveTableId] = useState("");
+  const [draftSet, setDraftSet] = useState<DictionarySet | null>(project ? normalizeDictionaryDraft(project.dictionary_set) : null);
   const [bulkText, setBulkText] = useState("");
+  const [entrySearch, setEntrySearch] = useState("");
+  const [entryPage, setEntryPage] = useState(1);
+  const deferredEntrySearch = useDeferredValue(entrySearch);
 
   useEffect(() => {
-    setDraftSet(project ? deepClone(project.dictionary_set) : null);
-    setActiveSheet("stopwords");
+    const nextDraft = project ? normalizeDictionaryDraft(project.dictionary_set) : null;
+    setDraftSet(nextDraft);
     setBulkText("");
+    setEntrySearch("");
+    setEntryPage(1);
+    if (!nextDraft) {
+      setActiveKind("stopwords");
+      setActiveTableId("");
+      return;
+    }
+    const preferredKind = nextDraft.collections[activeKind] ? activeKind : "stopwords";
+    const preferredCollection = nextDraft.collections[preferredKind] ?? nextDraft.collections.stopwords;
+    setActiveKind(preferredKind);
+    setActiveTableId((current) => {
+      if (preferredCollection.tables.some((table) => table.id === current)) {
+        return current;
+      }
+      return preferredCollection.tables[0]?.id ?? "";
+    });
   }, [project?.id, project?.updated_at]);
 
-  if (!project || !draftSet) {
+  const currentCollection = draftSet ? draftSet.collections[activeKind] ?? draftSet.collections.stopwords : null;
+  const currentGuide = dictionaryGuideMap[activeKind];
+  const currentTable = currentCollection?.tables.find((table) => table.id === activeTableId) ?? currentCollection?.tables[0] ?? null;
+  const currentTableId = currentTable?.id ?? "";
+
+  useEffect(() => {
+    if (!currentCollection) {
+      return;
+    }
+    if (!currentCollection.tables.some((table) => table.id === activeTableId)) {
+      setActiveTableId(currentCollection.tables[0]?.id ?? "");
+    }
+  }, [activeKind, activeTableId, currentCollection]);
+
+  if (!project || !draftSet || !currentCollection) {
     return <EmptyState title="词表中心为空" body="请先创建或加载项目。" />;
   }
 
-  const currentSheet = draftSet.sheets[activeSheet] ?? draftSet.sheets.stopwords;
-  const currentGuide = dictionaryGuideMap[activeSheet];
+  const visibleEntries = useMemo(() => {
+    const q = deferredEntrySearch.trim().toLowerCase();
+    const entries = currentTable?.entries ?? [];
+    if (!q) {
+      return entries;
+    }
+    return entries.filter((entry) => {
+      const haystacks = [
+        entry.source,
+        entry.target,
+        entry.notes,
+        ...(entry.tags ?? [])
+      ];
+      return haystacks.some((value) => String(value ?? "").toLowerCase().includes(q));
+    });
+  }, [currentTable?.entries, deferredEntrySearch]);
+  const totalEntryPages = Math.max(1, Math.ceil(visibleEntries.length / DICTIONARY_ENTRY_PAGE_SIZE));
+  const safeEntryPage = Math.min(entryPage, totalEntryPages);
+  const pageStartIndex = (safeEntryPage - 1) * DICTIONARY_ENTRY_PAGE_SIZE;
+  const pagedEntries = useMemo(
+    () => visibleEntries.slice(pageStartIndex, pageStartIndex + DICTIONARY_ENTRY_PAGE_SIZE),
+    [pageStartIndex, visibleEntries]
+  );
+
+  useEffect(() => {
+    setEntryPage(1);
+  }, [activeKind, currentTableId, deferredEntrySearch]);
+
+  useEffect(() => {
+    if (entryPage > totalEntryPages) {
+      setEntryPage(totalEntryPages);
+    }
+  }, [entryPage, totalEntryPages]);
+
+  const mutateDraftSet = (updater: (current: DictionarySet) => DictionarySet | void) => {
+    setDraftSet((current) => {
+      if (!current) {
+        return current;
+      }
+      const updated = updater(current);
+      return updated || current;
+    });
+  };
+
+  const updateCurrentTable = (updater: (table: DictionaryTableResource) => void) => {
+    mutateDraftSet((current) => {
+      const collection = current.collections[activeKind];
+      const tableIndex = collection.tables.findIndex((item) => item.id === currentTableId);
+      if (tableIndex < 0) {
+        return current;
+      }
+      const table = collection.tables[tableIndex];
+      const nextTable: DictionaryTableResource = {
+        ...table,
+        tags: [...(table.tags ?? [])],
+        entries: table.entries
+      };
+      updater(nextTable);
+      const nextTables = collection.tables.slice();
+      nextTables[tableIndex] = nextTable;
+      return {
+        ...current,
+        collections: {
+          ...current.collections,
+          [activeKind]: {
+            ...collection,
+            tables: nextTables
+          }
+        }
+      };
+    });
+  };
 
   const updateEntry = (entryId: string, patch: Partial<DictionaryEntry>) => {
-    setDraftSet((current) => {
-      if (!current) {
-        return current;
-      }
+    updateCurrentTable((table) => {
+      table.entries = table.entries.map((entry) => (entry.id === entryId ? { ...entry, ...patch } : entry));
+    });
+  };
+
+  const addTable = () => {
+    const nextTable = createEmptyDictionaryTable(activeKind);
+    mutateDraftSet((current) => {
+      const collection = current.collections[activeKind];
       return {
         ...current,
-        sheets: {
-          ...current.sheets,
-          [activeSheet]: {
-            ...current.sheets[activeSheet],
-            entries: current.sheets[activeSheet].entries.map((entry) =>
-              entry.id === entryId ? { ...entry, ...patch } : entry
-            )
+        collections: {
+          ...current.collections,
+          [activeKind]: {
+            ...collection,
+            tables: [nextTable, ...collection.tables]
           }
         }
       };
     });
+    setActiveTableId(nextTable.id);
   };
 
-  const addEntry = () => {
-    const newEntry: DictionaryEntry = {
-      id: `entry-${Date.now()}`,
-      source: "",
-      target: "",
-      tags: [],
-      enabled: true,
-      hits: 0,
-      notes: ""
-    };
-    setDraftSet((current) => {
-      if (!current) {
-        return current;
-      }
+  const duplicateCurrentTable = () => {
+    if (!currentTable) {
+      return;
+    }
+    const nextTable = {
+      ...deepClone(currentTable),
+      id: `${activeKind}-table-${Date.now()}`,
+      name: `${currentTable.name} 副本`,
+      built_in: false,
+      editable: true,
+      tags: [...(currentTable.tags ?? [])]
+    } satisfies DictionaryTableResource;
+    mutateDraftSet((current) => {
+      const collection = current.collections[activeKind];
+      const tables = collection.tables.slice();
+      const insertIndex = Math.max(0, tables.findIndex((item) => item.id === currentTable.id) + 1);
+      tables.splice(insertIndex, 0, nextTable);
       return {
         ...current,
-        sheets: {
-          ...current.sheets,
-          [activeSheet]: {
-            ...current.sheets[activeSheet],
-            entries: [...current.sheets[activeSheet].entries, newEntry]
+        collections: {
+          ...current.collections,
+          [activeKind]: {
+            ...collection,
+            tables
           }
         }
       };
     });
+    setActiveTableId(nextTable.id);
   };
 
-  const removeEntry = (entryId: string) => {
-    setDraftSet((current) => {
-      if (!current) {
-        return current;
-      }
+  const deleteCurrentTable = () => {
+    if (!currentTable || currentTable.built_in) {
+      return;
+    }
+    mutateDraftSet((current) => {
+      const collection = current.collections[activeKind];
       return {
         ...current,
-        sheets: {
-          ...current.sheets,
-          [activeSheet]: {
-            ...current.sheets[activeSheet],
-            entries: current.sheets[activeSheet].entries.filter((entry) => entry.id !== entryId)
+        collections: {
+          ...current.collections,
+          [activeKind]: {
+            ...collection,
+            tables: collection.tables.filter((table) => table.id !== currentTable.id)
           }
         }
       };
@@ -4902,10 +5360,45 @@ function DictionariesPage() {
     await saveProject({
       ...project,
       dictionary_set: draftSet
+        ? {
+            ...draftSet,
+            sheets: {} as DictionarySet["sheets"]
+          }
+        : project.dictionary_set
+    });
+  };
+
+  const addEntry = () => {
+    if (!currentTable?.editable) {
+      return;
+    }
+    const newEntry: DictionaryEntry = {
+      id: `entry-${Date.now()}`,
+      source: "",
+      target: "",
+      tags: [],
+      enabled: true,
+      hits: 0,
+      notes: ""
+    };
+    updateCurrentTable((table) => {
+      table.entries = [...table.entries, newEntry];
+    });
+  };
+
+  const removeEntry = (entryId: string) => {
+    if (!currentTable?.editable) {
+      return;
+    }
+    updateCurrentTable((table) => {
+      table.entries = table.entries.filter((entry) => entry.id !== entryId);
     });
   };
 
   const appendBulkEntries = () => {
+    if (!currentTable?.editable) {
+      return;
+    }
     const nextEntries = bulkText
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -4928,51 +5421,64 @@ function DictionariesPage() {
       return;
     }
 
-    setDraftSet((current) => {
-      if (!current) {
-        return current;
-      }
-      return {
-        ...current,
-        sheets: {
-          ...current.sheets,
-          [activeSheet]: {
-            ...current.sheets[activeSheet],
-            entries: [...current.sheets[activeSheet].entries, ...nextEntries]
-          }
-        }
-      };
+    updateCurrentTable((table) => {
+      table.entries = [...table.entries, ...nextEntries];
     });
     setBulkText("");
   };
 
-  const handleImportSheet = async () => {
+  const handleImportTable = async () => {
     const path = await pickJsonFile();
     if (!path) {
       return;
     }
-    await importDictionarySheet(activeSheet as DictionaryKind, path);
+    const imported = await importDictionaryTable(activeKind, path);
+    if (imported?.id) {
+      setActiveTableId(imported.id);
+    }
   };
 
-  const handleExportSheet = async () => {
-    const path = await saveJsonFilePath(`${activeSheet}.json`);
+  const handleExportTable = async () => {
+    if (!currentTable) {
+      return;
+    }
+    const path = await saveJsonFilePath(`${activeKind}-${currentTable.id}.json`);
     if (!path) {
       return;
     }
-    await exportDictionarySheet(activeSheet as DictionaryKind, path);
+    await exportDictionaryTable(activeKind, currentTable.id, path);
   };
+
+  const enabledTableCount = currentCollection.tables.filter((table) => table.enabled).length;
+  const activeCollectionEntryCount = currentCollection.tables.reduce((sum, table) => {
+    if (!table.enabled) {
+      return sum;
+    }
+    return sum + table.entries.filter((entry) => entry.enabled).length;
+  }, 0);
+  const currentTableHits = useMemo(
+    () => currentTable?.entries.reduce((sum, entry) => sum + entry.hits, 0) ?? 0,
+    [currentTable]
+  );
+  const currentTableEditable = Boolean(currentTable?.editable);
 
   return (
     <>
       <Panel
-        title="词表规则"
+        title="词表中心"
         actions={
           <div className="button-row">
-            <button type="button" className="toolbar-button" onClick={() => void handleImportSheet()} disabled={loading}>
+            <button type="button" className="toolbar-button ghost" onClick={addTable} disabled={loading}>
+              新增资源
+            </button>
+            <button type="button" className="toolbar-button" onClick={() => void handleImportTable()} disabled={loading}>
               导入 JSON
             </button>
-            <button type="button" className="toolbar-button" onClick={() => void handleExportSheet()} disabled={loading}>
-              导出 JSON
+            <button type="button" className="toolbar-button ghost" onClick={duplicateCurrentTable} disabled={loading || !currentTable}>
+              复制当前资源
+            </button>
+            <button type="button" className="toolbar-button ghost" onClick={deleteCurrentTable} disabled={loading || !currentTable || currentTable.built_in}>
+              删除当前资源
             </button>
             <button type="button" className="toolbar-button accent" onClick={() => void saveDictionarySet()} disabled={loading}>
               保存词表
@@ -4981,34 +5487,40 @@ function DictionariesPage() {
         }
       >
         <div className="dictionary-kind-tabs">
-          {Object.entries(draftSet.sheets).map(([kind, sheet]) => (
+          {dictionaryKindOrder.map((kind) => {
+            const collection = draftSet.collections[kind];
+            return (
             <button
               key={kind}
               type="button"
-              className={`dictionary-kind-button ${activeSheet === kind ? "is-active" : ""}`.trim()}
-              onClick={() => setActiveSheet(kind as DictionaryKind)}
+              className={`dictionary-kind-button ${activeKind === kind ? "is-active" : ""}`.trim()}
+              onClick={() => setActiveKind(kind)}
               disabled={loading}
             >
-              <strong>{sheet.name}</strong>
-              <small>生效于：{dictionaryGuideMap[kind as DictionaryKind].stepLabel}</small>
+              <strong>{collection.name}</strong>
+              <small>{collection.tables.length} 张资源表 · 生效于 {dictionaryGuideMap[kind].stepLabel}</small>
             </button>
-          ))}
+          );
+          })}
         </div>
         <div className="dictionary-overview-grid">
           <article className="project-card dictionary-guide-card">
             <div className="run-head">
               <div>
-                <p className="eyebrow">当前词表</p>
-                <h4>{currentSheet.name}</h4>
+                <p className="eyebrow">当前分类</p>
+                <h4>{currentCollection.name}</h4>
               </div>
-              <span className="pill">处理与分析 · {currentGuide.stepLabel}</span>
+              <span className="pill">处理流程 · {currentGuide.stepLabel}</span>
             </div>
             <p className="body-copy">{currentGuide.purpose}</p>
             <ul className="feature-list">
-              <li>左侧填写：{currentGuide.sourceHint}。</li>
-              <li>右侧填写：{currentGuide.targetHint}。</li>
-              <li>关闭“启用”后，这条规则会保留在项目里，但本次运行不会生效。</li>
+              <li>先选分类，再从资源列表中点开单张词表进行维护，不再把整类规则混成一张大表。</li>
+              <li>每张资源都可以独立启用或停用；停用后会保留在项目里，但不会参与本次运行。</li>
+              <li>项目自定义和导入资源可直接编辑；内置资源默认只读，建议复制为副本后再改。</li>
             </ul>
+            {activeKind === "stopwords" && (
+              <p className="helper-note">停用词已拆成独立资源表，默认只打开“项目自定义”，不再一股脑把所有内置停用词全部铺在页面上。</p>
+            )}
             <div className="button-row">
               <button type="button" className="toolbar-button ghost" onClick={() => setActivePage("pipeline")} disabled={loading}>
                 去看流程里的这一步
@@ -5016,54 +5528,185 @@ function DictionariesPage() {
             </div>
           </article>
           <div className="stat-grid dictionary-stat-grid">
-            <StatCard label="当前词表" value={currentSheet.name} tone="ink" />
+            <StatCard label="当前分类" value={currentCollection.name} tone="ink" />
+            <StatCard label="资源表数" value={String(currentCollection.tables.length)} tone="gold" />
+            <StatCard label="已启用资源" value={String(enabledTableCount)} tone="emerald" />
             <StatCard label="生效步骤" value={currentGuide.stepLabel} tone="gold" />
-            <StatCard label="条目数" value={String(currentSheet.entries.length)} tone="emerald" />
-            <StatCard label="累计命中" value={String(currentSheet.entries.reduce((sum, entry) => sum + entry.hits, 0))} tone="rose" />
+            <StatCard label="当前分类启用条目" value={String(activeCollectionEntryCount)} tone="emerald" />
+            <StatCard label="当前资源条目" value={String(currentTable?.entries.length ?? 0)} tone="gold" />
+            <StatCard label="当前资源命中" value={String(currentTableHits)} tone="rose" />
           </div>
         </div>
       </Panel>
 
       <Panel
-        title={`${currentSheet.name} 条目`}
+        title={`${currentCollection.name} 资源列表`}
         actions={
           <div className="button-row">
-            <button type="button" className="toolbar-button ghost" onClick={addEntry} disabled={loading}>
+            <span className="helper-note">点开某张资源表后，右侧即可单独编辑、导出或复制。</span>
+          </div>
+        }
+      >
+        <div className="dictionary-library-layout">
+          <div className="dictionary-resource-list">
+            {currentCollection.tables.map((table) => (
+              <button
+                key={table.id}
+                type="button"
+                className={`dictionary-resource-card ${currentTable?.id === table.id ? "is-active" : ""}`.trim()}
+                onClick={() => setActiveTableId(table.id)}
+                disabled={loading}
+              >
+                <div className="dictionary-resource-head">
+                  <strong>{table.name}</strong>
+                  <span className={`pill ${table.enabled ? "" : "muted"}`.trim()}>{table.enabled ? "已启用" : "已停用"}</span>
+                </div>
+                <div className="dictionary-resource-meta">
+                  <small>{table.entries.length} 条</small>
+                  <small>{table.built_in ? "内置" : "项目内"}</small>
+                  <small>{table.editable ? "可编辑" : "只读"}</small>
+                </div>
+                <p>{table.description || "未填写说明。"}</p>
+              </button>
+            ))}
+          </div>
+          <article className="project-card dictionary-resource-detail">
+            <div className="run-head">
+              <div>
+                <p className="eyebrow">当前资源</p>
+                <h4>{currentTable?.name || "未选择资源"}</h4>
+              </div>
+              <label className="switch-row compact">
+                <input
+                  type="checkbox"
+                  checked={Boolean(currentTable?.enabled)}
+                  onChange={(event) => updateCurrentTable((table) => {
+                    table.enabled = event.target.checked;
+                  })}
+                  disabled={loading || !currentTable}
+                />
+                <span>启用资源</span>
+              </label>
+            </div>
+            <div className="dictionary-resource-form">
+              <label className="field">
+                <span>资源名称</span>
+                <input
+                  value={currentTable?.name ?? ""}
+                  onChange={(event) => updateCurrentTable((table) => {
+                    table.name = event.target.value;
+                  })}
+                  disabled={loading || !currentTableEditable}
+                />
+              </label>
+              <label className="field">
+                <span>资源说明</span>
+                <textarea
+                  rows={3}
+                  value={currentTable?.description ?? ""}
+                  onChange={(event) => updateCurrentTable((table) => {
+                    table.description = event.target.value;
+                  })}
+                  disabled={loading || !currentTableEditable}
+                />
+              </label>
+            </div>
+            <ul className="feature-list">
+              <li>当前资源作用于：{currentGuide.stepLabel}。</li>
+              <li>左侧填写：{currentGuide.sourceHint}。</li>
+              <li>右侧填写：{currentGuide.targetHint}。</li>
+            </ul>
+            {currentTable?.source_url ? (
+              <p className="helper-note">
+                来源：
+                {" "}
+                <a href={currentTable.source_url} target="_blank" rel="noreferrer">
+                  查看公开词表来源
+                </a>
+              </p>
+            ) : null}
+            {!currentTableEditable && (
+              <p className="helper-note">这张内置资源默认只读。若要改动，先点“复制当前资源”，再编辑副本。</p>
+            )}
+          </article>
+        </div>
+      </Panel>
+
+      <Panel
+        title={`${currentTable?.name ?? "当前资源"} 条目`}
+        actions={
+          <div className="button-row">
+            <label className="search-box">
+              <span>筛选条目</span>
+              <input value={entrySearch} onChange={(event) => setEntrySearch(event.target.value)} placeholder="按原词、目标词、备注或标签检索" />
+            </label>
+            <button type="button" className="toolbar-button" onClick={() => void handleExportTable()} disabled={loading || !currentTable}>
+              导出当前 JSON
+            </button>
+            <button type="button" className="toolbar-button ghost" onClick={addEntry} disabled={loading || !currentTableEditable}>
               新增条目
             </button>
           </div>
         }
       >
         <div className="dictionary-editor">
-          {currentSheet.entries.map((entry) => (
-            <div className="dictionary-editor-row" key={entry.id}>
-              <input
-                value={entry.source}
-                onChange={(event) => updateEntry(entry.id, { source: event.target.value })}
-                placeholder={currentGuide.sourceHint}
-                disabled={loading}
-              />
-              <input
-                value={entry.target ?? ""}
-                onChange={(event) => updateEntry(entry.id, { target: event.target.value })}
-                placeholder={currentGuide.targetHint}
-                disabled={loading || !currentGuide.usesTarget}
-              />
-              <label className="switch-row compact">
+          {currentTableEditable ? (
+            pagedEntries.map((entry) => (
+              <div className="dictionary-editor-row" key={entry.id}>
                 <input
-                  type="checkbox"
-                  checked={entry.enabled}
-                  onChange={(event) => updateEntry(entry.id, { enabled: event.target.checked })}
-                  disabled={loading}
+                  value={entry.source}
+                  onChange={(event) => updateEntry(entry.id, { source: event.target.value })}
+                  placeholder={currentGuide.sourceHint}
+                  disabled={loading || !currentTableEditable}
                 />
-                <span>启用</span>
-              </label>
-              <button type="button" className="toolbar-button ghost" onClick={() => removeEntry(entry.id)} disabled={loading}>
-                删除
-              </button>
-            </div>
-          ))}
+                <input
+                  value={entry.target ?? ""}
+                  onChange={(event) => updateEntry(entry.id, { target: event.target.value })}
+                  placeholder={currentGuide.targetHint}
+                  disabled={loading || !currentGuide.usesTarget || !currentTableEditable}
+                />
+                <label className="switch-row compact">
+                  <input
+                    type="checkbox"
+                    checked={entry.enabled}
+                    onChange={(event) => updateEntry(entry.id, { enabled: event.target.checked })}
+                    disabled={loading || !currentTableEditable}
+                  />
+                  <span>启用</span>
+                </label>
+                <button type="button" className="toolbar-button ghost" onClick={() => removeEntry(entry.id)} disabled={loading || !currentTableEditable}>
+                  删除
+                </button>
+              </div>
+            ))
+          ) : (
+            <Table
+              columns={["source", "target", "hits", "enabled"]}
+              rows={pagedEntries.map((entry) => ({
+                source: entry.source || "—",
+                target: entry.target || "—",
+                hits: entry.hits,
+                enabled: entry.enabled ? "启用" : "停用"
+              }))}
+            />
+          )}
         </div>
+        <div className="button-row dictionary-page-nav">
+          <span className="helper-note">
+            当前显示第 {safeEntryPage} / {totalEntryPages} 页，
+            第 {visibleEntries.length ? pageStartIndex + 1 : 0} - {Math.min(pageStartIndex + pagedEntries.length, visibleEntries.length)} 条，
+            每页 {DICTIONARY_ENTRY_PAGE_SIZE} 条。
+          </span>
+          <button type="button" className="toolbar-button ghost" onClick={() => setEntryPage((current) => Math.max(1, current - 1))} disabled={safeEntryPage <= 1}>
+            上一页
+          </button>
+          <button type="button" className="toolbar-button ghost" onClick={() => setEntryPage((current) => Math.min(totalEntryPages, current + 1))} disabled={safeEntryPage >= totalEntryPages}>
+            下一页
+          </button>
+        </div>
+        {!!entrySearch.trim() && (
+          <p className="helper-note">当前按 “{entrySearch.trim()}” 显示 {visibleEntries.length} / {currentTable?.entries.length ?? 0} 条。</p>
+        )}
         <label className="field">
           <span>批量粘贴</span>
           <textarea
@@ -5071,18 +5714,17 @@ function DictionariesPage() {
             value={bulkText}
             onChange={(event) => setBulkText(event.target.value)}
             placeholder={currentGuide.bulkExample}
-            disabled={loading}
+            disabled={loading || !currentTableEditable}
           />
         </label>
         <p className="helper-note">
           支持逐行粘贴，格式可以用“source,target”、“source to target”或只写左侧词项。
         </p>
         <div className="button-row">
-          <button type="button" className="toolbar-button" onClick={appendBulkEntries} disabled={loading || !bulkText.trim()}>
+          <button type="button" className="toolbar-button" onClick={appendBulkEntries} disabled={loading || !currentTableEditable || !bulkText.trim()}>
             追加批量条目
           </button>
         </div>
-        <DictionaryTable sheet={currentSheet} />
       </Panel>
     </>
   );
@@ -5323,16 +5965,76 @@ function ReportPage() {
 
 function SettingsPage() {
   const {
-    state: { snapshot }
+    state: { snapshot, uiScale },
+    setUiScale
   } = useWorkspace();
   const project = snapshot.current_project;
-
-  if (!project) {
-    return <EmptyState title="尚未初始化设置" body="创建项目后会自动加载默认设置。" />;
-  }
+  const scalePresets = [0.8, 0.9, 1, 1.1, 1.2];
+  const scalePercent = Math.round(uiScale * 100);
+  const applyScaleStep = (delta: number) => {
+    setUiScale(uiScale + delta);
+  };
 
   return (
     <>
+      <Panel
+        title="界面缩放"
+        actions={(
+          <button
+            type="button"
+            className="toolbar-button compact ghost"
+            onClick={() => setUiScale(1)}
+            disabled={Math.abs(uiScale - 1) < 0.001}
+          >
+            恢复 100%
+          </button>
+        )}
+      >
+        <div className="settings-scale-grid">
+          <div className="settings-scale-summary">
+            <strong>{scalePercent}%</strong>
+            <p className="body-copy">
+              调整整个工作台的显示密度。这个比例会保存在当前设备上，重新打开应用后也会继续使用。
+            </p>
+          </div>
+          <div className="settings-scale-actions">
+            <div className="tab-row">
+              <button
+                type="button"
+                className="toolbar-button compact"
+                onClick={() => applyScaleStep(-0.05)}
+                disabled={uiScale <= 0.8}
+              >
+                缩小 5%
+              </button>
+              <button
+                type="button"
+                className="toolbar-button compact"
+                onClick={() => applyScaleStep(0.05)}
+                disabled={uiScale >= 1.2}
+              >
+                放大 5%
+              </button>
+            </div>
+            <div className="tab-row">
+              {scalePresets.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  className={`tab-button ${Math.abs(uiScale - preset) < 0.001 ? "is-active" : ""}`}
+                  onClick={() => setUiScale(preset)}
+                >
+                  {Math.round(preset * 100)}%
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </Panel>
+      {!project ? (
+        <EmptyState title="尚未初始化项目设置" body="创建项目后会自动加载默认语言、导出格式等项目级设置。" />
+      ) : (
+        <>
       <div className="stat-grid">
         <StatCard label="默认语言" value={project.settings.default_language} tone="ink" />
         <StatCard label="主题" value={project.settings.preferred_theme} tone="gold" />
@@ -5351,6 +6053,8 @@ function SettingsPage() {
           V1 采用本地优先策略，默认不上传文本。后续可在这里接入更新检查、路径偏好和性能策略。
         </p>
       </Panel>
+        </>
+      )}
     </>
   );
 }

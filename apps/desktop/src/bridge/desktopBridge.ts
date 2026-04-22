@@ -1,8 +1,10 @@
 import type {
   CorpusItem,
   DictionaryKind,
-  DictionarySheet,
+  DictionaryTableResource,
   ExportFormat,
+  WorkflowNodeRuntimeState,
+  WorkflowRunProgressDetail,
   ProjectManifest,
   ProjectSummary,
   RunRecord,
@@ -56,11 +58,28 @@ export interface DeleteProjectResponse {
   deleted_path: string;
 }
 
+export interface LegacyEngineProgressDetail {
+  kind?: "node" | "stage";
+  node_id?: string;
+  node_type?: string;
+  node_label?: string;
+  node_index?: number;
+  total_nodes?: number;
+  detail?: string;
+}
+
+export interface WorkflowRuntimeProgressDetail extends WorkflowRunProgressDetail {
+  node_states: Record<string, WorkflowNodeRuntimeState>;
+}
+
+export type EngineProgressDetail = LegacyEngineProgressDetail | WorkflowRuntimeProgressDetail;
+
 export interface EngineProgressEvent {
   action: string;
   status: string;
   progress: number;
   message: string;
+  detail?: EngineProgressDetail;
 }
 
 interface DesktopBridge {
@@ -81,9 +100,9 @@ interface DesktopBridge {
   exportProjectBackup(projectId: string, path?: string): Promise<ExportProjectBackupResponse>;
   updateCorpusDocument(projectId: string, document: CorpusItem): Promise<CorpusItem>;
   deleteCorpusDocument(projectId: string, docId: string): Promise<DeleteCorpusDocumentResponse>;
-  importDictionarySheet(projectId: string, kind: DictionaryKind, path: string): Promise<DictionarySheet>;
-  exportDictionarySheet(projectId: string, kind: DictionaryKind, path: string): Promise<{ kind: DictionaryKind; path: string }>;
-  saveProject(project: ProjectManifest): Promise<void>;
+  importDictionaryTable(projectId: string, kind: DictionaryKind, path: string): Promise<DictionaryTableResource>;
+  exportDictionaryTable(projectId: string, kind: DictionaryKind, tableId: string, path: string): Promise<{ kind: DictionaryKind; table_id: string; path: string }>;
+  saveProject(project: ProjectManifest): Promise<ProjectSummary>;
   openPath(path: string): Promise<void>;
   revealPath(path: string): Promise<void>;
   subscribeProgress(listener: (event: EngineProgressEvent) => void): Promise<() => void>;
@@ -320,34 +339,44 @@ export const desktopBridge: DesktopBridge = {
     };
   },
 
-  async importDictionarySheet(projectId, kind, path) {
-    const result = await tryInvoke<DictionarySheet>("import_dictionary_sheet", { projectId, kind, path });
+  async importDictionaryTable(projectId, kind, path) {
+    const result = await tryInvoke<DictionaryTableResource>("import_dictionary_sheet", { projectId, kind, path });
     if (result !== null) {
       return result;
     }
     await delay(120);
-    return demoWorkspace.current_project!.dictionary_set.sheets[kind];
+    return demoWorkspace.current_project!.dictionary_set.collections[kind].tables[0];
   },
 
-  async exportDictionarySheet(projectId, kind, path) {
-    const result = await tryInvoke<{ kind: DictionaryKind; path: string }>("export_dictionary_sheet", {
+  async exportDictionaryTable(projectId, kind, tableId, path) {
+    const result = await tryInvoke<{ kind: DictionaryKind; table_id: string; path: string }>("export_dictionary_sheet", {
       projectId,
       kind,
+      tableId,
       path
     });
     if (result !== null) {
       return result;
     }
     await delay(90);
-    return { kind, path };
+    return { kind, table_id: tableId, path };
   },
 
   async saveProject(project) {
     const result = await tryInvoke<ProjectSummary>("save_project", { project });
     if (result !== null) {
-      return;
+      return result;
     }
     await delay(90);
+    return {
+      id: project.id,
+      name: project.name,
+      description: project.description,
+      path: demoProjectSummary.path,
+      updated_at: new Date().toISOString(),
+      document_count: demoWorkspace.corpus.length,
+      run_count: project.run_history.length
+    };
   },
 
   async openPath(path) {

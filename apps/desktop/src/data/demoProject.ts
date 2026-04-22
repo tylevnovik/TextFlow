@@ -1,8 +1,10 @@
 import type {
   CorpusItem,
+  DictionaryCollection,
   DictionaryEntry,
   DictionaryKind,
   DictionarySet,
+  DictionaryTableResource,
   FeatureTermRow,
   FrequencyRow,
   KeywordClusterRow,
@@ -27,12 +29,88 @@ const makeEntries = (items: Array<[string, string?, number?]>): DictionaryEntry[
     notes: "",
   }));
 
-const sheet = (kind: DictionaryKind, name: string, items: Array<[string, string?, number?]>) => ({
-  kind,
-  name,
-  version: "1.0.0",
-  entries: makeEntries(items),
-});
+const dictionaryKindOrder: DictionaryKind[] = [
+  "stopwords",
+  "custom_lexicon",
+  "phrase_lexicon",
+  "synonym_map",
+  "near_synonym_map",
+  "standard_terms",
+  "exclusion_terms",
+  "regex_rules"
+];
+
+const dictionaryCollectionMeta: Record<DictionaryKind, { name: string; description: string }> = {
+  stopwords: { name: "停用词", description: "过滤虚词、套话和无分析意义的常用词。" },
+  custom_lexicon: { name: "自定义词典", description: "告诉切词器哪些术语与专名要整体保留。" },
+  phrase_lexicon: { name: "短语词典", description: "把固定搭配或多词短语作为一个整体处理。" },
+  synonym_map: { name: "同义词表", description: "归并别名、替代表达和区域说法。" },
+  near_synonym_map: { name: "近义词表", description: "保留更宽松的扩展归并规则，按需启用。" },
+  standard_terms: { name: "标准词库", description: "把词形和写法统一成固定标准词。" },
+  exclusion_terms: { name: "排除词表", description: "整批排除当前课题不想保留的人名、地名或噪声词。" },
+  regex_rules: { name: "Regex 规则", description: "在清洗和标准化阶段使用的正则规则。" }
+};
+
+function table(
+  kind: DictionaryKind,
+  id: string,
+  name: string,
+  items: Array<[string, string?, number?]>,
+  options: Partial<Pick<DictionaryTableResource, "description" | "source_url" | "built_in" | "editable" | "enabled" | "tags">> = {}
+): DictionaryTableResource {
+  return {
+    id,
+    kind,
+    name,
+    version: "2.0.0",
+    description: options.description ?? "",
+    source_url: options.source_url,
+    built_in: options.built_in ?? false,
+    editable: options.editable ?? true,
+    enabled: options.enabled ?? true,
+    tags: options.tags ?? [],
+    entries: makeEntries(items)
+  };
+}
+
+function collection(kind: DictionaryKind, tables: DictionaryTableResource[]): DictionaryCollection {
+  return {
+    kind,
+    name: dictionaryCollectionMeta[kind].name,
+    description: dictionaryCollectionMeta[kind].description,
+    tables
+  };
+}
+
+function buildDictionarySheetsFromCollections(collections: Record<DictionaryKind, DictionaryCollection>): DictionarySet["sheets"] {
+  return dictionaryKindOrder.reduce<DictionarySet["sheets"]>((acc, kind) => {
+    const entries: DictionaryEntry[] = [];
+    const seen = new Set<string>();
+    for (const currentTable of collections[kind]?.tables ?? []) {
+      if (!currentTable.enabled) {
+        continue;
+      }
+      for (const entry of currentTable.entries) {
+        if (!entry.enabled) {
+          continue;
+        }
+        const signature = `${entry.source.toLowerCase()}::${String(entry.target ?? "").toLowerCase()}`;
+        if (seen.has(signature)) {
+          continue;
+        }
+        seen.add(signature);
+        entries.push(entry);
+      }
+    }
+    acc[kind] = {
+      kind,
+      name: dictionaryCollectionMeta[kind].name,
+      version: "2.0.0",
+      entries
+    };
+    return acc;
+  }, {} as DictionarySet["sheets"]);
+}
 
 export const demoCorpus: CorpusItem[] = [
   {
@@ -138,19 +216,124 @@ const keywordClusters: KeywordClusterRow[] = [
 const dictionarySet: DictionarySet = {
   id: "dict-v1",
   name: "默认词表集",
-  version: "1.0.0",
+  version: "2.0.0",
   bound_to_project: true,
-  sheets: {
-    stopwords: sheet("stopwords", "停用词表", [["的", undefined, 24], ["和", undefined, 19], ["but", undefined, 4]]),
-    custom_lexicon: sheet("custom_lexicon", "自定义词典", [["智能制造", undefined, 3], ["battery recycling", undefined, 1]]),
-    phrase_lexicon: sheet("phrase_lexicon", "短语词典", [["supply chain", "supply_chain", 2], ["学术 规范", "学术规范", 1]]),
-    synonym_map: sheet("synonym_map", "同义词表", [["generative ai", "生成式", 5], ["battery recycling", "battery_recycling", 1]]),
-    near_synonym_map: sheet("near_synonym_map", "近义词表", [["文本挖掘", "分析", 2], ["知识抽取", "工艺知识", 1]]),
-    standard_terms: sheet("standard_terms", "标准词库", [["供应链", "supply_chain", 3], ["机构主题", "topic", 2]]),
-    exclusion_terms: sheet("exclusion_terms", "排除词表", [["etc", undefined, 1], ["misc", undefined, 0]]),
-    regex_rules: sheet("regex_rules", "Regex 规则表", [["\\d{4}年", "YEAR_TOKEN", 3], ["https?://\\S+", "", 2]])
-  }
+  collections: {
+    stopwords: collection("stopwords", [
+      table("stopwords", "stopwords-project-custom", "项目自定义", [["本文", undefined, 2]], {
+        description: "项目内可直接编辑的停用词补充。"
+      }),
+      table("stopwords", "builtin-stopwords-zh-iso", "中文通用停用词（stopwords-iso）", [["的", undefined, 24], ["和", undefined, 19], ["以及", undefined, 7]], {
+        description: "stopwords-iso 中文停用词基线。",
+        source_url: "https://github.com/stopwords-iso/stopwords-zh/blob/master/stopwords-zh.json",
+        built_in: true,
+        editable: false
+      }),
+      table("stopwords", "builtin-stopwords-en-iso", "English Stopwords (stopwords-iso)", [["about", undefined, 5], ["between", undefined, 3], ["but", undefined, 4]], {
+        description: "stopwords-iso English stopwords baseline.",
+        source_url: "https://github.com/stopwords-iso/stopwords-en/blob/master/stopwords-en.json",
+        built_in: true,
+        editable: false
+      })
+    ]),
+    custom_lexicon: collection("custom_lexicon", [
+      table("custom_lexicon", "custom-lexicon-project-custom", "项目自定义", [["智能制造", undefined, 3], ["battery recycling", undefined, 1]], {
+        description: "项目内术语补充。"
+      }),
+      table("custom_lexicon", "builtin-custom-lexicon-thuocl-it", "IT 常用术语（THUOCL）", [["字符串", undefined, 3], ["配置文件", undefined, 2], ["环境变量", undefined, 1]], {
+        description: "THUOCL IT 词库中的常用术语示例。",
+        source_url: "https://github.com/thunlp/THUOCL/blob/master/data/THUOCL_IT.txt",
+        built_in: true,
+        editable: false
+      }),
+      table("custom_lexicon", "builtin-custom-lexicon-thuocl-medical", "医疗常用术语（THUOCL）", [["医疗", undefined, 1], ["诊断", undefined, 1], ["康复", undefined, 1]], {
+        description: "THUOCL 医疗词库中的常用术语示例。",
+        source_url: "https://github.com/thunlp/THUOCL/blob/master/data/THUOCL_medical.txt",
+        built_in: true,
+        editable: false
+      })
+    ]),
+    phrase_lexicon: collection("phrase_lexicon", [
+      table("phrase_lexicon", "phrase-lexicon-project-custom", "项目自定义", [["supply chain", "supply_chain", 2], ["学术 规范", "学术规范", 1]], {
+        description: "项目内固定短语。"
+      }),
+      table("phrase_lexicon", "builtin-phrase-lexicon-thuocl-chengyu", "常见成语短语（THUOCL）", [["实事求是", undefined, 0], ["引人注目", undefined, 0], ["层出不穷", undefined, 0]], {
+        description: "THUOCL 成语词库示例，默认关闭。",
+        source_url: "https://github.com/thunlp/THUOCL/blob/master/data/THUOCL_chengyu.txt",
+        built_in: true,
+        editable: false,
+        enabled: false
+      })
+    ]),
+    synonym_map: collection("synonym_map", [
+      table("synonym_map", "synonym-map-project-custom", "项目自定义", [["generative ai", "生成式", 5], ["battery recycling", "battery_recycling", 1]], {
+        description: "项目内同义词归并。"
+      }),
+      table("synonym_map", "builtin-synonym-opencc-common", "港台常用词归并（OpenCC）", [["軟體", "软件", 0], ["資料", "数据", 0], ["網路", "网络", 0]], {
+        description: "OpenCC TWPhrasesRev 中的常见港台用词对照。",
+        source_url: "https://github.com/BYVoid/OpenCC/blob/master/data/dictionary/TWPhrasesRev.txt",
+        built_in: true,
+        editable: false
+      })
+    ]),
+    near_synonym_map: collection("near_synonym_map", [
+      table("near_synonym_map", "near-synonym-map-project-custom", "项目自定义", [["文本挖掘", "分析", 2], ["知识抽取", "工艺知识", 1]], {
+        description: "项目内近义归并规则。"
+      }),
+      table("near_synonym_map", "builtin-near-synonym-opencc-extended", "港台扩展近义写法（OpenCC）", [["雲端", "云端", 0], ["顯示卡", "显卡", 0], ["視訊", "视频", 0]], {
+        description: "OpenCC 扩展对照，默认关闭。",
+        source_url: "https://github.com/BYVoid/OpenCC/blob/master/data/dictionary/TWPhrasesRev.txt",
+        built_in: true,
+        editable: false,
+        enabled: false
+      })
+    ]),
+    standard_terms: collection("standard_terms", [
+      table("standard_terms", "standard-terms-project-custom", "项目自定义", [["供应链", "supply_chain", 3], ["机构主题", "topic", 2]], {
+        description: "项目内标准词归一。"
+      }),
+      table("standard_terms", "builtin-standard-opencc", "繁简与常见异体归一（OpenCC）", [["彷彿", "仿佛", 0], ["回覆", "回复", 0], ["傢俱", "家具", 0]], {
+        description: "OpenCC 中常见词形归一映射。",
+        source_url: "https://github.com/BYVoid/OpenCC/blob/master/data/dictionary/TSPhrases.txt",
+        built_in: true,
+        editable: false
+      }),
+      table("standard_terms", "builtin-standard-misspell", "English Common Misspellings (misspell)", [["abberivation", "abbreviation", 0], ["accademy", "academy", 0], ["abandonned", "abandoned", 0]], {
+        description: "client9/misspell 中的英文拼写纠正规则。",
+        source_url: "https://github.com/client9/misspell/blob/master/words.go",
+        built_in: true,
+        editable: false
+      })
+    ]),
+    exclusion_terms: collection("exclusion_terms", [
+      table("exclusion_terms", "exclusion-terms-project-custom", "项目自定义", [["etc", undefined, 1], ["misc", undefined, 0]], {
+        description: "项目内排除词。"
+      }),
+      table("exclusion_terms", "builtin-exclusion-thuocl-historical", "历史人物名（THUOCL）", [["毛泽东", undefined, 0], ["孔子", undefined, 0], ["默克尔", undefined, 0]], {
+        description: "THUOCL 历史人物名，默认关闭。",
+        source_url: "https://github.com/thunlp/THUOCL/blob/master/data/THUOCL_lishimingren.txt",
+        built_in: true,
+        editable: false,
+        enabled: false
+      }),
+      table("exclusion_terms", "builtin-exclusion-thuocl-locations", "地域实体名（THUOCL）", [["中国", undefined, 0], ["北京市", undefined, 0], ["深圳市", undefined, 0]], {
+        description: "THUOCL 地名词库示例，默认关闭。",
+        source_url: "https://github.com/thunlp/THUOCL/blob/master/data/THUOCL_diming.txt",
+        built_in: true,
+        editable: false,
+        enabled: false
+      })
+    ]),
+    regex_rules: collection("regex_rules", [
+      table("regex_rules", "regex-rules-project-custom", "项目自定义", [["\\d{4}年", "YEAR_TOKEN", 3], ["https?://\\S+", "", 2]], {
+        description: "项目内 Regex 规则。"
+      })
+    ])
+  },
+  sheets: {} as DictionarySet["sheets"]
 };
+
+dictionarySet.sheets = buildDictionarySheetsFromCollections(dictionarySet.collections);
 
 const runRecord: RunRecord = {
   run_id: "run-20260416-1810",
@@ -159,7 +342,7 @@ const runRecord: RunRecord = {
   workflow_id: "wf-default",
   workflow_name: "关键词与主题工作流",
   workflow_hash: "sha256:demo-wf-default",
-  dictionary_version: "1.0.0",
+  dictionary_version: "2.0.0",
   started_at: now,
   ended_at: "2026-04-16T18:12:00+08:00",
   status: "completed",
@@ -470,6 +653,16 @@ const manifest: ProjectManifest = {
       keep_single_char_important_terms: true
     },
     analysis: {
+      include_frequency_statistics: true,
+      include_term_document_relations: true,
+      include_term_year_relations: true,
+      include_cooccurrence_analysis: true,
+      include_feature_term_selection: true,
+      include_keyword_extraction: true,
+      include_keyword_clustering: true,
+      include_institution_keyword_analysis: true,
+      include_institution_topic_analysis: true,
+      include_document_clustering: true,
       top_n: 200,
       cooccurrence_window: 5,
       min_cooccurrence: 2,

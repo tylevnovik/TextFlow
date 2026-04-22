@@ -26,6 +26,7 @@ class TaskManager:
             "status": "pending",
             "progress": 0.0,
             "message": "等待后台处理",
+            "detail": None,
             "result": None,
             "error": None,
             "created_at": utc_now_iso(),
@@ -51,15 +52,17 @@ class TaskManager:
             task = self._tasks.get(task_id)
             if task is None:
                 return
+            if "detail" in patch and patch["detail"] is None and task.get("detail") is not None:
+                patch.pop("detail")
             task.update(patch)
             task["updated_at"] = utc_now_iso()
 
     def _run_task(self, task_id: str, action: str, payload: dict[str, Any]) -> None:
         self._update(task_id, status="running", progress=0.02, message="后台已开始处理")
 
-        def progress_callback(progress: float, message: str) -> None:
+        def progress_callback(progress: float, message: str, detail: dict[str, Any] | None = None) -> None:
             bounded = max(0.0, min(1.0, float(progress)))
-            self._update(task_id, status="running", progress=bounded, message=message)
+            self._update(task_id, status="running", progress=bounded, message=message, detail=detail)
 
         try:
             result = execute_action(action, payload, progress_callback)

@@ -36,6 +36,7 @@ try {
     --contents-directory . `
     --collect-data yake `
     --collect-data wordcloud `
+    --add-data "$engineRoot\app\builtin_dictionary_sources;app\builtin_dictionary_sources" `
     --name textflow-engine `
     --distpath $pyinstallerDistRoot `
     --workpath $pyinstallerWorkRoot `

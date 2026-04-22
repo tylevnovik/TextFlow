@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from html import escape
 import json
 import math
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import matplotlib
 import numpy as np
@@ -95,6 +96,48 @@ def configure_matplotlib_fonts() -> tuple[str | None, FontProperties | None]:
 
 CJK_FONT_PATH, CJK_FONT_PROP = configure_matplotlib_fonts()
 
+REPORT_CHART_CATALOG = [
+    {
+        "filename": "frequency_top_terms.png",
+        "title": "高频词 Top 15",
+        "description": "快速确认当前语料最突出的核心词项。",
+    },
+    {
+        "filename": "project_keywords.png",
+        "title": "项目关键词得分",
+        "description": "对比项目级关键词的相对权重，便于汇报摘要。",
+    },
+    {
+        "filename": "keyword_wordcloud.png",
+        "title": "关键词词云",
+        "description": "从整体上查看关键词分布和主题集中区。",
+    },
+    {
+        "filename": "institution_topic_heatmap.png",
+        "title": "机构 × 主题热力图",
+        "description": "定位哪些机构与哪些主题绑定最紧。",
+    },
+    {
+        "filename": "document_clusters.png",
+        "title": "文档聚类分布",
+        "description": "查看文档在主题空间中的分组与离散程度。",
+    },
+]
+
+REPORT_RESULT_TITLES = {
+    "frequency_table": "高频词概览",
+    "term_document_table": "词项-文档关系预览",
+    "term_year_table": "词项年份关系预览",
+    "cooccurrence_table": "共现关系预览",
+    "selected_feature_terms": "特征词预览",
+    "keyword_result": "关键词概览",
+    "keyword_cluster_result": "关键词聚类预览",
+    "institution_keyword_cooccurrence": "机构-关键词关系预览",
+    "institution_topic_cooccurrence": "机构-主题关系预览",
+    "clustering_result": "文档聚类预览",
+    "audit_table": "规则审计预览",
+}
+
 
 def chart_config(manifest: dict[str, Any]) -> dict[str, Any]:
     export_params = manifest["pipeline"].get("export", {})
@@ -162,92 +205,451 @@ def finalize_plot(fig: plt.Figure, output_path: Path, config: dict[str, Any]) ->
 
 
 def build_html_report(manifest: dict[str, Any], corpus: list[dict[str, Any]], result_bundle: dict[str, Any]) -> str:
-    top_terms = result_bundle["frequency_table"][:10]
-    topics = result_bundle["institution_topic_cooccurrence"][:8]
-    audit_rows = result_bundle["audit_table"][:10]
-    png_enabled = manifest["pipeline"].get("export", {}).get("export_png", True)
-    latest_run = manifest.get("run_history", [])[-1] if manifest.get("run_history") else None
+    def rows_for(key: str) -> list[dict[str, Any]]:
+        rows = result_bundle.get(key, [])
+        return rows if isinstance(rows, list) else []
 
-    top_terms_rows = "".join(
-        f"<tr><td>{row['term']}</td><td>{row['tf']}</td><td>{row['df']}</td><td>{row['ratio']:.4f}</td></tr>"
-        for row in top_terms
-    )
-    topic_rows = "".join(
-        f"<li><strong>{row['institution']}</strong> - {row['topic_label']} ({row['cooccurrence_count']})</li>"
-        for row in topics
-    )
-    audit_table = "".join(
-        f"<tr><td>{row['doc_id']}</td><td>{row['source_term']}</td><td>{row.get('target_term', '')}</td><td>{row['rule_type']}</td><td>{row['action']}</td></tr>"
-        for row in audit_rows
-    )
+    def format_value(value: Any) -> str:
+        if value is None or value == "":
+            return "—"
+        if isinstance(value, float):
+            return f"{value:.4f}".rstrip("0").rstrip(".")
+        if isinstance(value, list):
+            rendered = [format_value(item) for item in value if item not in (None, "")]
+            return " / ".join(rendered[:6]) if rendered else "—"
+        return str(value)
 
-    chart_section = (
+    def safe(value: Any) -> str:
+        return escape(format_value(value))
+
+    def render_table(columns: list[tuple[str, str]], rows: list[dict[str, Any]], limit: int = 12) -> str:
+        limited_rows = rows[:limit]
+        header = "".join(f"<th>{escape(label)}</th>" for _, label in columns)
+        body = "".join(
+            "<tr>" + "".join(f"<td>{safe(row.get(key))}</td>" for key, _ in columns) + "</tr>"
+            for row in limited_rows
+        )
+        return f"""
+        <div class="table-wrap">
+          <table>
+            <thead><tr>{header}</tr></thead>
+            <tbody>{body}</tbody>
+          </table>
+        </div>
         """
+
+    def auto_columns(rows: list[dict[str, Any]], limit: int = 6) -> list[tuple[str, str]]:
+        ordered_keys: list[str] = []
+        for row in rows[:5]:
+            if not isinstance(row, dict):
+                continue
+            for key in row.keys():
+                if key not in ordered_keys:
+                    ordered_keys.append(str(key))
+                if len(ordered_keys) >= limit:
+                    break
+            if len(ordered_keys) >= limit:
+                break
+        return [(key, key.replace("_", " ")) for key in ordered_keys]
+
+    latest_run = manifest.get("run_history", [])[-1] if manifest.get("run_history") else None
+    frequency_rows = rows_for("frequency_table")
+    keyword_rows = rows_for("keyword_result")
+    cooccurrence_rows = rows_for("cooccurrence_table")
+    topic_rows = rows_for("institution_topic_cooccurrence")
+    cluster_rows = rows_for("clustering_result")
+    audit_rows = rows_for("audit_table")
+    feature_rows = rows_for("selected_feature_terms")
+    chart_cards = result_bundle.get("report_chart_cards", [])
+    chart_cards = chart_cards if isinstance(chart_cards, list) else []
+
+    year_values = sorted(
+        {
+            int(item["year"])
+            for item in corpus
+            if isinstance(item, dict) and isinstance(item.get("year"), int)
+        }
+    )
+    institutions = sorted(
+        {
+            str(item.get("institution")).strip()
+            for item in corpus
+            if isinstance(item, dict) and str(item.get("institution") or "").strip()
+        }
+    )
+    sources = sorted(
+        {
+            str(item.get("source")).strip()
+            for item in corpus
+            if isinstance(item, dict) and str(item.get("source") or "").strip()
+        }
+    )
+    project_keywords = [
+        row for row in keyword_rows if isinstance(row, dict) and str(row.get("scope") or "") == "project"
+    ][:12]
+    keyword_doc_count = len(
+        {
+            str(row.get("doc_id"))
+            for row in keyword_rows
+            if isinstance(row, dict) and str(row.get("scope") or "") == "doc" and row.get("doc_id")
+        }
+    )
+    cluster_count = len(
+        {
+            int(row["cluster_id"])
+            for row in cluster_rows
+            if isinstance(row, dict) and row.get("cluster_id") is not None
+        }
+    )
+    audit_summary: dict[tuple[str, str], int] = {}
+    for row in audit_rows:
+        if not isinstance(row, dict):
+            continue
+        key = (str(row.get("rule_type") or "unknown"), str(row.get("action") or "unknown"))
+        audit_summary[key] = audit_summary.get(key, 0) + 1
+    audit_summary_rows = [
+        {"rule_type": rule_type, "action": action, "hits": hits}
+        for (rule_type, action), hits in sorted(audit_summary.items(), key=lambda item: item[1], reverse=True)
+    ]
+
+    highlights: list[tuple[str, str]] = []
+    if frequency_rows:
+        top_term = frequency_rows[0]
+        highlights.append(
+            (
+                "词频主词项",
+                f"{format_value(top_term.get('term'))}，TF {format_value(top_term.get('tf'))}，DF {format_value(top_term.get('df'))}",
+            )
+        )
+    if project_keywords:
+        top_keyword = project_keywords[0]
+        highlights.append(
+            (
+                "项目关键词",
+                f"{format_value(top_keyword.get('keyword'))}，得分 {format_value(top_keyword.get('score'))}",
+            )
+        )
+    if cooccurrence_rows:
+        top_pair = cooccurrence_rows[0]
+        highlights.append(
+            (
+                "最强共现组合",
+                f"{format_value(top_pair.get('term_a'))} × {format_value(top_pair.get('term_b'))}，共现 {format_value(top_pair.get('cooccurrence_count'))}",
+            )
+        )
+    if topic_rows:
+        top_topic = topic_rows[0]
+        highlights.append(
+            (
+                "机构主题热点",
+                f"{format_value(top_topic.get('institution'))} - {format_value(top_topic.get('topic_label'))}，共现 {format_value(top_topic.get('cooccurrence_count'))}",
+            )
+        )
+    if audit_summary_rows:
+        top_audit = audit_summary_rows[0]
+        highlights.append(
+            (
+                "规则命中最多的动作",
+                f"{format_value(top_audit.get('rule_type'))} / {format_value(top_audit.get('action'))}，共 {format_value(top_audit.get('hits'))} 次",
+            )
+        )
+
+    meta_cards = [
+        ("文档数", str(len(corpus)), "本次报告覆盖的文档总量"),
+        (
+            "结果表",
+            str(sum(1 for key, rows in result_bundle.items() if key != "report_chart_cards" and isinstance(rows, list) and rows)),
+            "本次真正写入报告的数据块",
+        ),
+        ("图表数", str(len(chart_cards)), "成功生成且可嵌入 HTML 的图表"),
+        ("机构数", str(len(institutions)), "语料中出现的机构数"),
+        ("来源数", str(len(sources)), "语料来源字段的去重个数"),
+        ("年份范围", f"{year_values[0]} - {year_values[-1]}" if year_values else "未提供", "语料中可识别的年份范围"),
+    ]
+    workflow_label = (
+        str(latest_run.get("workflow_name") or "")
+        if latest_run
+        else str(manifest.get("active_workflow_id") or "")
+    ) or "默认工作流"
+    meta_html = "".join(
+        f"""
+        <div class="meta-card">
+          <strong>{escape(label)}</strong>
+          <span>{escape(value)}</span>
+          <small>{escape(description)}</small>
+        </div>
+        """
+        for label, value, description in meta_cards
+    )
+
+    sections: list[str] = []
+    if highlights:
+        sections.append(
+            """
       <section>
-        <h2>图表导出</h2>
-        <div class="chart-grid">
-          <img src="../charts/frequency_top_terms.png" alt="高频词图表" />
-          <img src="../charts/keyword_wordcloud.png" alt="关键词词云" />
-          <img src="../charts/project_keywords.png" alt="项目关键词图" />
-          <img src="../charts/institution_topic_heatmap.png" alt="机构主题热力图" />
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Core Findings</p>
+            <h2>核心发现</h2>
+          </div>
+        </div>
+        <div class="insight-grid">
+"""
+            + "".join(
+                f"""
+          <article class="insight-card">
+            <strong>{escape(title)}</strong>
+            <p>{escape(detail)}</p>
+          </article>
+          """
+                for title, detail in highlights
+            )
+            + """
         </div>
       </section>
 """
-        if png_enabled
-        else ""
-    )
+        )
+
+    if frequency_rows:
+        sections.append(
+            f"""
+      <section>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Frequency</p>
+            <h2>高频词概览</h2>
+          </div>
+          <span class="pill">Top {min(len(frequency_rows), 12)}</span>
+        </div>
+        {render_table([("term", "词项"), ("tf", "TF"), ("df", "DF"), ("ratio", "占比")], frequency_rows)}
+      </section>
+"""
+        )
+
+    if project_keywords:
+        sections.append(
+            f"""
+      <section>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Keywords</p>
+            <h2>关键词概览</h2>
+          </div>
+          <span class="pill">覆盖 {keyword_doc_count} 篇文档</span>
+        </div>
+        {render_table([("keyword", "关键词"), ("score", "得分"), ("rank", "排名")], project_keywords)}
+      </section>
+"""
+        )
+
+    if cooccurrence_rows:
+        sections.append(
+            f"""
+      <section>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Co-occurrence</p>
+            <h2>共现关系预览</h2>
+          </div>
+        </div>
+        {render_table([("term_a", "词项 A"), ("term_b", "词项 B"), ("cooccurrence_count", "共现次数"), ("score", "得分")], cooccurrence_rows)}
+      </section>
+"""
+        )
+
+    if topic_rows:
+        sections.append(
+            f"""
+      <section>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Institution Topic</p>
+            <h2>机构 × 主题热点</h2>
+          </div>
+        </div>
+        {render_table([("institution", "机构"), ("topic_label", "主题"), ("cooccurrence_count", "共现次数"), ("year", "年份")], topic_rows)}
+      </section>
+"""
+        )
+
+    if feature_rows:
+        sections.append(
+            f"""
+      <section>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Features</p>
+            <h2>特征词预览</h2>
+          </div>
+        </div>
+        {render_table([("term", "词项"), ("score", "得分"), ("selected", "已选中"), ("source", "来源")], feature_rows)}
+      </section>
+"""
+        )
+
+    if cluster_rows:
+        sections.append(
+            f"""
+      <section>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Document Clusters</p>
+            <h2>文档聚类预览</h2>
+          </div>
+          <span class="pill">{cluster_count} 个簇</span>
+        </div>
+        {render_table([("doc_id", "文档 ID"), ("cluster_id", "簇"), ("title", "标题"), ("year", "年份")], cluster_rows)}
+      </section>
+"""
+        )
+
+    handled_keys = {
+        "report_chart_cards",
+        "frequency_table",
+        "keyword_result",
+        "cooccurrence_table",
+        "institution_topic_cooccurrence",
+        "selected_feature_terms",
+        "clustering_result",
+        "audit_table",
+    }
+    for key, rows in result_bundle.items():
+        if key in handled_keys or not isinstance(rows, list) or not rows:
+            continue
+        columns = auto_columns(rows)
+        if not columns:
+            continue
+        sections.append(
+            f"""
+      <section>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Result Preview</p>
+            <h2>{escape(REPORT_RESULT_TITLES.get(key, key.replace('_', ' ')))}</h2>
+          </div>
+        </div>
+        {render_table(columns, rows)}
+      </section>
+"""
+        )
+
+    if chart_cards:
+        chart_html = "".join(
+            f"""
+          <article class="chart-card">
+            <img src="{escape(str(card.get('relative_path') or ''))}" alt="{escape(str(card.get('title') or '图表'))}" />
+            <div>
+              <strong>{escape(str(card.get('title') or '图表'))}</strong>
+              <p>{escape(str(card.get('description') or ''))}</p>
+            </div>
+          </article>
+            """
+            for card in chart_cards
+            if isinstance(card, dict) and card.get("relative_path")
+        )
+        if chart_html:
+            sections.append(
+                f"""
+      <section>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Charts</p>
+            <h2>图表导出</h2>
+          </div>
+        </div>
+        <div class="chart-grid">
+          {chart_html}
+        </div>
+      </section>
+"""
+            )
+
+    if audit_rows:
+        sections.append(
+            f"""
+      <section>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Audit Trail</p>
+            <h2>规则审计摘要</h2>
+          </div>
+        </div>
+        {render_table([("rule_type", "规则类型"), ("action", "动作"), ("hits", "命中次数")], audit_summary_rows, limit=10)}
+        <div class="section-divider"></div>
+        {render_table([("doc_id", "文档 ID"), ("source_term", "原词"), ("target_term", "目标词"), ("rule_type", "规则"), ("action", "动作")], audit_rows, limit=12)}
+      </section>
+"""
+        )
+
+    if not sections:
+        sections.append(
+            """
+      <section>
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Summary</p>
+            <h2>本次报告没有可展示的分析结果</h2>
+          </div>
+        </div>
+        <p>当前只写入了运行快照，未生成可嵌入的分析表或图表。请检查工作流是否接入了分析节点与输出节点。</p>
+      </section>
+"""
+        )
 
     return f"""<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <title>{manifest['name']} - TextFlow Report</title>
+    <title>{escape(str(manifest['name']))} - TextFlow Report</title>
     <style>
       body {{ font-family: 'Segoe UI', sans-serif; margin: 0; background: #f7f1e6; color: #1e2228; }}
       main {{ max-width: 1080px; margin: 0 auto; padding: 32px; }}
       section {{ background: rgba(255,255,255,0.85); border-radius: 20px; padding: 24px; margin-bottom: 20px; }}
       h1, h2 {{ font-family: Georgia, serif; }}
+      p {{ line-height: 1.7; }}
       table {{ width: 100%; border-collapse: collapse; }}
       th, td {{ padding: 10px; border-bottom: 1px solid rgba(30,34,40,0.12); text-align: left; }}
-      .meta {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }}
-      .meta div {{ background: #fffaf3; padding: 12px; border-radius: 12px; }}
+      .hero p {{ margin: 0 0 12px; }}
+      .eyebrow {{ text-transform: uppercase; letter-spacing: 0.08em; font-size: 12px; color: #8d5f16; }}
+      .meta {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }}
+      .meta-card {{ background: #fffaf3; padding: 14px; border-radius: 14px; display: flex; flex-direction: column; gap: 6px; }}
+      .meta-card strong {{ font-size: 12px; color: #8d5f16; }}
+      .meta-card span {{ font-size: 22px; font-weight: 700; }}
+      .meta-card small {{ color: rgba(30,34,40,0.7); }}
+      .section-head {{ display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 14px; }}
+      .pill {{ display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px; background: #fff4db; color: #8d5f16; font-size: 12px; }}
+      .insight-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
+      .insight-card {{ background: #fffaf3; padding: 16px; border-radius: 16px; }}
+      .insight-card strong {{ display: block; margin-bottom: 8px; }}
+      .table-wrap {{ overflow-x: auto; }}
       .chart-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }}
-      .chart-grid img {{ width: 100%; border-radius: 16px; background: #fffaf3; }}
+      .chart-card {{ background: #fffaf3; border-radius: 16px; overflow: hidden; }}
+      .chart-card img {{ width: 100%; display: block; background: #fffaf3; }}
+      .chart-card div {{ padding: 14px; }}
+      .chart-card strong {{ display: block; margin-bottom: 6px; }}
+      .chart-card p {{ margin: 0; color: rgba(30,34,40,0.76); }}
+      .section-divider {{ height: 1px; background: rgba(30,34,40,0.08); margin: 18px 0; }}
+      @media (max-width: 860px) {{
+        .meta,
+        .insight-grid,
+        .chart-grid {{ grid-template-columns: 1fr; }}
+      }}
     </style>
   </head>
   <body>
     <main>
-      <section>
+      <section class="hero">
         <p>TextFlow Studio Report</p>
-        <h1>{manifest['name']}</h1>
-        <p>{manifest['description']}</p>
-        <p><strong>本次处理对象</strong><br />{latest_run['run_scope_summary'] if latest_run else '项目内全部资料'}</p>
-        <p><strong>本次输出包</strong><br />{latest_run['output_summary'] if latest_run else '表格与图表'}</p>
+        <h1>{escape(str(manifest['name']))}</h1>
+        <p>{escape(str(manifest.get('description') or ''))}</p>
+        <p><strong>本次处理对象</strong><br />{escape(str(latest_run['run_scope_summary'] if latest_run else '项目内全部资料'))}</p>
+        <p><strong>本次输出包</strong><br />{escape(str(latest_run['output_summary'] if latest_run else '表格与图表'))}</p>
+        <p><strong>工作流</strong><br />{escape(workflow_label)}</p>
         <div class="meta">
-          <div><strong>文档数</strong><br />{len(corpus)}</div>
-          <div><strong>运行次数</strong><br />{len(manifest.get('run_history', []))}</div>
-          <div><strong>默认语言</strong><br />{manifest['settings']['default_language']}</div>
+          {meta_html}
         </div>
       </section>
-      <section>
-        <h2>核心词频结果</h2>
-        <table>
-          <thead><tr><th>Term</th><th>TF</th><th>DF</th><th>Ratio</th></tr></thead>
-          <tbody>{top_terms_rows}</tbody>
-        </table>
-      </section>
-      <section>
-        <h2>机构 × 主题摘要</h2>
-        <ul>{topic_rows}</ul>
-      </section>
-      {chart_section}
-      <section>
-        <h2>规则审计摘要</h2>
-        <table>
-          <thead><tr><th>Doc</th><th>Source</th><th>Target</th><th>Rule</th><th>Action</th></tr></thead>
-          <tbody>{audit_table}</tbody>
-        </table>
-      </section>
+      {''.join(sections)}
     </main>
   </body>
 </html>"""
@@ -403,6 +805,18 @@ def save_cluster_chart(cluster_rows: list[dict[str, Any]], output_path: Path, co
     finalize_plot(fig, output_path, config)
 
 
+def write_json_snapshot(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+
+
+def emit_export_progress(progress_callback: Callable[[float, str], None] | None, fraction: float, message: str) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(min(max(fraction, 0.0), 1.0), message)
+
+
 def write_run_outputs(
     project_dir: Path,
     run_id: str,
@@ -410,7 +824,24 @@ def write_run_outputs(
     corpus: list[dict[str, Any]],
     result_bundle: dict[str, Any],
     run_record: dict[str, Any],
+    export_selection: dict[str, set[str]] | None = None,
+    progress_callback: Callable[[float, str], None] | None = None,
 ) -> list[str]:
+    def build_report_chart_cards() -> list[dict[str, str]]:
+        cards: list[dict[str, str]] = []
+        for chart in REPORT_CHART_CATALOG:
+            chart_path = charts_dir / chart["filename"]
+            if not chart_path.exists():
+                continue
+            cards.append(
+                {
+                    "relative_path": f"../charts/{chart['filename']}",
+                    "title": chart["title"],
+                    "description": chart["description"],
+                }
+            )
+        return cards
+
     run_root = project_dir / "runs" / run_id
     outputs_dir = run_root / "outputs"
     charts_dir = run_root / "charts"
@@ -430,13 +861,34 @@ def write_run_outputs(
         for key, rows in result_bundle.items()
         if key != "report_files" and (include_audit or key != "audit_table") and isinstance(rows, list)
     }
+    if export_selection:
+        csv_or_xlsx_tables = set(export_selection.get("csv_tables", set())) | set(export_selection.get("xlsx_tables", set()))
+        html_result_keys = set(export_selection.get("html_result_keys", set()))
+        selected_tables = csv_or_xlsx_tables | html_result_keys
+        if include_audit and export_selection.get("include_audit"):
+            selected_tables.add("audit_table")
+        if selected_tables:
+            exportable_tables = {key: rows for key, rows in exportable_tables.items() if key in selected_tables}
+    html_result_keys = set(export_selection.get("html_result_keys", set())) if export_selection else set()
+    report_result_bundle = {
+        key: rows
+        for key, rows in result_bundle.items()
+        if key != "report_files" and (include_audit or key != "audit_table") and isinstance(rows, list)
+    }
+    if export_selection and (html_result_keys or export_selection.get("include_audit")):
+        allowed_report_keys = set(html_result_keys)
+        if include_audit and export_selection.get("include_audit"):
+            allowed_report_keys.add("audit_table")
+        report_result_bundle = {
+            key: rows
+            for key, rows in report_result_bundle.items()
+            if key in allowed_report_keys
+        }
 
-    (run_root / "params_snapshot.json").write_text(
-        json.dumps(manifest["pipeline"], ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (run_root / "logs.json").write_text(
-        json.dumps(run_record["logs"], ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    emit_export_progress(progress_callback, 0.05, "正在写出参数快照")
+    write_json_snapshot(run_root / "params_snapshot.json", manifest["pipeline"])
+    emit_export_progress(progress_callback, 0.12, "正在写出日志快照")
+    write_json_snapshot(run_root / "logs.json", run_record["logs"])
     (run_root / "logs.txt").write_text(
         "\n".join(
             f"{entry['timestamp']} [{entry['level']}] {entry['step']}: {entry['message']}"
@@ -444,17 +896,18 @@ def write_run_outputs(
         ),
         encoding="utf-8",
     )
-    (run_root / "corpus_snapshot.json").write_text(
-        json.dumps(corpus, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    emit_export_progress(progress_callback, 0.22, "正在写出语料快照")
+    write_json_snapshot(run_root / "corpus_snapshot.json", corpus)
 
     if export_step_enabled and export_params.get("export_csv", True):
+        emit_export_progress(progress_callback, 0.35, "正在导出 CSV")
         for key, rows in exportable_tables.items():
             csv_path = outputs_dir / f"{key}.csv"
             pd.DataFrame(rows).to_csv(csv_path, index=False, encoding="utf-8-sig")
             exported_files.append(str(csv_path.relative_to(project_dir).as_posix()))
 
     if export_step_enabled and export_params.get("export_xlsx", True) and exportable_tables:
+        emit_export_progress(progress_callback, 0.55, "正在导出 XLSX")
         xlsx_path = outputs_dir / "analysis_bundle.xlsx"
         with pd.ExcelWriter(xlsx_path) as writer:
             for key, rows in exportable_tables.items():
@@ -462,23 +915,43 @@ def write_run_outputs(
         exported_files.append(str(xlsx_path.relative_to(project_dir).as_posix()))
 
     if export_step_enabled and export_params.get("export_png", True):
+        emit_export_progress(progress_callback, 0.72, "正在渲染 PNG 图表")
+        png_selection = set(export_selection.get("png_charts", set())) if export_selection else set()
         frequency_chart = charts_dir / "frequency_top_terms.png"
         keyword_chart = charts_dir / "project_keywords.png"
         wordcloud_chart = charts_dir / "keyword_wordcloud.png"
         topic_heatmap = charts_dir / "institution_topic_heatmap.png"
         cluster_chart = charts_dir / "document_clusters.png"
-        save_frequency_chart(result_bundle["frequency_table"], frequency_chart, config)
-        save_keyword_chart(result_bundle["keyword_result"], keyword_chart, config)
-        save_wordcloud(result_bundle["frequency_table"], result_bundle["keyword_result"], wordcloud_chart, config)
-        save_institution_topic_heatmap(result_bundle["institution_topic_cooccurrence"], topic_heatmap, config)
-        save_cluster_chart(result_bundle["clustering_result"], cluster_chart, config)
+        if not png_selection or "frequency_top_terms" in png_selection:
+            save_frequency_chart(result_bundle["frequency_table"], frequency_chart, config)
+        if not png_selection or "project_keywords" in png_selection:
+            save_keyword_chart(result_bundle["keyword_result"], keyword_chart, config)
+        if not png_selection or "keyword_wordcloud" in png_selection:
+            save_wordcloud(result_bundle["frequency_table"], result_bundle["keyword_result"], wordcloud_chart, config)
+        if not png_selection or "institution_topic_heatmap" in png_selection:
+            save_institution_topic_heatmap(result_bundle["institution_topic_cooccurrence"], topic_heatmap, config)
+        if not png_selection or "document_clusters" in png_selection:
+            save_cluster_chart(result_bundle["clustering_result"], cluster_chart, config)
         for chart_path in [frequency_chart, keyword_chart, wordcloud_chart, topic_heatmap, cluster_chart]:
             if chart_path.exists():
                 exported_files.append(str(chart_path.relative_to(project_dir).as_posix()))
 
     if export_step_enabled and export_params.get("export_html_report", True):
+        emit_export_progress(progress_callback, 0.9, "正在生成 HTML 报告")
         html_report = report_dir / "report.html"
-        html_report.write_text(build_html_report(manifest, corpus, result_bundle), encoding="utf-8")
+        html_report.write_text(
+            build_html_report(
+                manifest,
+                corpus,
+                {
+                    **report_result_bundle,
+                    "report_chart_cards": build_report_chart_cards(),
+                },
+            ),
+            encoding="utf-8",
+        )
         exported_files.append(str(html_report.relative_to(project_dir).as_posix()))
+
+    emit_export_progress(progress_callback, 1.0, "导出阶段已完成")
 
     return exported_files
