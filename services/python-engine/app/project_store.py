@@ -673,6 +673,17 @@ def serialize_dictionary_set_for_storage(dictionary_set: dict[str, Any] | None) 
     return serialized
 
 
+def editable_dictionary_table_for_kind(dictionary_set: dict[str, Any], kind: str) -> dict[str, Any]:
+    collection = dictionary_set.get("collections", {}).get(kind)
+    if not isinstance(collection, dict):
+        raise ValueError(f"Dictionary collection {kind} not found")
+
+    for table in collection.get("tables", []):
+        if isinstance(table, dict) and bool(table.get("editable", False)):
+            return table
+    raise ValueError(f"Editable dictionary table for {kind} not found")
+
+
 def write_project_payload(
     project_dir: Path,
     manifest: dict[str, Any],

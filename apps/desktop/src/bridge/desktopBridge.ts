@@ -11,6 +11,7 @@ import type {
   WorkspaceSnapshot
 } from "@textflow/shared-types";
 import { createSimulatedRun, demoProjectSummary, demoWorkspace } from "../data/demoProject";
+import type { ReviewResolutionInput, ReviewTaskRecord } from "../features/review/reviewTypes";
 
 export interface CreateProjectInput {
   name: string;
@@ -25,6 +26,8 @@ export interface DuplicateProjectInput {
 export interface ImportProjectFilesResponse {
   project_id: string;
   imported_documents: number;
+  documents?: CorpusItem[];
+  project?: ProjectManifest;
   source_files: Array<{ id: string; name: string; relative_path: string; row_count: number }>;
   document_count: number;
   skipped_rows: number;
@@ -51,6 +54,53 @@ export interface ExportProjectResponse {
 export interface DeleteCorpusDocumentResponse {
   doc_id: string;
   document_count: number;
+  source_files?: ProjectManifest["source_files"];
+  project_updated_at?: string;
+}
+
+export interface UpdateCorpusDocumentResponse {
+  document: CorpusItem;
+  document_count: number;
+  source_files?: ProjectManifest["source_files"];
+  project_updated_at?: string;
+}
+
+export interface ImportDictionaryTableResponse {
+  table: DictionaryTableResource;
+  dictionary_set?: ProjectManifest["dictionary_set"];
+  project_updated_at?: string;
+}
+
+export interface RunWorkflowResponse {
+  run: RunRecord;
+  project: ProjectManifest;
+}
+
+export interface CreateReviewTaskInput {
+  review_type: string;
+  target_ref: Record<string, string>;
+  title?: string;
+  description?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface CreateReviewTaskResponse {
+  task: ReviewTaskRecord;
+  project: ProjectManifest;
+  project_updated_at?: string;
+}
+
+export interface ListReviewTasksResponse {
+  project_id: string;
+  tasks: ReviewTaskRecord[];
+}
+
+export interface ResolveReviewTaskResponse {
+  task: ReviewTaskRecord;
+  project: ProjectManifest;
+  corpus: CorpusItem[];
+  source_files?: ProjectManifest["source_files"];
+  project_updated_at?: string;
 }
 
 export interface DeleteProjectResponse {
@@ -95,13 +145,16 @@ interface DesktopBridge {
   saveProjectPackagePath(defaultFileName?: string): Promise<string | null>;
   importProjectPackage(path: string): Promise<ProjectSummary>;
   importProjectFiles(projectId: string, filePaths: string[], importTemplate?: ProjectManifest["import_template"]): Promise<ImportProjectFilesResponse>;
-  runPipeline(projectId: string): Promise<RunRecord>;
+  runWorkflow(projectId: string): Promise<RunWorkflowResponse>;
   exportProject(projectId: string, formats: ExportFormat[]): Promise<ExportProjectResponse>;
   exportProjectBackup(projectId: string, path?: string): Promise<ExportProjectBackupResponse>;
-  updateCorpusDocument(projectId: string, document: CorpusItem): Promise<CorpusItem>;
+  updateCorpusDocument(projectId: string, document: CorpusItem): Promise<UpdateCorpusDocumentResponse>;
   deleteCorpusDocument(projectId: string, docId: string): Promise<DeleteCorpusDocumentResponse>;
-  importDictionaryTable(projectId: string, kind: DictionaryKind, path: string): Promise<DictionaryTableResource>;
+  importDictionaryTable(projectId: string, kind: DictionaryKind, path: string): Promise<ImportDictionaryTableResponse>;
   exportDictionaryTable(projectId: string, kind: DictionaryKind, tableId: string, path: string): Promise<{ kind: DictionaryKind; table_id: string; path: string }>;
+  createReviewTask(projectId: string, input: CreateReviewTaskInput): Promise<CreateReviewTaskResponse>;
+  listReviewTasks(projectId: string, status?: string): Promise<ListReviewTasksResponse>;
+  resolveReviewTask(projectId: string, reviewId: string, resolution: ReviewResolutionInput): Promise<ResolveReviewTaskResponse>;
   saveProject(project: ProjectManifest): Promise<ProjectSummary>;
   openPath(path: string): Promise<void>;
   revealPath(path: string): Promise<void>;
@@ -117,6 +170,10 @@ declare global {
 const delay = (ms: number) => new Promise((resolve) => {
   window.setTimeout(resolve, ms);
 });
+
+function simulatedReviewTasks(project: ProjectManifest): ReviewTaskRecord[] {
+  return project.review_tasks as unknown as ReviewTaskRecord[];
+}
 
 async function tryInvoke<T>(command: string, payload?: Record<string, unknown>): Promise<T | null> {
   const { invoke, isTauri } = await import("@tauri-apps/api/core");
@@ -279,13 +336,16 @@ export const desktopBridge: DesktopBridge = {
     };
   },
 
-  async runPipeline(projectId) {
-    const result = await tryInvoke<RunRecord>("run_pipeline", { projectId });
+  async runWorkflow(projectId) {
+    const result = await tryInvoke<RunWorkflowResponse>("run_workflow", { projectId });
     if (result !== null) {
       return result;
     }
     await delay(1_100);
-    return createSimulatedRun();
+    return {
+      run: createSimulatedRun(),
+      project: demoWorkspace.current_project!
+    };
   },
 
   async exportProject(projectId, formats) {
@@ -319,12 +379,15 @@ export const desktopBridge: DesktopBridge = {
   },
 
   async updateCorpusDocument(projectId, document) {
-    const result = await tryInvoke<CorpusItem>("update_corpus_document", { projectId, document });
+    const result = await tryInvoke<UpdateCorpusDocumentResponse>("update_corpus_document", { projectId, document });
     if (result !== null) {
       return result;
     }
     await delay(180);
-    return document;
+    return {
+      document,
+      document_count: demoWorkspace.corpus.length
+    };
   },
 
   async deleteCorpusDocument(projectId, docId) {
@@ -340,12 +403,15 @@ export const desktopBridge: DesktopBridge = {
   },
 
   async importDictionaryTable(projectId, kind, path) {
-    const result = await tryInvoke<DictionaryTableResource>("import_dictionary_sheet", { projectId, kind, path });
+    const result = await tryInvoke<ImportDictionaryTableResponse>("import_dictionary_sheet", { projectId, kind, path });
     if (result !== null) {
       return result;
     }
     await delay(120);
-    return demoWorkspace.current_project!.dictionary_set.collections[kind].tables[0];
+    return {
+      table: demoWorkspace.current_project!.dictionary_set.collections[kind].tables[0],
+      dictionary_set: demoWorkspace.current_project!.dictionary_set
+    };
   },
 
   async exportDictionaryTable(projectId, kind, tableId, path) {
@@ -360,6 +426,86 @@ export const desktopBridge: DesktopBridge = {
     }
     await delay(90);
     return { kind, table_id: tableId, path };
+  },
+
+  async createReviewTask(projectId, input) {
+    const result = await tryInvoke<CreateReviewTaskResponse>("create_review_task", {
+      projectId,
+      task: input
+    });
+    if (result !== null) {
+      return result;
+    }
+    await delay(120);
+    const project = demoWorkspace.current_project!;
+    const tasks = simulatedReviewTasks(project);
+    const task: ReviewTaskRecord = {
+      review_id: `review-${Date.now()}`,
+      project_id: projectId,
+      review_type: input.review_type,
+      status: "open",
+      target_ref: input.target_ref,
+      title: input.title ?? "新建复核任务",
+      description: input.description,
+      payload: input.payload,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    tasks.unshift(task);
+    return {
+      task,
+      project,
+      project_updated_at: new Date().toISOString()
+    };
+  },
+
+  async listReviewTasks(projectId, status) {
+    const result = await tryInvoke<ListReviewTasksResponse>("list_review_tasks", {
+      projectId,
+      status
+    });
+    if (result !== null) {
+      return result;
+    }
+    await delay(90);
+    const project = demoWorkspace.current_project!;
+    const tasks = simulatedReviewTasks(project).filter((task) => !status || task.status === status);
+    return {
+      project_id: projectId,
+      tasks
+    };
+  },
+
+  async resolveReviewTask(projectId, reviewId, resolution) {
+    const result = await tryInvoke<ResolveReviewTaskResponse>("resolve_review_task", {
+      projectId,
+      reviewId,
+      resolution
+    });
+    if (result !== null) {
+      return result;
+    }
+    await delay(120);
+    const project = demoWorkspace.current_project!;
+    const tasks = simulatedReviewTasks(project);
+    const task = tasks.find((item) => item.review_id === reviewId);
+    if (!task) {
+      throw new Error(`Review task ${reviewId} not found`);
+    }
+    task.status = "resolved";
+    task.updated_at = new Date().toISOString();
+    task.resolution = {
+      ...resolution,
+      applied_changes: resolution.decision === "reject" ? [] : ["demo-writeback"],
+      resolved_at: new Date().toISOString()
+    };
+    return {
+      task,
+      project,
+      corpus: demoWorkspace.corpus,
+      source_files: project.source_files,
+      project_updated_at: new Date().toISOString()
+    };
   },
 
   async saveProject(project) {

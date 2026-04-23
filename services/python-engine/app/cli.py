@@ -14,6 +14,7 @@ from .artifact_store import load_artifact_payload, load_artifact_preview
 from .defaults import deep_copy_manifest
 from .ingestion import ensure_sample_files, import_files, parse_optional_year
 from .ingestion_specs import list_ingestion_specs, save_ingestion_spec
+from .review_store import create_review_task, list_review_tasks, resolve_review_task
 from .resource_store import create_corpus_view, delete_corpus_view, update_corpus_view
 from .workflow_runner import run_project_workflow
 from .project_store import (
@@ -661,6 +662,70 @@ def action_export_dictionary_sheet(payload: dict[str, Any], progress_callback: P
     }
 
 
+def action_create_review_task(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在创建复核任务")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    task_payload = payload.get("task") if isinstance(payload.get("task"), dict) else payload
+    created = create_review_task(
+        manifest,
+        review_type=str(task_payload["review_type"]),
+        target_ref=task_payload.get("target_ref"),
+        title=task_payload.get("title"),
+        description=task_payload.get("description"),
+        payload=task_payload.get("payload"),
+    )
+    save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections={"manifest"})
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "复核任务已创建")
+    return {
+        "task": created,
+        "project": manifest,
+        "project_updated_at": manifest.get("updated_at"),
+    }
+
+
+def action_list_review_tasks(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在加载复核任务")
+    ensure_bootstrap_project()
+    _project_dir, manifest, _corpus = load_project_or_fail(payload["project_id"])
+    tasks = list_review_tasks(manifest, status=payload.get("status"))
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "复核任务已加载")
+    return {
+        "project_id": manifest["id"],
+        "tasks": tasks,
+    }
+
+
+def action_resolve_review_task(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在处理复核结果")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    resolved_task, dirty_sections = resolve_review_task(
+        manifest,
+        corpus,
+        str(payload["review_id"]),
+        payload.get("resolution") if isinstance(payload.get("resolution"), dict) else {},
+    )
+    if "corpus" in dirty_sections:
+        manifest = refresh_source_files(project_dir, manifest, corpus)
+    save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections=dirty_sections)
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "复核结果已写回项目")
+    return {
+        "task": resolved_task,
+        "project": manifest,
+        "corpus": corpus,
+        "source_files": manifest.get("source_files", []),
+        "project_updated_at": manifest.get("updated_at"),
+    }
+
+
+def action_apply_review_resolution(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    return action_resolve_review_task(payload, progress_callback)
+
+
 def action_save_ingestion_spec(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
     notify(progress_callback, 0.1, "正在保存导入规格")
     ensure_bootstrap_project()
@@ -774,6 +839,10 @@ ACTION_HANDLERS: dict[str, Callable[..., Any]] = {
     "delete-corpus-document": action_delete_corpus_document,
     "import-dictionary-sheet": action_import_dictionary_sheet,
     "export-dictionary-sheet": action_export_dictionary_sheet,
+    "create-review-task": action_create_review_task,
+    "list-review-tasks": action_list_review_tasks,
+    "resolve-review-task": action_resolve_review_task,
+    "apply-review-resolution": action_apply_review_resolution,
     "save-ingestion-spec": action_save_ingestion_spec,
     "list-ingestion-specs": action_list_ingestion_specs,
     "create-corpus-view": action_create_corpus_view,

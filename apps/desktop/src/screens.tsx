@@ -10,9 +10,9 @@ import type {
   ImportTemplate,
   NodeRunSummary,
   OutputBundleId,
-  PipelineDefinition,
-  PipelineRecipeId,
-  PipelineStepId,
+  WorkflowRuntimeProfile,
+  WorkflowRecipeId,
+  WorkflowStepId,
   PageId,
   ProjectManifest,
   RegisteredWorkflowNodeDefinition,
@@ -26,19 +26,22 @@ import type {
 } from "@textflow/shared-types";
 import { sourceProfileImportTemplates, sourceProfiles } from "@textflow/shared-types";
 import type { ImportProjectFilesResponse } from "./bridge/desktopBridge";
+import { ReviewQueuePanel } from "./features/review/ReviewQueuePanel";
+import { coerceReviewTasks } from "./features/review/reviewTypes";
 import { useTaskProgress, useWorkspace } from "./store/workspaceStore";
 import {
   addWorkflowNodeByType,
   autoLayoutWorkflow,
-  buildBlankWorkflowFromPipeline,
-  compilePipelineFromWorkflow,
+  buildBlankWorkflowFromRuntimeProfile,
+  compileRuntimeProfileFromWorkflow,
   createWorkflowEdge,
   normalizeWorkflowGraph,
   removeWorkflowEdge,
   removeWorkflowNodeById,
   resolveActiveWorkflow,
+  resolveWorkflowRuntimeProfile,
   restoreWorkflowDefaultEdges,
-  syncWorkflowFromPipeline,
+  syncWorkflowFromRuntimeProfile,
   updateWorkflowMeta,
   updateWorkflowNode,
   updateWorkflowNodePosition,
@@ -59,6 +62,7 @@ import {
   KeywordPanel,
   LineChart,
   Meta,
+  PaginatedTable,
   Panel,
   ScatterChart,
   StatCard,
@@ -83,7 +87,7 @@ const mappingTargetOptions: FieldMappingRule["target_field"][] = [
   "extra_metadata"
 ];
 
-const pipelineStepMeta: Array<{ id: PipelineStepId; title: string; description: string }> = [
+const workflowStepMeta: Array<{ id: WorkflowStepId; title: string; description: string }> = [
   { id: "ingestion", title: "读取资料", description: "按导入模板识别字段，并拼出主文本。" },
   { id: "cleaning", title: "基础清洗", description: "去掉网页标签、网址、空白和杂乱标点。" },
   { id: "normalization", title: "统一写法", description: "把数字、时间和自定义规则统一成同一种写法。" },
@@ -94,9 +98,9 @@ const pipelineStepMeta: Array<{ id: PipelineStepId; title: string; description: 
   { id: "export", title: "保存结果", description: "写出表格、图表和 HTML 报告。" }
 ];
 
-const mandatoryPipelineSteps: PipelineStepId[] = ["ingestion", "tokenization", "analysis", "export"];
-const optionalPipelineSteps: PipelineStepId[] = ["cleaning", "normalization", "dictionary_application", "filtering"];
-const fixedPipelineOrder = pipelineStepMeta.map((step) => step.id);
+const mandatoryWorkflowSteps: WorkflowStepId[] = ["ingestion", "tokenization", "analysis", "export"];
+const optionalWorkflowSteps: WorkflowStepId[] = ["cleaning", "normalization", "dictionary_application", "filtering"];
+const fixedWorkflowOrder = workflowStepMeta.map((step) => step.id);
 const cleaningToggleItems = [
   ["strip_html", "去 HTML"],
   ["strip_urls", "去 URL"],
@@ -175,7 +179,7 @@ const runScopeModeOptions: Array<{ id: RunScopeDefinition["mode"]; title: string
   { id: "selected_documents", title: "手动点选文档", description: "从项目语料里勾选少量文档做试跑或抽样检查。" }
 ];
 const recipeCards: Array<{
-  id: PipelineRecipeId;
+  id: WorkflowRecipeId;
   title: string;
   description: string;
   output: string;
@@ -243,6 +247,7 @@ const outputBundleCards: Array<{
   }
 ];
 const sampleProjectName = "示例项目 - 学术摘要机构主题";
+const CORPUS_BROWSER_PAGE_SIZE = 60;
 const sampleJourneySteps = [
   "先打开示例项目，在“导入资料”里抽查 3 个来源文件和导入后的文档。",
   "再到“词表规则”看 8 张词表分别在切词、统一写法和套用词表时怎么生效。",
@@ -330,7 +335,7 @@ export const pageMeta: Record<PageId, { title: string; headline: string; tag: st
   home: { title: "开始", headline: "先选一个项目，或新建一个项目", tag: "开始" },
   project: { title: "项目概览", headline: "查看项目规模、来源文件和历史运行", tag: "概览" },
   data: { title: "导入资料", headline: "把文件导入进来，并确认字段对应关系", tag: "导入" },
-  pipeline: { title: "处理与分析", headline: "确认处理步骤，然后开始运行", tag: "处理" },
+  workflow: { title: "处理与分析", headline: "确认处理步骤，然后开始运行", tag: "处理" },
   dictionaries: { title: "词表规则", headline: "维护停用词、同义词和标准词规则", tag: "词表" },
   analysis: { title: "分析详情", headline: "查看词频、共现、YAKE 关键词和 NMF 主题", tag: "分析" },
   results: { title: "结果导出", headline: "查看本次运行，并导出需要的结果", tag: "结果" },
@@ -351,6 +356,13 @@ function cloneTemplate(template: ImportTemplate): ImportTemplate {
 
 function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function projectRuntimeProfile(
+  project: ProjectManifest | null | undefined,
+  workflow?: WorkflowDefinition | null
+): WorkflowRuntimeProfile {
+  return normalizeRuntimeProfileDraft(resolveWorkflowRuntimeProfile(project, workflow));
 }
 
 const dictionaryKindOrder: DictionaryKind[] = [
@@ -542,42 +554,42 @@ function fileNameFromPath(path: string): string {
   return path.split(/[\\/]/).at(-1) ?? path;
 }
 
-function normalizePipelineDraft(pipeline: PipelineDefinition): PipelineDefinition {
-  const enabledOptionalSteps = optionalPipelineSteps.filter((step) => pipeline.enabled_steps.includes(step));
+function normalizeRuntimeProfileDraft(runtimeProfile: WorkflowRuntimeProfile): WorkflowRuntimeProfile {
+  const enabledOptionalSteps = optionalWorkflowSteps.filter((step) => runtimeProfile.enabled_steps.includes(step));
   return {
-    ...pipeline,
+    ...runtimeProfile,
     analysis: {
-      ...pipeline.analysis,
-      topic_model_k: pipeline.analysis.topic_model_k ?? pipeline.analysis.keyword_cluster_k ?? 4
+      ...runtimeProfile.analysis,
+      topic_model_k: runtimeProfile.analysis.topic_model_k ?? runtimeProfile.analysis.keyword_cluster_k ?? 4
     },
     export: {
-      ...pipeline.export,
-      chart_dpi: pipeline.export.chart_dpi ?? 320,
-      watermark_enabled: pipeline.export.watermark_enabled ?? false,
-      watermark_text: pipeline.export.watermark_text ?? "TextFlow Studio"
+      ...runtimeProfile.export,
+      chart_dpi: runtimeProfile.export.chart_dpi ?? 320,
+      watermark_enabled: runtimeProfile.export.watermark_enabled ?? false,
+      watermark_text: runtimeProfile.export.watermark_text ?? "TextFlow Studio"
     },
     run_scope: {
-      mode: pipeline.run_scope?.mode ?? "all_documents",
-      source_values: [...(pipeline.run_scope?.source_values ?? [])],
-      institution_values: [...(pipeline.run_scope?.institution_values ?? [])],
-      category_values: [...(pipeline.run_scope?.category_values ?? [])],
-      year_from: pipeline.run_scope?.year_from ?? null,
-      year_to: pipeline.run_scope?.year_to ?? null,
-      selected_doc_ids: [...(pipeline.run_scope?.selected_doc_ids ?? [])]
+      mode: runtimeProfile.run_scope?.mode ?? "all_documents",
+      source_values: [...(runtimeProfile.run_scope?.source_values ?? [])],
+      institution_values: [...(runtimeProfile.run_scope?.institution_values ?? [])],
+      category_values: [...(runtimeProfile.run_scope?.category_values ?? [])],
+      year_from: runtimeProfile.run_scope?.year_from ?? null,
+      year_to: runtimeProfile.run_scope?.year_to ?? null,
+      selected_doc_ids: [...(runtimeProfile.run_scope?.selected_doc_ids ?? [])]
     },
-    recipe_id: pipeline.recipe_id ?? "standard_analysis",
-    output_bundle_id: pipeline.output_bundle_id ?? "full_report",
-    enabled_steps: [...mandatoryPipelineSteps, ...enabledOptionalSteps],
-    execution_order: [...fixedPipelineOrder]
+    recipe_id: runtimeProfile.recipe_id ?? "standard_analysis",
+    output_bundle_id: runtimeProfile.output_bundle_id ?? "full_report",
+    enabled_steps: [...mandatoryWorkflowSteps, ...enabledOptionalSteps],
+    execution_order: [...fixedWorkflowOrder]
   };
 }
 
-function applyRecipePreset(pipeline: PipelineDefinition, recipeId: PipelineRecipeId): PipelineDefinition {
-  const next = normalizePipelineDraft(deepClone(pipeline));
+function applyRecipePreset(runtimeProfile: WorkflowRuntimeProfile, recipeId: WorkflowRecipeId): WorkflowRuntimeProfile {
+  const next = normalizeRuntimeProfileDraft(deepClone(runtimeProfile));
   next.recipe_id = recipeId;
 
   if (recipeId === "standard_analysis") {
-    next.enabled_steps = [...mandatoryPipelineSteps, ...optionalPipelineSteps];
+    next.enabled_steps = [...mandatoryWorkflowSteps, ...optionalWorkflowSteps];
     next.normalization.convert_traditional_to_simplified = false;
     next.normalization.normalize_time_expr = false;
     next.filtering.min_term_frequency = 1;
@@ -586,11 +598,11 @@ function applyRecipePreset(pipeline: PipelineDefinition, recipeId: PipelineRecip
     next.analysis.topic_model_k = 4;
     next.analysis.keyword_cluster_k = 4;
     next.analysis.document_cluster_k = 4;
-    return normalizePipelineDraft(next);
+    return normalizeRuntimeProfileDraft(next);
   }
 
   if (recipeId === "keyword_topic") {
-    next.enabled_steps = [...mandatoryPipelineSteps, ...optionalPipelineSteps];
+    next.enabled_steps = [...mandatoryWorkflowSteps, ...optionalWorkflowSteps];
     next.normalization.convert_traditional_to_simplified = true;
     next.normalization.normalize_time_expr = true;
     next.filtering.min_term_frequency = 1;
@@ -601,11 +613,11 @@ function applyRecipePreset(pipeline: PipelineDefinition, recipeId: PipelineRecip
     next.analysis.document_cluster_k = 4;
     next.export.export_png = true;
     next.export.export_html_report = true;
-    return normalizePipelineDraft(next);
+    return normalizeRuntimeProfileDraft(next);
   }
 
   if (recipeId === "trend_scan") {
-    next.enabled_steps = [...mandatoryPipelineSteps, "cleaning", "dictionary_application", "filtering"];
+    next.enabled_steps = [...mandatoryWorkflowSteps, "cleaning", "dictionary_application", "filtering"];
     next.normalization.convert_traditional_to_simplified = false;
     next.normalization.normalize_time_expr = false;
     next.analysis.top_n = 120;
@@ -616,14 +628,14 @@ function applyRecipePreset(pipeline: PipelineDefinition, recipeId: PipelineRecip
     next.analysis.topic_model_k = 3;
     next.analysis.keyword_cluster_k = 3;
     next.analysis.document_cluster_k = 3;
-    return normalizePipelineDraft(next);
+    return normalizeRuntimeProfileDraft(next);
   }
 
-  return normalizePipelineDraft(next);
+  return normalizeRuntimeProfileDraft(next);
 }
 
-function applyOutputBundlePreset(pipeline: PipelineDefinition, bundleId: OutputBundleId): PipelineDefinition {
-  const next = normalizePipelineDraft(deepClone(pipeline));
+function applyOutputBundlePreset(runtimeProfile: WorkflowRuntimeProfile, bundleId: OutputBundleId): WorkflowRuntimeProfile {
+  const next = normalizeRuntimeProfileDraft(deepClone(runtimeProfile));
   next.output_bundle_id = bundleId;
 
   if (bundleId === "full_report") {
@@ -664,10 +676,10 @@ function applyOutputBundlePreset(pipeline: PipelineDefinition, bundleId: OutputB
     };
   }
 
-  return normalizePipelineDraft(next);
+  return normalizeRuntimeProfileDraft(next);
 }
 
-function outputBundleSummary(exportParams: PipelineDefinition["export"]): string {
+function outputBundleSummary(exportParams: WorkflowRuntimeProfile["export"]): string {
   const labels: string[] = [];
   if (exportParams.export_csv || exportParams.export_xlsx) {
     labels.push("表格包");
@@ -692,7 +704,7 @@ function countEnabledFlags(values: Record<string, unknown>, keys: readonly (read
   return keys.reduce((count, [key]) => count + (values[key] ? 1 : 0), 0);
 }
 
-function workflowNodeSummary(node: WorkflowNodeInstance, pipeline: PipelineDefinition, runSummary: string): string {
+function workflowNodeSummary(node: WorkflowNodeInstance, runtimeProfile: WorkflowRuntimeProfile, runSummary: string): string {
   const config = node.config ?? {};
   switch (node.node_type) {
     case "corpus_input":
@@ -712,31 +724,31 @@ function workflowNodeSummary(node: WorkflowNodeInstance, pipeline: PipelineDefin
     case "normalize_text":
       return `${countEnabledFlags(config, normalizationToggleItems)} 个统一化开关`;
     case "tokenize":
-      return `${String(config.language_mode ?? pipeline.tokenization.language_mode)} · 最短长度 ${Number(config.min_token_length_before_filter ?? pipeline.tokenization.min_token_length_before_filter)}`;
+      return `${String(config.language_mode ?? runtimeProfile.tokenization.language_mode)} · 最短长度 ${Number(config.min_token_length_before_filter ?? runtimeProfile.tokenization.min_token_length_before_filter)}`;
     case "apply_dictionary_rules":
       return `${countEnabledFlags(config, dictionaryToggleItems)} 类词表规则`;
     case "filter_terms":
-      return `长度 >= ${Number(config.min_token_length ?? pipeline.filtering.min_token_length)} · 词频 >= ${Number(config.min_term_frequency ?? pipeline.filtering.min_term_frequency)}`;
+      return `长度 >= ${Number(config.min_token_length ?? runtimeProfile.filtering.min_token_length)} · 词频 >= ${Number(config.min_term_frequency ?? runtimeProfile.filtering.min_term_frequency)}`;
     case "frequency_statistics":
-      return `词频 Top ${Number(config.top_n ?? pipeline.analysis.top_n)}`;
+      return `词频 Top ${Number(config.top_n ?? runtimeProfile.analysis.top_n)}`;
     case "term_year_analysis":
       return "输出词项年份变化";
     case "cooccurrence_analysis":
-      return `窗口 ${Number(config.cooccurrence_window ?? pipeline.analysis.cooccurrence_window)} · 最小共现 ${Number(config.min_cooccurrence ?? pipeline.analysis.min_cooccurrence)}`;
+      return `窗口 ${Number(config.cooccurrence_window ?? runtimeProfile.analysis.cooccurrence_window)} · 最小共现 ${Number(config.min_cooccurrence ?? runtimeProfile.analysis.min_cooccurrence)}`;
     case "keyword_extraction":
-      return `文档 ${Number(config.top_k_per_doc ?? pipeline.analysis.top_k_per_doc)} · 项目 ${Number(config.top_k_project ?? pipeline.analysis.top_k_project)}`;
+      return `文档 ${Number(config.top_k_per_doc ?? runtimeProfile.analysis.top_k_per_doc)} · 项目 ${Number(config.top_k_project ?? runtimeProfile.analysis.top_k_project)}`;
     case "keyword_clustering":
-      return `聚类 ${Number(config.keyword_cluster_k ?? pipeline.analysis.keyword_cluster_k)} · 主题 ${Number(config.topic_model_k ?? pipeline.analysis.topic_model_k)}`;
+      return `聚类 ${Number(config.keyword_cluster_k ?? runtimeProfile.analysis.keyword_cluster_k)} · 主题 ${Number(config.topic_model_k ?? runtimeProfile.analysis.topic_model_k)}`;
     case "institution_topic_analysis":
-      return `主题 ${Number(config.topic_model_k ?? pipeline.analysis.topic_model_k)}`;
+      return `主题 ${Number(config.topic_model_k ?? runtimeProfile.analysis.topic_model_k)}`;
     case "save_csv":
       return `CSV · ${String(config.file_prefix ?? "tables")}`;
     case "save_xlsx":
       return `XLSX · ${String(config.file_prefix ?? "tables")}`;
     case "save_png":
-      return `PNG · ${Number(config.chart_dpi ?? pipeline.export.chart_dpi)} DPI`;
+      return `PNG · ${Number(config.chart_dpi ?? runtimeProfile.export.chart_dpi)} DPI`;
     case "save_html_report":
-      return `${Boolean(config.include_audit ?? pipeline.export.include_audit) ? "含审计" : "不含审计"} · ${String(config.file_prefix ?? "report")}`;
+      return `${Boolean(config.include_audit ?? runtimeProfile.export.include_audit) ? "含审计" : "不含审计"} · ${String(config.file_prefix ?? "report")}`;
     case "note":
       return String(config.text ?? "画布备注");
     case "group":
@@ -748,9 +760,9 @@ function workflowNodeSummary(node: WorkflowNodeInstance, pipeline: PipelineDefin
     case "project_dictionary_set":
       return "旧版项目词表入口";
     case "analyze_corpus":
-      return `Top ${pipeline.analysis.top_n} · 主题 ${pipeline.analysis.topic_model_k} · 聚类 ${pipeline.analysis.keyword_cluster_k}`;
+      return `Top ${runtimeProfile.analysis.top_n} · 主题 ${runtimeProfile.analysis.topic_model_k} · 聚类 ${runtimeProfile.analysis.keyword_cluster_k}`;
     case "export_results":
-      return outputBundleSummary(pipeline.export);
+      return outputBundleSummary(runtimeProfile.export);
     default:
       return "等待配置";
   }
@@ -1221,8 +1233,8 @@ export const PageView = memo(function PageView({ page }: { page: PageId }) {
       return <ProjectPage />;
     case "data":
       return <DataPage />;
-    case "pipeline":
-      return <WorkflowPipelinePage />;
+    case "workflow":
+      return <WorkflowEditorPage />;
     case "dictionaries":
       return <DictionariesPage />;
     case "analysis":
@@ -1443,7 +1455,7 @@ function HomePage() {
                 <button type="button" className="toolbar-button ghost" onClick={() => void openProjectAndGo(sampleProject.id, "dictionaries")} disabled={loading}>
                   打开示例并看词表
                 </button>
-                <button type="button" className="toolbar-button ghost" onClick={() => void openProjectAndGo(sampleProject.id, "pipeline")} disabled={loading}>
+                <button type="button" className="toolbar-button ghost" onClick={() => void openProjectAndGo(sampleProject.id, "workflow")} disabled={loading}>
                   打开示例并看流程
                 </button>
               </div>
@@ -1552,6 +1564,8 @@ function DataPage() {
   } = useWorkspace();
   const project = snapshot.current_project;
   const [search, setSearch] = useState("");
+  const [searchMode, setSearchMode] = useState<"metadata" | "fulltext">("metadata");
+  const [documentPage, setDocumentPage] = useState(1);
   const [filePathsText, setFilePathsText] = useState("");
   const [draftTemplate, setDraftTemplate] = useState<ImportTemplate | null>(project ? cloneTemplate(project.import_template) : null);
   const [lastImportResult, setLastImportResult] = useState<ImportProjectFilesResponse | null>(null);
@@ -1569,6 +1583,8 @@ function DataPage() {
     setSelectedDocId(snapshot.corpus[0]?.doc_id ?? null);
     setDraftDocument(snapshot.corpus[0] ? cloneCorpusItem(snapshot.corpus[0]) : null);
     setPreviewMode("raw_text");
+    setSearchMode("metadata");
+    setDocumentPage(1);
   }, [project?.id, project?.updated_at]);
 
   const documents = useMemo(() => {
@@ -1577,11 +1593,28 @@ function DataPage() {
       return snapshot.corpus;
     }
     return snapshot.corpus.filter((item) =>
-      [item.title, item.raw_text, item.institution, item.source, item.category_or_tag]
+      [
+        item.title,
+        item.institution,
+        item.source,
+        item.category_or_tag,
+        ...(searchMode === "fulltext" ? [item.raw_text] : [])
+      ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(q))
     );
-  }, [deferredSearch, snapshot.corpus]);
+  }, [deferredSearch, searchMode, snapshot.corpus]);
+
+  useEffect(() => {
+    setDocumentPage(1);
+  }, [documents.length, searchMode]);
+
+  const totalDocumentPages = Math.max(1, Math.ceil(documents.length / CORPUS_BROWSER_PAGE_SIZE));
+  const safeDocumentPage = Math.min(documentPage, totalDocumentPages);
+  const visibleDocuments = useMemo(
+    () => documents.slice((safeDocumentPage - 1) * CORPUS_BROWSER_PAGE_SIZE, safeDocumentPage * CORPUS_BROWSER_PAGE_SIZE),
+    [documents, safeDocumentPage]
+  );
 
   if (!project || !draftTemplate) {
     return <EmptyState title="暂无语料" body="请先创建项目，再导入文本或样例数据。" />;
@@ -1620,6 +1653,9 @@ function DataPage() {
     await saveProject({
       ...project,
       import_template: draftTemplate
+    }, {
+      refresh: false,
+      actionLabel: "保存导入模板"
     });
   };
 
@@ -1888,19 +1924,30 @@ function DataPage() {
         ) : null}
       </Panel>
 
-      <div className="corpus-review-grid">
+        <div className="corpus-review-grid">
         <Panel
           title="已导入语料库"
           actions={
-            <label className="search-box">
-              <span>检索标题 / 文本 / 元数据</span>
-              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="例如：智能制造 / patent / 复旦大学" />
-            </label>
+            <div className="button-row">
+              <label className="search-box">
+                <span>{searchMode === "fulltext" ? "检索标题 / 正文 / 元数据" : "检索标题 / 元数据"}</span>
+                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="例如：智能制造 / patent / 复旦大学" />
+              </label>
+              <div className="tab-row">
+                <button type="button" className={`tab-button ${searchMode === "metadata" ? "is-active" : ""}`} onClick={() => setSearchMode("metadata")}>
+                  元数据优先
+                </button>
+                <button type="button" className={`tab-button ${searchMode === "fulltext" ? "is-active" : ""}`} onClick={() => setSearchMode("fulltext")}>
+                  全文检索
+                </button>
+              </div>
+            </div>
           }
         >
           {documents.length ? (
-            <div className="corpus-browser">
-              {documents.map((item) => (
+            <>
+              <div className="corpus-browser">
+                {visibleDocuments.map((item) => (
                 <button
                   key={item.doc_id}
                   type="button"
@@ -1914,8 +1961,21 @@ function DataPage() {
                   <p className="muted">{item.institution ?? item.source ?? "未填写来源信息"}</p>
                   <p className="body-copy">{previewSummary(item)}</p>
                 </button>
-              ))}
-            </div>
+                ))}
+              </div>
+              <div className="button-row dictionary-page-nav">
+                <span className="helper-note">
+                  当前显示第 {safeDocumentPage} / {totalDocumentPages} 页，
+                  第 {documents.length ? (safeDocumentPage - 1) * CORPUS_BROWSER_PAGE_SIZE + 1 : 0} - {Math.min(safeDocumentPage * CORPUS_BROWSER_PAGE_SIZE, documents.length)} 条。
+                </span>
+                <button type="button" className="toolbar-button ghost" onClick={() => setDocumentPage((current) => Math.max(1, current - 1))} disabled={safeDocumentPage <= 1}>
+                  上一页
+                </button>
+                <button type="button" className="toolbar-button ghost" onClick={() => setDocumentPage((current) => Math.min(totalDocumentPages, current + 1))} disabled={safeDocumentPage >= totalDocumentPages}>
+                  下一页
+                </button>
+              </div>
+            </>
           ) : (
             <EmptyState title="没有匹配文档" body="换个关键词试试，或先导入文件。" />
           )}
@@ -2022,1358 +2082,11 @@ function DataPage() {
   );
 }
 
-function PipelinePageLegacyOld() {
+function WorkflowEditorPage() {
   const {
     state: { snapshot, loading },
     saveProject,
-    runPipeline
-  } = useWorkspace();
-  const project = snapshot.current_project;
-  const [draftPipeline, setDraftPipeline] = useState<PipelineDefinition | null>(
-    project ? normalizePipelineDraft(deepClone(project.pipeline)) : null
-  );
-
-  useEffect(() => {
-    setDraftPipeline(project ? normalizePipelineDraft(deepClone(project.pipeline)) : null);
-  }, [project?.id, project?.updated_at]);
-
-  if (!project || !draftPipeline) {
-    return <EmptyState title="流程配置待初始化" body="请先建立项目工作区。" />;
-  }
-
-  const latestRun = project.run_history.at(-1);
-  const visibleConfigSteps = fixedPipelineOrder.filter((step) =>
-    mandatoryPipelineSteps.includes(step) || draftPipeline.enabled_steps.includes(step)
-  );
-  const stepIsEnabled = (step: PipelineStepId) => mandatoryPipelineSteps.includes(step) || draftPipeline.enabled_steps.includes(step);
-  const updateSection = <K extends "cleaning" | "normalization" | "tokenization" | "dictionary" | "filtering" | "analysis" | "export">(
-    section: K,
-    patch: Partial<PipelineDefinition[K]>
-  ) => {
-    setDraftPipeline({
-      ...draftPipeline,
-      [section]: {
-        ...draftPipeline[section],
-        ...patch
-      }
-    });
-  };
-  const renderBooleanToggles = (
-    section: "cleaning" | "normalization" | "tokenization" | "dictionary" | "filtering" | "export",
-    items: readonly (readonly [string, string])[]
-  ) => {
-    const values = draftPipeline[section] as unknown as Record<string, unknown>;
-    return (
-      <div className="toggle-grid">
-        {items.map(([key, label]) => (
-          <label key={key} className="switch-row">
-            <input
-              type="checkbox"
-              checked={Boolean(values[key])}
-              onChange={(event) => updateSection(section, { [key]: event.target.checked } as Partial<PipelineDefinition[typeof section]>)}
-              disabled={loading}
-            />
-            <span>{label}</span>
-          </label>
-        ))}
-      </div>
-    );
-  };
-
-  const toggleOptionalStep = (step: PipelineStepId) => {
-    if (!optionalPipelineSteps.includes(step)) {
-      return;
-    }
-    const nextEnabledSteps = draftPipeline.enabled_steps.includes(step)
-      ? draftPipeline.enabled_steps.filter((item) => item !== step)
-      : [...draftPipeline.enabled_steps, step];
-    setDraftPipeline(normalizePipelineDraft({ ...draftPipeline, enabled_steps: nextEnabledSteps }));
-  };
-
-  const savePipeline = async () => saveProject({ ...project, pipeline: normalizePipelineDraft(draftPipeline) });
-  const runCurrentPipeline = async () => {
-    const saved = await savePipeline();
-    if (saved) {
-      await runPipeline();
-    }
-  };
-
-  const renderStepPanel = (stepId: PipelineStepId) => {
-    if (stepId === "ingestion") {
-      return <Panel title="读取资料"><p className="body-copy">字段映射和主文本拼接在“导入资料”页设置。这一步固定执行，用来读取当前项目里的语料。</p></Panel>;
-    }
-    if (stepId === "cleaning") {
-      return <Panel title="基础清洗">{renderBooleanToggles("cleaning", cleaningToggleItems)}</Panel>;
-    }
-    if (stepId === "normalization") {
-      return (
-        <Panel title="统一写法">
-          {renderBooleanToggles("normalization", normalizationToggleItems)}
-          <label className="field">
-            <span>Regex 优先策略</span>
-            <select
-              value={draftPipeline.normalization.regex_rule_priority}
-              onChange={(event) => updateSection("normalization", { regex_rule_priority: event.target.value as PipelineDefinition["normalization"]["regex_rule_priority"] })}
-              disabled={loading}
-            >
-              <option value="rule_order">按规则顺序</option>
-              <option value="first_match">命中首条后停止</option>
-            </select>
-          </label>
-        </Panel>
-      );
-    }
-    if (stepId === "tokenization") {
-      return (
-        <Panel title="切词">
-          <div className="settings-grid">
-            <label className="field">
-              <span>语言模式</span>
-              <select
-                value={draftPipeline.tokenization.language_mode}
-                onChange={(event) => updateSection("tokenization", { language_mode: event.target.value as PipelineDefinition["tokenization"]["language_mode"] })}
-                disabled={loading}
-              >
-                <option value="auto">自动判断</option>
-                <option value="zh">中文</option>
-                <option value="en">英文</option>
-                <option value="mixed">中英混合</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>切词前最短长度</span>
-              <input type="number" value={draftPipeline.tokenization.min_token_length_before_filter} onChange={(event) => updateSection("tokenization", { min_token_length_before_filter: Number(event.target.value) })} disabled={loading} />
-            </label>
-          </div>
-          {renderBooleanToggles("tokenization", tokenizationToggleItems)}
-        </Panel>
-      );
-    }
-    if (stepId === "dictionary_application") {
-      return (
-        <Panel title="套用词表">
-          {renderBooleanToggles("dictionary", dictionaryToggleItems)}
-          <label className="field">
-            <span>冲突处理</span>
-            <select
-              value={draftPipeline.dictionary.conflict_resolution}
-              onChange={(event) => updateSection("dictionary", { conflict_resolution: event.target.value as PipelineDefinition["dictionary"]["conflict_resolution"] })}
-              disabled={loading}
-            >
-              <option value="priority">按词表优先级</option>
-              <option value="first_match">命中首条后停止</option>
-            </select>
-          </label>
-        </Panel>
-      );
-    }
-    if (stepId === "filtering") {
-      return (
-        <Panel title="过滤噪声">
-          {renderBooleanToggles("filtering", filteringToggleItems)}
-          <div className="settings-grid">
-            <label className="field">
-              <span>最短 token 长度</span>
-              <input type="number" value={draftPipeline.filtering.min_token_length} onChange={(event) => updateSection("filtering", { min_token_length: Number(event.target.value) })} disabled={loading} />
-            </label>
-            <label className="field">
-              <span>最小词频</span>
-              <input type="number" value={draftPipeline.filtering.min_term_frequency} onChange={(event) => updateSection("filtering", { min_term_frequency: Number(event.target.value) })} disabled={loading} />
-            </label>
-          </div>
-        </Panel>
-      );
-    }
-    if (stepId === "analysis") {
-      return (
-        <Panel title="生成分析">
-          <div className="analysis-method-grid">
-            {analysisMethodCards.map((card) => (
-              <article className="analysis-method-card" key={card.title}>
-                <div className="run-head">
-                  <strong>{card.title}</strong>
-                  <span className="pill">{card.output}</span>
-                </div>
-                <p className="body-copy">{card.description}</p>
-                <p className="muted">对应参数：{card.params.join("、")}</p>
-              </article>
-            ))}
-          </div>
-
-          <div className="analysis-config-list">
-            <section className="analysis-config-group">
-              <div className="analysis-config-head">
-                <h4>词频与共现</h4>
-                <p className="body-copy">这组参数控制高频词数量和词之间“算作一起出现”的窗口范围。</p>
-              </div>
-              <div className="settings-grid">
-                <label className="field">
-                  <span>高频词 Top N</span>
-                  <input type="number" value={draftPipeline.analysis.top_n} onChange={(event) => updateSection("analysis", { top_n: Number(event.target.value) })} disabled={loading} />
-                  <small>控制词频表和概览卡片里最多展示多少个高频词。</small>
-                </label>
-                <label className="field">
-                  <span>共现窗口</span>
-                  <input type="number" value={draftPipeline.analysis.cooccurrence_window} onChange={(event) => updateSection("analysis", { cooccurrence_window: Number(event.target.value) })} disabled={loading} />
-                  <small>一个词周围向前向后看多少个词，决定“共现”判断范围。</small>
-                </label>
-                <label className="field">
-                  <span>最小共现次数</span>
-                  <input type="number" value={draftPipeline.analysis.min_cooccurrence} onChange={(event) => updateSection("analysis", { min_cooccurrence: Number(event.target.value) })} disabled={loading} />
-                  <small>低于这个次数的词对会被视为太偶然，不进入结果表。</small>
-                </label>
-              </div>
-            </section>
-
-            <section className="analysis-config-group">
-              <div className="analysis-config-head">
-                <h4>TF-IDF 特征词</h4>
-                <p className="body-copy">这是后续 YAKE 关键词、主题建模和关键词聚类的基础词项池。</p>
-              </div>
-              <div className="settings-grid">
-                <label className="field">
-                  <span>特征词数量</span>
-                  <input
-                    value={String(draftPipeline.analysis.feature_term_count)}
-                    onChange={(event) =>
-                      updateSection("analysis", {
-                        feature_term_count: event.target.value.trim().toLowerCase() === "all" ? "all" : Number(event.target.value)
-                      })
-                    }
-                    placeholder="all 或数字"
-                    disabled={loading}
-                  />
-                  <small>数量越大，覆盖面更广；数量越小，聚类和主题会更集中。</small>
-                </label>
-              </div>
-            </section>
-
-            <section className="analysis-config-group">
-              <div className="analysis-config-head">
-                <h4>YAKE 关键词</h4>
-                <p className="body-copy">YAKE 会按每篇文档抽取关键词，再汇总出项目级关键词榜。</p>
-              </div>
-              <div className="settings-grid">
-                <label className="field">
-                  <span>每篇文档关键词数</span>
-                  <input type="number" value={draftPipeline.analysis.top_k_per_doc} onChange={(event) => updateSection("analysis", { top_k_per_doc: Number(event.target.value) })} disabled={loading} />
-                  <small>每篇文档最多保留多少个关键词，影响文档详情和机构 × 关键词统计。</small>
-                </label>
-                <label className="field">
-                  <span>项目级关键词数</span>
-                  <input type="number" value={draftPipeline.analysis.top_k_project} onChange={(event) => updateSection("analysis", { top_k_project: Number(event.target.value) })} disabled={loading} />
-                  <small>汇总全项目时最多保留多少个关键词，适合控制结果页长度。</small>
-                </label>
-              </div>
-            </section>
-
-            <section className="analysis-config-group">
-              <div className="analysis-config-head">
-                <h4>NMF 主题与聚类</h4>
-                <p className="body-copy">NMF 用来生成“机构 × 主题”，关键词聚类和文档聚类则负责看词和文档的分组结构。</p>
-              </div>
-              <div className="settings-grid">
-                <label className="field">
-                  <span>主题数量</span>
-                  <input type="number" value={draftPipeline.analysis.topic_model_k} onChange={(event) => updateSection("analysis", { topic_model_k: Number(event.target.value) })} disabled={loading} />
-                  <small>NMF 最多分出多少个主题，建议从 4 到 8 开始尝试。</small>
-                </label>
-                <label className="field">
-                  <span>关键词聚类数</span>
-                  <input type="number" value={draftPipeline.analysis.keyword_cluster_k} onChange={(event) => updateSection("analysis", { keyword_cluster_k: Number(event.target.value) })} disabled={loading} />
-                  <small>把特征词分成几组，适合观察相近关键词的主题簇。</small>
-                </label>
-                <label className="field">
-                  <span>文档聚类数</span>
-                  <input type="number" value={draftPipeline.analysis.document_cluster_k} onChange={(event) => updateSection("analysis", { document_cluster_k: Number(event.target.value) })} disabled={loading} />
-                  <small>决定散点图里会把文档分成多少组，适合粗看语料分布。</small>
-                </label>
-              </div>
-            </section>
-          </div>
-        </Panel>
-      );
-    }
-    return (
-      <Panel title="保存结果">
-        {renderBooleanToggles("export", exportToggleItems)}
-        <div className="settings-grid">
-          <label className="field">
-            <span>PNG 分辨率（DPI）</span>
-            <input
-              type="number"
-              value={draftPipeline.export.chart_dpi}
-              onChange={(event) => updateSection("export", { chart_dpi: Number(event.target.value) })}
-              disabled={loading}
-            />
-            <small>建议 240 到 400。默认 320，会输出适合汇报和打印的高清 PNG。</small>
-          </label>
-          <label className="field">
-            <span>水印文字</span>
-            <input
-              value={draftPipeline.export.watermark_text}
-              onChange={(event) => updateSection("export", { watermark_text: event.target.value })}
-              disabled={loading || !draftPipeline.export.watermark_enabled}
-              placeholder="例如 TextFlow Studio"
-            />
-            <small>只有打开“导出水印”后才会写到图表右下角。</small>
-          </label>
-        </div>
-        <label className="switch-row">
-          <input
-            type="checkbox"
-            checked={draftPipeline.export.watermark_enabled}
-            onChange={(event) => updateSection("export", { watermark_enabled: event.target.checked })}
-            disabled={loading}
-          />
-          <span>导出水印</span>
-        </label>
-        <p className="body-copy">PNG 图表会同时生成高频词柱状图、项目关键词图、关键词词云、机构主题热力图和文档聚类图，并自动适配中文字体。</p>
-      </Panel>
-    );
-  };
-
-  return (
-    <>
-      <Panel
-        title="第 4 步：确认处理流程"
-        actions={<div className="button-row"><button type="button" className="toolbar-button" onClick={() => void savePipeline()} disabled={loading}>保存当前设置</button><button type="button" className="toolbar-button accent" onClick={() => void runCurrentPipeline()} disabled={loading}>保存并开始处理</button></div>}
-      >
-        <div className="pipeline-step-list">
-          {pipelineStepMeta.map((step, index) => {
-            const mandatory = mandatoryPipelineSteps.includes(step.id);
-            const enabled = stepIsEnabled(step.id);
-            return (
-              <article className={`pipeline-step-card ${enabled ? "is-active" : "is-muted"}`} key={step.id}>
-                <div className="pipeline-step-main">
-                  <div className="step-index">0{index + 1}</div>
-                  <div>
-                    <div className="run-head"><h4>{step.title}</h4><span className="pill">{mandatory ? "固定执行" : enabled ? "已启用" : "已跳过"}</span></div>
-                    <p>{step.description}</p>
-                  </div>
-                </div>
-                {!mandatory ? <label className="switch-row compact"><input type="checkbox" checked={enabled} onChange={() => toggleOptionalStep(step.id)} disabled={loading} /><span>{enabled ? "保留这一步" : "跳过这一步"}</span></label> : <span className="muted">这一步固定执行，不再开放开关。</span>}
-              </article>
-            );
-          })}
-        </div>
-      </Panel>
-
-      <div className="two-column">
-        <Panel title="本次会执行的步骤">
-          <ul className="feature-list">
-            {visibleConfigSteps.map((stepId, index) => {
-              const step = pipelineStepMeta.find((item) => item.id === stepId);
-              return step ? <li key={stepId}>第 {index + 1} 步：{step.title}</li> : null;
-            })}
-          </ul>
-          <p className="body-copy">读取资料、切词、生成分析和保存结果是固定主流程，只开放真正需要控制的可选步骤。</p>
-        </Panel>
-        <Panel title="最近一次运行">
-          <ul className="feature-list">
-            {latestRun ? latestRun.artifacts.map((artifact) => <li key={artifact.step}>{artifact.step}: {artifact.output_files.join(", ")} ({artifact.record_count} 条)</li>) : <li>还没有运行记录，保存后点击“保存并开始处理”。</li>}
-          </ul>
-        </Panel>
-      </div>
-
-      <div className="pipeline-config-list">
-        {visibleConfigSteps.map((stepId) => <div key={stepId}>{renderStepPanel(stepId)}</div>)}
-      </div>
-    </>
-  );
-}
-
-function LegacyPipelinePageArchive() {
-  const {
-    state: { snapshot, loading },
-    saveProject,
-    runPipeline
-  } = useWorkspace();
-  const project = snapshot.current_project;
-  const [draftPipeline, setDraftPipeline] = useState<PipelineDefinition | null>(project ? deepClone(project.pipeline) : null);
-
-  useEffect(() => {
-    setDraftPipeline(project ? deepClone(project.pipeline) : null);
-  }, [project?.id, project?.updated_at]);
-
-  if (!project || !draftPipeline) {
-    return <EmptyState title="流程配置待初始化" body="请先建立项目工作区。" />;
-  }
-  const latestRun = project.run_history.at(-1);
-
-  const savePipeline = async () => {
-    return saveProject({
-      ...project,
-      pipeline: draftPipeline
-    });
-  };
-
-  const toggleStep = (step: PipelineStepId) => {
-    setDraftPipeline((current) => {
-      if (!current) {
-        return current;
-      }
-      const enabled = current.enabled_steps.includes(step);
-      const nextEnabledSteps = enabled
-        ? current.enabled_steps.filter((item) => item !== step)
-        : [...current.enabled_steps, step];
-      const nextExecutionOrder = current.execution_order.filter((item) => nextEnabledSteps.includes(item));
-      for (const item of nextEnabledSteps) {
-        if (!nextExecutionOrder.includes(item)) {
-          nextExecutionOrder.push(item);
-        }
-      }
-      return {
-        ...current,
-        enabled_steps: nextEnabledSteps,
-        execution_order: nextExecutionOrder
-      };
-    });
-  };
-
-  const moveStep = (step: PipelineStepId, direction: "up" | "down") => {
-    setDraftPipeline((current) => {
-      if (!current) {
-        return current;
-      }
-      const currentIndex = current.execution_order.indexOf(step);
-      if (currentIndex < 0) {
-        return current;
-      }
-      const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
-      if (targetIndex < 0 || targetIndex >= current.execution_order.length) {
-        return current;
-      }
-      const nextExecutionOrder = [...current.execution_order];
-      [nextExecutionOrder[currentIndex], nextExecutionOrder[targetIndex]] = [
-        nextExecutionOrder[targetIndex],
-        nextExecutionOrder[currentIndex]
-      ];
-      return {
-        ...current,
-        execution_order: nextExecutionOrder
-      };
-    });
-  };
-
-  const runCurrentPipeline = async () => {
-    const saved = await savePipeline();
-    if (!saved) {
-      return;
-    }
-    await runPipeline();
-  };
-
-  return (
-    <>
-      <Panel
-        title="第 4 步：开始处理"
-        actions={
-          <div className="button-row">
-            <button type="button" className="toolbar-button" onClick={() => void savePipeline()} disabled={loading}>
-              保存当前设置
-            </button>
-            <button type="button" className="toolbar-button accent" onClick={() => void runCurrentPipeline()} disabled={loading}>
-              保存并开始处理
-            </button>
-          </div>
-        }
-      >
-        <div className="step-grid">
-          {pipelineStepMeta.map((step, index) => (
-            <article className="step-card" key={step.id}>
-              <div className="step-index">0{index + 1}</div>
-              <h4>{step.title}</h4>
-              <p>{step.description}</p>
-              <span className="pill">{draftPipeline.enabled_steps.includes(step.id) ? "已启用" : "已禁用"}</span>
-            </article>
-          ))}
-        </div>
-      </Panel>
-
-      <div className="two-column">
-        <Panel title="处理步骤">
-          <div className="step-toggle-list">
-            {pipelineStepMeta.map((step) => {
-              const orderIndex = draftPipeline.execution_order.indexOf(step.id);
-              const enabled = draftPipeline.enabled_steps.includes(step.id);
-              return (
-                <div className="step-toggle-row" key={step.id}>
-                  <label className="switch-row">
-                    <input type="checkbox" checked={enabled} onChange={() => toggleStep(step.id)} disabled={loading} />
-                    <span>{step.title}</span>
-                  </label>
-                  <div className="button-row">
-                    <span className="pill">{enabled ? `#${orderIndex + 1}` : "off"}</span>
-                    <button
-                      type="button"
-                      className="toolbar-button ghost compact"
-                      onClick={() => moveStep(step.id, "up")}
-                      disabled={loading || !enabled || orderIndex <= 0}
-                    >
-                      上移
-                    </button>
-                    <button
-                      type="button"
-                      className="toolbar-button ghost compact"
-                      onClick={() => moveStep(step.id, "down")}
-                      disabled={loading || !enabled || orderIndex < 0 || orderIndex >= draftPipeline.execution_order.length - 1}
-                    >
-                      下移
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Panel>
-        <Panel title="高级参数">
-          <pre className="code-box">{JSON.stringify(draftPipeline, null, 2)}</pre>
-        </Panel>
-        <Panel title="最近一次运行">
-          <ul className="feature-list">
-            {latestRun ? (
-              latestRun.artifacts.map((artifact) => (
-                <li key={artifact.step}>
-                  {artifact.step}: {artifact.output_files.join(", ")} ({artifact.record_count} 条)
-                </li>
-              ))
-            ) : (
-              <li>还没有运行记录，保存后点击“运行当前流程”。</li>
-            )}
-          </ul>
-        </Panel>
-      </div>
-
-      <div className="two-column">
-        <Panel title="清洗与标准化">
-          <div className="toggle-grid">
-            {[
-              ["strip_html", "去 HTML"],
-              ["strip_urls", "去 URL"],
-              ["strip_email", "去邮箱"],
-              ["strip_phone", "去手机号"],
-              ["normalize_whitespace", "空白归一"],
-              ["normalize_punctuation", "标点统一"],
-              ["full_half_width_normalize", "全半角归一"],
-              ["lowercase_english", "英文小写"],
-              ["remove_emoji", "去表情"],
-              ["remove_special_chars", "去特殊字符"]
-            ].map(([key, label]) => (
-              <label key={key} className="switch-row">
-                <input
-                  type="checkbox"
-                  checked={draftPipeline.cleaning[key as keyof typeof draftPipeline.cleaning]}
-                  onChange={(event) =>
-                    setDraftPipeline({
-                      ...draftPipeline,
-                      cleaning: {
-                        ...draftPipeline.cleaning,
-                        [key]: event.target.checked
-                      }
-                    })
-                  }
-                  disabled={loading}
-                />
-                <span>{label}</span>
-              </label>
-            ))}
-          </div>
-          <div className="toggle-grid">
-            {[
-              ["convert_traditional_to_simplified", "繁简转换"],
-              ["normalize_numbers", "数字归一"],
-              ["normalize_time_expr", "时间表达归一"],
-              ["apply_regex_rules", "应用 Regex 规则"]
-            ].map(([key, label]) => (
-              <label key={key} className="switch-row">
-                <input
-                  type="checkbox"
-                  checked={draftPipeline.normalization[key as keyof typeof draftPipeline.normalization] as boolean}
-                  onChange={(event) =>
-                    setDraftPipeline({
-                      ...draftPipeline,
-                      normalization: {
-                        ...draftPipeline.normalization,
-                        [key]: event.target.checked
-                      }
-                    })
-                  }
-                  disabled={loading}
-                />
-                <span>{label}</span>
-              </label>
-            ))}
-          </div>
-          <label className="field">
-            <span>Regex 优先策略</span>
-            <select
-              value={draftPipeline.normalization.regex_rule_priority}
-              onChange={(event) =>
-                setDraftPipeline({
-                  ...draftPipeline,
-                  normalization: {
-                    ...draftPipeline.normalization,
-                    regex_rule_priority: event.target.value as PipelineDefinition["normalization"]["regex_rule_priority"]
-                  }
-                })
-              }
-              disabled={loading}
-            >
-              <option value="rule_order">按规则顺序</option>
-              <option value="first_match">命中首条后停止</option>
-            </select>
-          </label>
-        </Panel>
-
-        <Panel title="切词、过滤与分析">
-          <div className="toggle-grid">
-            {[
-              ["use_custom_lexicon", "使用自定义词典"],
-              ["use_phrase_lexicon", "使用短语词典"],
-              ["preserve_domain_phrases", "保留领域短语"],
-              ["split_hyphenated_terms", "拆分连字符"],
-              ["split_slash_terms", "拆分斜杠词"],
-              ["normalize_camel_case", "拆分 camelCase"],
-              ["keep_original_order", "保留原始顺序"]
-            ].map(([key, label]) => (
-              <label key={key} className="switch-row">
-                <input
-                  type="checkbox"
-                  checked={draftPipeline.tokenization[key as keyof typeof draftPipeline.tokenization] as boolean}
-                  onChange={(event) =>
-                    setDraftPipeline({
-                      ...draftPipeline,
-                      tokenization: {
-                        ...draftPipeline.tokenization,
-                        [key]: event.target.checked
-                      }
-                    })
-                  }
-                  disabled={loading}
-                />
-                <span>{label}</span>
-              </label>
-            ))}
-          </div>
-          <div className="toggle-grid">
-            {[
-              ["apply_standard_terms", "应用标准词"],
-              ["apply_synonym_map", "应用同义词"],
-              ["apply_near_synonym_map", "应用近义词"],
-              ["apply_stopwords", "应用停用词"],
-              ["apply_exclusion_terms", "应用排除词"],
-              ["filter_numeric_tokens", "过滤纯数字词"],
-              ["keep_single_char_important_terms", "保留重要单字词"],
-              ["filter_by_pos", "尝试按词性过滤"],
-              ["export_csv", "导出 CSV"],
-              ["export_xlsx", "导出 XLSX"],
-              ["export_png", "导出 PNG"],
-              ["export_html_report", "导出 HTML 报告"],
-              ["include_audit", "导出审计表"]
-            ].map(([key, label]) => {
-              const collection =
-                key in draftPipeline.dictionary
-                  ? "dictionary"
-                  : key in draftPipeline.filtering
-                    ? "filtering"
-                    : "export";
-              const checked = draftPipeline[collection][key as keyof (typeof draftPipeline)[typeof collection]] as boolean;
-              return (
-                <label key={key} className="switch-row">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(event) =>
-                      setDraftPipeline({
-                        ...draftPipeline,
-                        [collection]: {
-                          ...draftPipeline[collection],
-                          [key]: event.target.checked
-                        }
-                      })
-                    }
-                    disabled={loading}
-                  />
-                  <span>{label}</span>
-                </label>
-              );
-            })}
-          </div>
-          <div className="settings-grid">
-            <label className="field">
-              <span>切词前最短长度</span>
-              <input
-                type="number"
-                value={draftPipeline.tokenization.min_token_length_before_filter}
-                onChange={(event) =>
-                  setDraftPipeline({
-                    ...draftPipeline,
-                    tokenization: {
-                      ...draftPipeline.tokenization,
-                      min_token_length_before_filter: Number(event.target.value)
-                    }
-                  })
-                }
-                disabled={loading}
-              />
-            </label>
-            <label className="field">
-              <span>最短 token 长度</span>
-              <input
-                type="number"
-                value={draftPipeline.filtering.min_token_length}
-                onChange={(event) =>
-                  setDraftPipeline({
-                    ...draftPipeline,
-                    filtering: {
-                      ...draftPipeline.filtering,
-                      min_token_length: Number(event.target.value)
-                    }
-                  })
-                }
-                disabled={loading}
-              />
-            </label>
-            <label className="field">
-              <span>最小词频</span>
-              <input
-                type="number"
-                value={draftPipeline.filtering.min_term_frequency}
-                onChange={(event) =>
-                  setDraftPipeline({
-                    ...draftPipeline,
-                    filtering: {
-                      ...draftPipeline.filtering,
-                      min_term_frequency: Number(event.target.value)
-                    }
-                  })
-                }
-                disabled={loading}
-              />
-            </label>
-            <label className="field">
-              <span>共现窗口</span>
-              <input
-                type="number"
-                value={draftPipeline.analysis.cooccurrence_window}
-                onChange={(event) =>
-                  setDraftPipeline({
-                    ...draftPipeline,
-                    analysis: {
-                      ...draftPipeline.analysis,
-                      cooccurrence_window: Number(event.target.value)
-                    }
-                  })
-                }
-                disabled={loading}
-              />
-            </label>
-            <label className="field">
-              <span>最小共现次数</span>
-              <input
-                type="number"
-                value={draftPipeline.analysis.min_cooccurrence}
-                onChange={(event) =>
-                  setDraftPipeline({
-                    ...draftPipeline,
-                    analysis: {
-                      ...draftPipeline.analysis,
-                      min_cooccurrence: Number(event.target.value)
-                    }
-                  })
-                }
-                disabled={loading}
-              />
-            </label>
-            <label className="field">
-              <span>高频词 Top N</span>
-              <input
-                type="number"
-                value={draftPipeline.analysis.top_n}
-                onChange={(event) =>
-                  setDraftPipeline({
-                    ...draftPipeline,
-                    analysis: {
-                      ...draftPipeline.analysis,
-                      top_n: Number(event.target.value)
-                    }
-                  })
-                }
-                disabled={loading}
-              />
-            </label>
-            <label className="field">
-              <span>特征词数量</span>
-              <input
-                value={String(draftPipeline.analysis.feature_term_count)}
-                onChange={(event) =>
-                  setDraftPipeline({
-                    ...draftPipeline,
-                    analysis: {
-                      ...draftPipeline.analysis,
-                      feature_term_count: event.target.value.trim().toLowerCase() === "all"
-                        ? "all"
-                        : Number(event.target.value)
-                    }
-                  })
-                }
-                placeholder="all 或数字"
-                disabled={loading}
-              />
-            </label>
-            <label className="field">
-              <span>每篇文档关键词数</span>
-              <input
-                type="number"
-                value={draftPipeline.analysis.top_k_per_doc}
-                onChange={(event) =>
-                  setDraftPipeline({
-                    ...draftPipeline,
-                    analysis: {
-                      ...draftPipeline.analysis,
-                      top_k_per_doc: Number(event.target.value)
-                    }
-                  })
-                }
-                disabled={loading}
-              />
-            </label>
-            <label className="field">
-              <span>项目级关键词数</span>
-              <input
-                type="number"
-                value={draftPipeline.analysis.top_k_project}
-                onChange={(event) =>
-                  setDraftPipeline({
-                    ...draftPipeline,
-                    analysis: {
-                      ...draftPipeline.analysis,
-                      top_k_project: Number(event.target.value)
-                    }
-                  })
-                }
-                disabled={loading}
-              />
-            </label>
-            <label className="field">
-              <span>关键词聚类数</span>
-              <input
-                type="number"
-                value={draftPipeline.analysis.keyword_cluster_k}
-                onChange={(event) =>
-                  setDraftPipeline({
-                    ...draftPipeline,
-                    analysis: {
-                      ...draftPipeline.analysis,
-                      keyword_cluster_k: Number(event.target.value)
-                    }
-                  })
-                }
-                disabled={loading}
-              />
-            </label>
-            <label className="field">
-              <span>文档聚类数</span>
-              <input
-                type="number"
-                value={draftPipeline.analysis.document_cluster_k}
-                onChange={(event) =>
-                  setDraftPipeline({
-                    ...draftPipeline,
-                    analysis: {
-                      ...draftPipeline.analysis,
-                      document_cluster_k: Number(event.target.value)
-                    }
-                  })
-                }
-                disabled={loading}
-              />
-            </label>
-          </div>
-        </Panel>
-      </div>
-    </>
-  );
-}
-
-function PipelinePage() {
-  const {
-    state: { snapshot, loading },
-    saveProject,
-    runPipeline
-  } = useWorkspace();
-  const project = snapshot.current_project;
-  const [draftPipeline, setDraftPipeline] = useState<PipelineDefinition | null>(
-    project ? normalizePipelineDraft(deepClone(project.pipeline)) : null
-  );
-  const [documentPickerQuery, setDocumentPickerQuery] = useState("");
-
-  useEffect(() => {
-    setDraftPipeline(project ? normalizePipelineDraft(deepClone(project.pipeline)) : null);
-    setDocumentPickerQuery("");
-  }, [project?.id, project?.updated_at]);
-
-  if (!project || !draftPipeline) {
-    return <EmptyState title="流程配置待初始化" body="请先建立项目工作区。" />;
-  }
-
-  const latestRun = project.run_history.at(-1);
-  const visibleConfigSteps = fixedPipelineOrder.filter((step) =>
-    mandatoryPipelineSteps.includes(step) || draftPipeline.enabled_steps.includes(step)
-  );
-  const availableSources = Array.from(new Set(snapshot.corpus.map((item) => item.source).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
-  const availableInstitutions = Array.from(new Set(snapshot.corpus.map((item) => item.institution).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
-  const availableCategories = Array.from(new Set(snapshot.corpus.map((item) => item.category_or_tag).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
-  const matchedDocuments = snapshot.corpus.filter((item) => corpusMatchesRunScope(item, draftPipeline.run_scope));
-  const pickerQuery = documentPickerQuery.trim().toLowerCase();
-  const documentPickerRows = draftPipeline.run_scope.mode === "selected_documents"
-    ? snapshot.corpus.filter((item) =>
-      !pickerQuery || [item.doc_id, item.title, item.source, item.institution].filter(Boolean).join(" ").toLowerCase().includes(pickerQuery)
-    )
-    : [];
-  const selectedRecipe = recipeCards.find((card) => card.id === draftPipeline.recipe_id) ?? recipeCards.at(-1)!;
-  const selectedOutputBundle = outputBundleCards.find((card) => card.id === draftPipeline.output_bundle_id) ?? outputBundleCards.at(-1)!;
-  const estimatedEffort = matchedDocuments.length <= 20 ? "短" : matchedDocuments.length <= 80 ? "中" : "长";
-  const canRun = !loading && matchedDocuments.length > 0;
-  const runSummary = runScopeSummary(draftPipeline.run_scope, snapshot.corpus.length, matchedDocuments.length);
-
-  const updatePipeline = (updater: (current: PipelineDefinition) => PipelineDefinition) => {
-    setDraftPipeline((current) => current ? normalizePipelineDraft(updater(current)) : current);
-  };
-
-  const updateSection = <K extends "cleaning" | "normalization" | "tokenization" | "dictionary" | "filtering" | "analysis" | "export">(
-    section: K,
-    patch: Partial<PipelineDefinition[K]>
-  ) => {
-    updatePipeline((current) => ({
-      ...current,
-      [section]: {
-        ...current[section],
-        ...patch
-      },
-      recipe_id: section === "export" ? current.recipe_id : "custom",
-      output_bundle_id: section === "export" ? "custom" : current.output_bundle_id
-    }));
-  };
-
-  const updateRunScope = (patch: Partial<RunScopeDefinition>) => {
-    updatePipeline((current) => ({
-      ...current,
-      run_scope: {
-        ...current.run_scope,
-        ...patch
-      }
-    }));
-  };
-
-  const toggleScopeArrayValue = (
-    field: "source_values" | "institution_values" | "category_values",
-    value: string
-  ) => {
-    const values = draftPipeline.run_scope[field];
-    updateRunScope({
-      [field]: values.includes(value) ? values.filter((item) => item !== value) : [...values, value]
-    } as Partial<RunScopeDefinition>);
-  };
-
-  const toggleSelectedDocument = (docId: string) => {
-    const selectedDocIds = draftPipeline.run_scope.selected_doc_ids;
-    updateRunScope({
-      selected_doc_ids: selectedDocIds.includes(docId)
-        ? selectedDocIds.filter((item) => item !== docId)
-        : [...selectedDocIds, docId]
-    });
-  };
-
-  const toggleOptionalStep = (step: PipelineStepId) => {
-    if (!optionalPipelineSteps.includes(step)) {
-      return;
-    }
-    const nextEnabledSteps = draftPipeline.enabled_steps.includes(step)
-      ? draftPipeline.enabled_steps.filter((item) => item !== step)
-      : [...draftPipeline.enabled_steps, step];
-    updatePipeline((current) => ({
-      ...current,
-      enabled_steps: nextEnabledSteps,
-      recipe_id: "custom"
-    }));
-  };
-
-  const renderBooleanToggles = (
-    section: "cleaning" | "normalization" | "tokenization" | "dictionary" | "filtering" | "export",
-    items: readonly (readonly [string, string])[]
-  ) => {
-    const values = draftPipeline[section] as unknown as Record<string, unknown>;
-    return (
-      <div className="toggle-grid">
-        {items.map(([key, label]) => (
-          <label key={key} className="switch-row">
-            <input
-              type="checkbox"
-              checked={Boolean(values[key])}
-              onChange={(event) => updateSection(section, { [key]: event.target.checked } as Partial<PipelineDefinition[typeof section]>)}
-              disabled={loading}
-            />
-            <span>{label}</span>
-          </label>
-        ))}
-      </div>
-    );
-  };
-
-  const savePipeline = async () => saveProject({ ...project, pipeline: normalizePipelineDraft(draftPipeline) });
-  const runCurrentPipeline = async () => {
-    if (!matchedDocuments.length) {
-      return;
-    }
-    const saved = await savePipeline();
-    if (saved) {
-      await runPipeline();
-    }
-  };
-
-  const renderAdvancedPanel = (stepId: PipelineStepId) => {
-    if (stepId === "ingestion") {
-      return <Panel title="读取资料"><p className="body-copy">这一步固定执行，直接读取当前“处理对象”命中的项目语料。</p></Panel>;
-    }
-    if (stepId === "cleaning") {
-      return <Panel title="基础清洗">{renderBooleanToggles("cleaning", cleaningToggleItems)}</Panel>;
-    }
-    if (stepId === "normalization") {
-      return (
-        <Panel title="统一写法">
-          {renderBooleanToggles("normalization", normalizationToggleItems)}
-          <label className="field">
-            <span>Regex 优先策略</span>
-            <select
-              value={draftPipeline.normalization.regex_rule_priority}
-              onChange={(event) => updateSection("normalization", { regex_rule_priority: event.target.value as PipelineDefinition["normalization"]["regex_rule_priority"] })}
-              disabled={loading}
-            >
-              <option value="rule_order">按规则顺序</option>
-              <option value="first_match">命中首条后停止</option>
-            </select>
-          </label>
-        </Panel>
-      );
-    }
-    if (stepId === "tokenization") {
-      return (
-        <Panel title="切词">
-          <div className="settings-grid">
-            <label className="field">
-              <span>语言模式</span>
-              <select value={draftPipeline.tokenization.language_mode} onChange={(event) => updateSection("tokenization", { language_mode: event.target.value as PipelineDefinition["tokenization"]["language_mode"] })} disabled={loading}>
-                <option value="auto">自动判断</option>
-                <option value="zh">中文</option>
-                <option value="en">英文</option>
-                <option value="mixed">中英混合</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>切词前最短长度</span>
-              <input type="number" value={draftPipeline.tokenization.min_token_length_before_filter} onChange={(event) => updateSection("tokenization", { min_token_length_before_filter: Number(event.target.value) })} disabled={loading} />
-            </label>
-          </div>
-          {renderBooleanToggles("tokenization", tokenizationToggleItems)}
-        </Panel>
-      );
-    }
-    if (stepId === "dictionary_application") {
-      return (
-        <Panel title="套用词表">
-          {renderBooleanToggles("dictionary", dictionaryToggleItems)}
-          <label className="field">
-            <span>冲突处理</span>
-            <select value={draftPipeline.dictionary.conflict_resolution} onChange={(event) => updateSection("dictionary", { conflict_resolution: event.target.value as PipelineDefinition["dictionary"]["conflict_resolution"] })} disabled={loading}>
-              <option value="priority">按词表优先级</option>
-              <option value="first_match">命中首条后停止</option>
-            </select>
-          </label>
-        </Panel>
-      );
-    }
-    if (stepId === "filtering") {
-      return (
-        <Panel title="过滤噪声">
-          {renderBooleanToggles("filtering", filteringToggleItems)}
-          <div className="settings-grid">
-            <label className="field">
-              <span>最短 token 长度</span>
-              <input type="number" value={draftPipeline.filtering.min_token_length} onChange={(event) => updateSection("filtering", { min_token_length: Number(event.target.value) })} disabled={loading} />
-            </label>
-            <label className="field">
-              <span>最小词频</span>
-              <input type="number" value={draftPipeline.filtering.min_term_frequency} onChange={(event) => updateSection("filtering", { min_term_frequency: Number(event.target.value) })} disabled={loading} />
-            </label>
-          </div>
-        </Panel>
-      );
-    }
-    if (stepId === "analysis") {
-      return (
-        <Panel title="生成分析">
-          <div className="analysis-method-grid">
-            {analysisMethodCards.map((card) => (
-              <article className="analysis-method-card" key={card.title}>
-                <div className="run-head">
-                  <strong>{card.title}</strong>
-                  <span className="pill">{card.output}</span>
-                </div>
-                <p className="body-copy">{card.description}</p>
-                <p className="muted">对应参数：{card.params.join("、")}</p>
-              </article>
-            ))}
-          </div>
-          <div className="settings-grid">
-            <label className="field"><span>高频词 Top N</span><input type="number" value={draftPipeline.analysis.top_n} onChange={(event) => updateSection("analysis", { top_n: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>共现窗口</span><input type="number" value={draftPipeline.analysis.cooccurrence_window} onChange={(event) => updateSection("analysis", { cooccurrence_window: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>最小共现次数</span><input type="number" value={draftPipeline.analysis.min_cooccurrence} onChange={(event) => updateSection("analysis", { min_cooccurrence: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>特征词数量</span><input value={String(draftPipeline.analysis.feature_term_count)} onChange={(event) => updateSection("analysis", { feature_term_count: event.target.value.trim().toLowerCase() === "all" ? "all" : Number(event.target.value) })} placeholder="all 或数字" disabled={loading} /></label>
-            <label className="field"><span>每篇文档关键词数</span><input type="number" value={draftPipeline.analysis.top_k_per_doc} onChange={(event) => updateSection("analysis", { top_k_per_doc: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>项目级关键词数</span><input type="number" value={draftPipeline.analysis.top_k_project} onChange={(event) => updateSection("analysis", { top_k_project: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>主题数量</span><input type="number" value={draftPipeline.analysis.topic_model_k} onChange={(event) => updateSection("analysis", { topic_model_k: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>关键词聚类数</span><input type="number" value={draftPipeline.analysis.keyword_cluster_k} onChange={(event) => updateSection("analysis", { keyword_cluster_k: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>文档聚类数</span><input type="number" value={draftPipeline.analysis.document_cluster_k} onChange={(event) => updateSection("analysis", { document_cluster_k: Number(event.target.value) })} disabled={loading} /></label>
-          </div>
-        </Panel>
-      );
-    }
-    return (
-      <Panel title="保存结果">
-        {renderBooleanToggles("export", exportToggleItems)}
-        <div className="settings-grid">
-          <label className="field">
-            <span>PNG 分辨率（DPI）</span>
-            <input type="number" value={draftPipeline.export.chart_dpi} onChange={(event) => updateSection("export", { chart_dpi: Number(event.target.value) })} disabled={loading} />
-            <small>建议 240 到 400。默认 320，会输出适合汇报和打印的高清 PNG。</small>
-          </label>
-          <label className="field">
-            <span>水印文字</span>
-            <input value={draftPipeline.export.watermark_text} onChange={(event) => updateSection("export", { watermark_text: event.target.value })} disabled={loading || !draftPipeline.export.watermark_enabled} placeholder="例如 TextFlow Studio" />
-            <small>只有打开“导出水印”后才会写到图表右下角。</small>
-          </label>
-        </div>
-        <label className="switch-row">
-          <input type="checkbox" checked={draftPipeline.export.watermark_enabled} onChange={(event) => updateSection("export", { watermark_enabled: event.target.checked })} disabled={loading} />
-          <span>导出水印</span>
-        </label>
-      </Panel>
-    );
-  };
-
-  return (
-    <>
-      <Panel
-        title="第 4 步：确认本次运行"
-        actions={
-          <div className="button-row">
-            <button type="button" className="toolbar-button" onClick={() => void savePipeline()} disabled={loading}>保存当前设置</button>
-            <button type="button" className="toolbar-button accent" onClick={() => void runCurrentPipeline()} disabled={!canRun}>保存并开始处理</button>
-          </div>
-        }
-      >
-        <div className="run-intent-grid">
-          <section className="intent-card">
-            <div className="run-head">
-              <div>
-                <h4>1. 处理对象</h4>
-                <p className="body-copy">先明确本次要处理哪批资料，再决定怎么处理。</p>
-              </div>
-              <span className="pill">{matchedDocuments.length} / {snapshot.corpus.length} 篇</span>
-            </div>
-            <div className="intent-option-grid">
-              {runScopeModeOptions.map((option) => (
-                <button key={option.id} type="button" className={`intent-choice ${draftPipeline.run_scope.mode === option.id ? "is-active" : ""}`} onClick={() => updateRunScope({ mode: option.id })} disabled={loading}>
-                  <div>
-                    <strong>{option.title}</strong>
-                    <p>{option.description}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-            {draftPipeline.run_scope.mode === "filtered_subset" && (
-              <div className="intent-filter-stack">
-                <div className="intent-filter-group">
-                  <strong>来源</strong>
-                  <div className="pill-cloud">
-                    {availableSources.length ? availableSources.map((source) => (
-                      <button key={source} type="button" className={`intent-pill ${draftPipeline.run_scope.source_values.includes(source) ? "is-active" : ""}`} onClick={() => toggleScopeArrayValue("source_values", source)} disabled={loading}>{source}</button>
-                    )) : <span className="muted">当前语料还没有来源字段。</span>}
-                  </div>
-                </div>
-                <div className="intent-filter-group">
-                  <strong>机构</strong>
-                  <div className="pill-cloud">
-                    {availableInstitutions.length ? availableInstitutions.map((institution) => (
-                      <button key={institution} type="button" className={`intent-pill ${draftPipeline.run_scope.institution_values.includes(institution) ? "is-active" : ""}`} onClick={() => toggleScopeArrayValue("institution_values", institution)} disabled={loading}>{institution}</button>
-                    )) : <span className="muted">当前语料还没有机构字段。</span>}
-                  </div>
-                </div>
-                <div className="intent-filter-group">
-                  <strong>标签</strong>
-                  <div className="pill-cloud">
-                    {availableCategories.length ? availableCategories.map((category) => (
-                      <button key={category} type="button" className={`intent-pill ${draftPipeline.run_scope.category_values.includes(category) ? "is-active" : ""}`} onClick={() => toggleScopeArrayValue("category_values", category)} disabled={loading}>{category}</button>
-                    )) : <span className="muted">当前语料还没有标签字段。</span>}
-                  </div>
-                </div>
-                <div className="settings-grid">
-                  <label className="field"><span>起始年份</span><input type="number" value={draftPipeline.run_scope.year_from ?? ""} onChange={(event) => updateRunScope({ year_from: event.target.value ? Number(event.target.value) : null })} disabled={loading} placeholder="例如 2024" /></label>
-                  <label className="field"><span>结束年份</span><input type="number" value={draftPipeline.run_scope.year_to ?? ""} onChange={(event) => updateRunScope({ year_to: event.target.value ? Number(event.target.value) : null })} disabled={loading} placeholder="例如 2025" /></label>
-                </div>
-              </div>
-            )}
-            {draftPipeline.run_scope.mode === "selected_documents" && (
-              <div className="intent-filter-stack">
-                <label className="field">
-                  <span>搜索文档</span>
-                  <input value={documentPickerQuery} onChange={(event) => setDocumentPickerQuery(event.target.value)} placeholder="按标题、来源或机构筛选" disabled={loading} />
-                </label>
-                <div className="document-picker-list">
-                  {documentPickerRows.slice(0, 24).map((item) => (
-                    <label key={item.doc_id} className="document-picker-row">
-                      <input type="checkbox" checked={draftPipeline.run_scope.selected_doc_ids.includes(item.doc_id)} onChange={() => toggleSelectedDocument(item.doc_id)} disabled={loading} />
-                      <div>
-                        <strong>{item.title}</strong>
-                        <p>{[item.doc_id, item.source, item.institution, item.year].filter(Boolean).join(" · ")}</p>
-                      </div>
-                    </label>
-                  ))}
-                  {!documentPickerRows.length && <span className="muted">没有匹配的文档，请换个关键词试试。</span>}
-                </div>
-              </div>
-            )}
-          </section>
-
-          <section className="intent-card">
-            <div className="run-head">
-              <div>
-                <h4>2. 处理配方</h4>
-                <p className="body-copy">先选任务目的，再在高级设置里微调。</p>
-              </div>
-              <span className="pill">{selectedRecipe.title}</span>
-            </div>
-            <div className="intent-choice-stack">
-              {recipeCards.map((recipe) => (
-                <button key={recipe.id} type="button" className={`intent-choice ${draftPipeline.recipe_id === recipe.id ? "is-active" : ""}`} onClick={() => updatePipeline((current) => applyRecipePreset(current, recipe.id))} disabled={loading}>
-                  <div>
-                    <strong>{recipe.title}</strong>
-                    <p>{recipe.description}</p>
-                  </div>
-                  <span className="pill">{recipe.output}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="intent-card">
-            <div className="run-head">
-              <div>
-                <h4>3. 输出包</h4>
-                <p className="body-copy">决定最后交付什么，再决定是否需要高清图和审计表。</p>
-              </div>
-              <span className="pill">{selectedOutputBundle.title}</span>
-            </div>
-            <div className="intent-choice-stack">
-              {outputBundleCards.map((bundle) => (
-                <button key={bundle.id} type="button" className={`intent-choice ${draftPipeline.output_bundle_id === bundle.id ? "is-active" : ""}`} onClick={() => updatePipeline((current) => applyOutputBundlePreset(current, bundle.id))} disabled={loading}>
-                  <div>
-                    <strong>{bundle.title}</strong>
-                    <p>{bundle.description}</p>
-                  </div>
-                  <span className="pill">{bundle.output}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="intent-card intent-summary-card">
-            <div className="run-head">
-              <div>
-                <h4>4. 本次运行摘要</h4>
-                <p className="body-copy">点击开始前，先核对处理对象、处理方式和最终产物。</p>
-              </div>
-              <span className="pill">{estimatedEffort}耗时</span>
-            </div>
-            <div className="intent-summary-list">
-              <div className="status-panel"><strong>处理对象</strong><span>{runSummary}</span></div>
-              <div className="status-panel"><strong>处理配方</strong><span>{selectedRecipe.description}</span></div>
-              <div className="status-panel"><strong>输出结果</strong><span>{outputBundleSummary(draftPipeline.export)}</span></div>
-              <div className="status-panel">
-                <strong>文档预览</strong>
-                <ul className="micro-list">
-                  {matchedDocuments.slice(0, 4).map((item) => <li key={item.doc_id}>{item.title}</li>)}
-                  {!matchedDocuments.length && <li>当前范围下没有文档，请先调整处理对象。</li>}
-                </ul>
-              </div>
-              {latestRun && <div className="status-panel"><strong>最近一次运行</strong><span>{latestRun.run_scope_summary ?? "处理对象：项目内全部资料"}</span></div>}
-            </div>
-          </section>
-        </div>
-      </Panel>
-
-      <div className="two-column">
-        <Panel title="本次会执行什么">
-          <ul className="feature-list">
-            {visibleConfigSteps.map((stepId, index) => {
-              const step = pipelineStepMeta.find((item) => item.id === stepId);
-              return step ? <li key={stepId}>第 {index + 1} 步：{step.title}</li> : null;
-            })}
-          </ul>
-          <p className="body-copy">读取资料、切词、生成分析和保存结果是固定主流程。只有清洗、统一写法、词表和过滤这些可选阶段，才会在高级设置里开放开关。</p>
-        </Panel>
-        <Panel title="最近一次运行">
-          <ul className="feature-list">
-            {latestRun ? (
-              <>
-                <li>{latestRun.run_scope_summary ?? "处理对象：项目内全部资料"}</li>
-                <li>实际处理文档数：{latestRun.processed_document_count ?? snapshot.corpus.length}</li>
-                <li>输出包：{latestRun.output_summary ?? "按照当前导出设置生成结果文件"}</li>
-              </>
-            ) : <li>还没有运行记录，保存后点击“保存并开始处理”。</li>}
-          </ul>
-        </Panel>
-      </div>
-
-      <Panel title="高级设置（按步骤查看）">
-        <p className="body-copy">只有需要细调参数时再展开这里。默认情况下，直接在上面的处理对象、处理配方和输出包里确认即可。</p>
-        <div className="pipeline-config-list">
-          {visibleConfigSteps.map((stepId, index) => {
-            const step = pipelineStepMeta.find((item) => item.id === stepId);
-            const mandatory = mandatoryPipelineSteps.includes(stepId);
-            return (
-              <section key={stepId} className="advanced-step-shell">
-                <div className="run-head">
-                  <div>
-                    <h4>第 {index + 1} 步：{step?.title}</h4>
-                    <p className="body-copy">{step?.description}</p>
-                  </div>
-                  {mandatory ? <span className="pill">固定执行</span> : (
-                    <label className="switch-row compact">
-                      <input type="checkbox" checked={draftPipeline.enabled_steps.includes(stepId)} onChange={() => toggleOptionalStep(stepId)} disabled={loading} />
-                      <span>{draftPipeline.enabled_steps.includes(stepId) ? "启用" : "跳过"}</span>
-                    </label>
-                  )}
-                </div>
-                {mandatory || draftPipeline.enabled_steps.includes(stepId) ? renderAdvancedPanel(stepId) : (
-                  <div className="status-panel"><span>这一步当前已跳过，不会进入本次运行。</span></div>
-                )}
-              </section>
-            );
-          })}
-        </div>
-      </Panel>
-    </>
-  );
-}
-
-function WorkflowPipelinePage() {
-  const {
-    state: { snapshot, loading },
-    saveProject,
-    runPipeline,
+    runWorkflow,
     setActivePage
   } = useWorkspace();
   const taskProgress = useTaskProgress();
@@ -3424,7 +2137,10 @@ function WorkflowPipelinePage() {
       ? loadPersistedWorkflowEditorState(project.id, nextWorkflow.workflow_id)
       : null;
     const normalizedWorkflow = project && nextWorkflow
-      ? normalizeWorkflowGraph(deepClone(persistedDraft ?? nextWorkflow), project.pipeline)
+      ? normalizeWorkflowGraph(
+        deepClone(persistedDraft ?? nextWorkflow),
+        projectRuntimeProfile(project, persistedDraft ?? nextWorkflow)
+      )
       : null;
     const hydratedWorkflow = normalizedWorkflow && !persistedDraft
       ? updateWorkflowViewport(normalizedWorkflow, workflowFitViewport(normalizedWorkflow.nodes))
@@ -3506,10 +2222,8 @@ function WorkflowPipelinePage() {
     return () => observer.disconnect();
   }, [draftWorkflow?.workflow_id]);
 
-  const draftPipeline = useMemo(
-    () => (project && draftWorkflow
-      ? normalizePipelineDraft(compilePipelineFromWorkflow(draftWorkflow, project.pipeline))
-      : null),
+  const draftRuntimeProfile = useMemo(
+    () => (project && draftWorkflow ? projectRuntimeProfile(project, draftWorkflow) : null),
     [draftWorkflow, project]
   );
   const workflowValidation = draftWorkflow ? validateWorkflowGraph(draftWorkflow) : null;
@@ -3531,7 +2245,7 @@ function WorkflowPipelinePage() {
     return () => observer.disconnect();
   }, [pendingConnection, workflowValidation, dockCollapsed]);
 
-  if (!project || !draftWorkflow || !draftPipeline || !workflowValidation) {
+  if (!project || !draftWorkflow || !draftRuntimeProfile || !workflowValidation) {
     return <EmptyState title="流程配置待初始化" body="请先建立项目工作区。" />;
   }
 
@@ -3566,7 +2280,7 @@ function WorkflowPipelinePage() {
     ? `${selectedEdgeSourceNode?.label ?? selectedEdge.from_node} -> ${selectedEdgeTargetNode?.label ?? selectedEdge.to_node}`
     : "";
   const latestRun = project.run_history.at(-1);
-  const liveWorkflowRun = taskProgress.action === "run-pipeline"
+  const liveWorkflowRun = taskProgress.action === "run-workflow"
     && taskProgress.detail?.kind === "workflow_run"
     && (!taskProgress.detail.workflow_id || taskProgress.detail.workflow_id === draftWorkflow.workflow_id)
     ? taskProgress.detail
@@ -3595,15 +2309,15 @@ function WorkflowPipelinePage() {
   const nodeDefinitionsByType = new Map((snapshot.node_definitions ?? []).map((definition) => [definition.type, definition]));
   const runScopeForNode = (node: WorkflowNodeInstance | null | undefined): RunScopeDefinition => {
     if (!node || (node.node_type !== "corpus_input" && node.node_type !== "filter_corpus")) {
-      return draftPipeline.run_scope;
+      return draftRuntimeProfile.run_scope;
     }
     return {
-      ...draftPipeline.run_scope,
+      ...draftRuntimeProfile.run_scope,
       ...(node.config as Partial<RunScopeDefinition>),
-      source_values: [...(((node.config.source_values as string[] | undefined) ?? draftPipeline.run_scope.source_values))],
-      institution_values: [...(((node.config.institution_values as string[] | undefined) ?? draftPipeline.run_scope.institution_values))],
-      category_values: [...(((node.config.category_values as string[] | undefined) ?? draftPipeline.run_scope.category_values))],
-      selected_doc_ids: [...(((node.config.selected_doc_ids as string[] | undefined) ?? draftPipeline.run_scope.selected_doc_ids))]
+      source_values: [...(((node.config.source_values as string[] | undefined) ?? draftRuntimeProfile.run_scope.source_values))],
+      institution_values: [...(((node.config.institution_values as string[] | undefined) ?? draftRuntimeProfile.run_scope.institution_values))],
+      category_values: [...(((node.config.category_values as string[] | undefined) ?? draftRuntimeProfile.run_scope.category_values))],
+      selected_doc_ids: [...(((node.config.selected_doc_ids as string[] | undefined) ?? draftRuntimeProfile.run_scope.selected_doc_ids))]
     };
   };
   const workflowScopeNode = sortedNodes.find((node) => activeNodeIds.has(node.node_id) && node.node_type === "corpus_input")
@@ -3851,7 +2565,7 @@ function WorkflowPipelinePage() {
   ) => {
     let nextSelectedNodeId = "";
     updateWorkflow((current) => {
-      let next = addWorkflowNodeByType(current, nodeType, draftPipeline, registeredDefinition);
+      let next = addWorkflowNodeByType(current, nodeType, draftRuntimeProfile, registeredDefinition);
       const previousNodeIds = new Set(current.nodes.map((node) => node.node_id));
       nextSelectedNodeId = next.nodes.find((node) => !previousNodeIds.has(node.node_id))?.node_id ?? "";
       if (position && nextSelectedNodeId) {
@@ -3878,15 +2592,15 @@ function WorkflowPipelinePage() {
     if (!confirmed) {
       return;
     }
-    setDraftWorkflow(buildBlankWorkflowFromPipeline(draftWorkflow.workflow_id, draftWorkflow.name, draftPipeline));
+    setDraftWorkflow(buildBlankWorkflowFromRuntimeProfile(draftWorkflow.workflow_id, draftWorkflow.name, draftRuntimeProfile));
     setSelectedNodeId("");
     setSelectedEdgeId("");
     setPendingConnection(null);
   };
 
   const insertRecommendedStarter = () => {
-    const blankWorkflow = buildBlankWorkflowFromPipeline(draftWorkflow.workflow_id, draftWorkflow.name, draftPipeline);
-    const nextWorkflow = syncWorkflowFromPipeline(blankWorkflow, draftPipeline, "manual");
+    const blankWorkflow = buildBlankWorkflowFromRuntimeProfile(draftWorkflow.workflow_id, draftWorkflow.name, draftRuntimeProfile);
+    const nextWorkflow = syncWorkflowFromRuntimeProfile(blankWorkflow, draftRuntimeProfile, "manual");
     setDraftWorkflow(nextWorkflow);
     setSelectedNodeId(nextWorkflow.nodes[0]?.node_id ?? "");
     setSelectedEdgeId("");
@@ -3894,7 +2608,7 @@ function WorkflowPipelinePage() {
   };
 
   const restoreRecommendedEdges = () => {
-    updateWorkflow((current) => restoreWorkflowDefaultEdges(current, draftPipeline));
+    updateWorkflow((current) => restoreWorkflowDefaultEdges(current, draftRuntimeProfile));
     setSelectedEdgeId("");
     setPendingConnection(null);
   };
@@ -4122,8 +2836,7 @@ function WorkflowPipelinePage() {
   );
 
   const saveWorkflow = async () => {
-    const normalizedWorkflow = normalizeWorkflowGraph(draftWorkflow, project.pipeline);
-    const compiledPipeline = normalizePipelineDraft(compilePipelineFromWorkflow(normalizedWorkflow, project.pipeline));
+    const normalizedWorkflow = normalizeWorkflowGraph(draftWorkflow, projectRuntimeProfile(project, draftWorkflow));
     const nextWorkflowDefinitions = project.workflow_definitions.some(
       (workflow) => workflow.workflow_id === normalizedWorkflow.workflow_id
     )
@@ -4143,7 +2856,6 @@ function WorkflowPipelinePage() {
 
     return saveProject({
       ...project,
-      pipeline: compiledPipeline,
       workflow_definitions: nextWorkflowDefinitions,
       active_workflow_id: normalizedWorkflow.workflow_id
     }, {
@@ -4158,7 +2870,7 @@ function WorkflowPipelinePage() {
     }
     const saved = await saveWorkflow();
     if (saved) {
-      await runPipeline();
+      await runWorkflow();
     }
   };
 
@@ -4278,7 +2990,7 @@ function WorkflowPipelinePage() {
           {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, normalizationToggleItems)}
           <label className="field">
             <span>Regex 优先策略</span>
-            <select value={String(selectedNode.config.regex_rule_priority ?? draftPipeline.normalization.regex_rule_priority)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { regex_rule_priority: event.target.value })} disabled={loading}>
+            <select value={String(selectedNode.config.regex_rule_priority ?? draftRuntimeProfile.normalization.regex_rule_priority)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { regex_rule_priority: event.target.value })} disabled={loading}>
               <option value="rule_order">按规则顺序</option>
               <option value="first_match">命中首条后停止</option>
             </select>
@@ -4293,7 +3005,7 @@ function WorkflowPipelinePage() {
           <div className="settings-grid">
             <label className="field">
               <span>语言模式</span>
-              <select value={String(selectedNode.config.language_mode ?? draftPipeline.tokenization.language_mode)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { language_mode: event.target.value })} disabled={loading}>
+              <select value={String(selectedNode.config.language_mode ?? draftRuntimeProfile.tokenization.language_mode)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { language_mode: event.target.value })} disabled={loading}>
                 <option value="auto">自动判断</option>
                 <option value="zh">中文</option>
                 <option value="en">英文</option>
@@ -4302,7 +3014,7 @@ function WorkflowPipelinePage() {
             </label>
             <label className="field">
               <span>切词前最短长度</span>
-              <input type="number" value={Number(selectedNode.config.min_token_length_before_filter ?? draftPipeline.tokenization.min_token_length_before_filter)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_token_length_before_filter: Number(event.target.value) })} disabled={loading} />
+              <input type="number" value={Number(selectedNode.config.min_token_length_before_filter ?? draftRuntimeProfile.tokenization.min_token_length_before_filter)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_token_length_before_filter: Number(event.target.value) })} disabled={loading} />
             </label>
           </div>
           {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, tokenizationToggleItems)}
@@ -4316,7 +3028,7 @@ function WorkflowPipelinePage() {
           {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, dictionaryToggleItems)}
           <label className="field">
             <span>冲突处理</span>
-            <select value={String(selectedNode.config.conflict_resolution ?? draftPipeline.dictionary.conflict_resolution)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { conflict_resolution: event.target.value })} disabled={loading}>
+            <select value={String(selectedNode.config.conflict_resolution ?? draftRuntimeProfile.dictionary.conflict_resolution)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { conflict_resolution: event.target.value })} disabled={loading}>
               <option value="priority">按词表优先级</option>
               <option value="first_match">命中首条后停止</option>
             </select>
@@ -4330,8 +3042,8 @@ function WorkflowPipelinePage() {
         <Panel title="过滤词项">
           {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, filteringToggleItems)}
           <div className="settings-grid">
-            <label className="field"><span>最短 token 长度</span><input type="number" value={Number(selectedNode.config.min_token_length ?? draftPipeline.filtering.min_token_length)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_token_length: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>最小词频</span><input type="number" value={Number(selectedNode.config.min_term_frequency ?? draftPipeline.filtering.min_term_frequency)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_term_frequency: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>最短 token 长度</span><input type="number" value={Number(selectedNode.config.min_token_length ?? draftRuntimeProfile.filtering.min_token_length)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_token_length: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>最小词频</span><input type="number" value={Number(selectedNode.config.min_term_frequency ?? draftRuntimeProfile.filtering.min_term_frequency)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_term_frequency: Number(event.target.value) })} disabled={loading} /></label>
           </div>
         </Panel>
       );
@@ -4342,7 +3054,7 @@ function WorkflowPipelinePage() {
         <Panel title="词频统计">
           <label className="field">
             <span>高频词 Top N</span>
-            <input type="number" value={Number(selectedNode.config.top_n ?? draftPipeline.analysis.top_n)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_n: Number(event.target.value) })} disabled={loading} />
+            <input type="number" value={Number(selectedNode.config.top_n ?? draftRuntimeProfile.analysis.top_n)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_n: Number(event.target.value) })} disabled={loading} />
           </label>
         </Panel>
       );
@@ -4356,8 +3068,8 @@ function WorkflowPipelinePage() {
       return (
         <Panel title="共现分析">
           <div className="settings-grid">
-            <label className="field"><span>共现窗口</span><input type="number" value={Number(selectedNode.config.cooccurrence_window ?? draftPipeline.analysis.cooccurrence_window)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { cooccurrence_window: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>最小共现次数</span><input type="number" value={Number(selectedNode.config.min_cooccurrence ?? draftPipeline.analysis.min_cooccurrence)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_cooccurrence: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>共现窗口</span><input type="number" value={Number(selectedNode.config.cooccurrence_window ?? draftRuntimeProfile.analysis.cooccurrence_window)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { cooccurrence_window: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>最小共现次数</span><input type="number" value={Number(selectedNode.config.min_cooccurrence ?? draftRuntimeProfile.analysis.min_cooccurrence)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_cooccurrence: Number(event.target.value) })} disabled={loading} /></label>
           </div>
         </Panel>
       );
@@ -4367,8 +3079,8 @@ function WorkflowPipelinePage() {
       return (
         <Panel title="关键词提取">
           <div className="settings-grid">
-            <label className="field"><span>每篇文档关键词数</span><input type="number" value={Number(selectedNode.config.top_k_per_doc ?? draftPipeline.analysis.top_k_per_doc)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_k_per_doc: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>项目级关键词数</span><input type="number" value={Number(selectedNode.config.top_k_project ?? draftPipeline.analysis.top_k_project)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_k_project: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>每篇文档关键词数</span><input type="number" value={Number(selectedNode.config.top_k_per_doc ?? draftRuntimeProfile.analysis.top_k_per_doc)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_k_per_doc: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>项目级关键词数</span><input type="number" value={Number(selectedNode.config.top_k_project ?? draftRuntimeProfile.analysis.top_k_project)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_k_project: Number(event.target.value) })} disabled={loading} /></label>
           </div>
         </Panel>
       );
@@ -4378,8 +3090,8 @@ function WorkflowPipelinePage() {
       return (
         <Panel title="关键词聚类">
           <div className="settings-grid">
-            <label className="field"><span>关键词聚类数</span><input type="number" value={Number(selectedNode.config.keyword_cluster_k ?? draftPipeline.analysis.keyword_cluster_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { keyword_cluster_k: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>主题数量</span><input type="number" value={Number(selectedNode.config.topic_model_k ?? draftPipeline.analysis.topic_model_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { topic_model_k: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>关键词聚类数</span><input type="number" value={Number(selectedNode.config.keyword_cluster_k ?? draftRuntimeProfile.analysis.keyword_cluster_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { keyword_cluster_k: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>主题数量</span><input type="number" value={Number(selectedNode.config.topic_model_k ?? draftRuntimeProfile.analysis.topic_model_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { topic_model_k: Number(event.target.value) })} disabled={loading} /></label>
           </div>
         </Panel>
       );
@@ -4388,7 +3100,7 @@ function WorkflowPipelinePage() {
     if (selectedNode.node_type === "institution_topic_analysis") {
       return (
         <Panel title="机构主题分析">
-          <label className="field"><span>主题数量</span><input type="number" value={Number(selectedNode.config.topic_model_k ?? draftPipeline.analysis.topic_model_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { topic_model_k: Number(event.target.value) })} disabled={loading} /></label>
+          <label className="field"><span>主题数量</span><input type="number" value={Number(selectedNode.config.topic_model_k ?? draftRuntimeProfile.analysis.topic_model_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { topic_model_k: Number(event.target.value) })} disabled={loading} /></label>
         </Panel>
       );
     }
@@ -4407,7 +3119,7 @@ function WorkflowPipelinePage() {
         <Panel title="保存 PNG">
           <div className="settings-grid">
             <label className="field"><span>文件名前缀</span><input value={String(selectedNode.config.file_prefix ?? "charts")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { file_prefix: event.target.value })} disabled={loading} /></label>
-            <label className="field"><span>PNG 分辨率（DPI）</span><input type="number" value={Number(selectedNode.config.chart_dpi ?? draftPipeline.export.chart_dpi)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { chart_dpi: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>PNG 分辨率（DPI）</span><input type="number" value={Number(selectedNode.config.chart_dpi ?? draftRuntimeProfile.export.chart_dpi)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { chart_dpi: Number(event.target.value) })} disabled={loading} /></label>
           </div>
         </Panel>
       );
@@ -4418,7 +3130,7 @@ function WorkflowPipelinePage() {
         <Panel title="保存 HTML 报告">
           <label className="field"><span>文件名前缀</span><input value={String(selectedNode.config.file_prefix ?? "report")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { file_prefix: event.target.value })} disabled={loading} /></label>
           <label className="switch-row">
-            <input type="checkbox" checked={Boolean(selectedNode.config.include_audit ?? draftPipeline.export.include_audit)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { include_audit: event.target.checked })} disabled={loading} />
+            <input type="checkbox" checked={Boolean(selectedNode.config.include_audit ?? draftRuntimeProfile.export.include_audit)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { include_audit: event.target.checked })} disabled={loading} />
             <span>在报告中附带审计摘要</span>
           </label>
         </Panel>
@@ -4441,7 +3153,7 @@ function WorkflowPipelinePage() {
     project,
     snapshot: { corpus: snapshot.corpus },
     latestRun,
-    draftPipeline,
+    draftRuntimeProfile,
     loading,
     nodeDefinitionsByType,
     availableSources,
@@ -4625,7 +3337,7 @@ function WorkflowPipelinePage() {
                     >
                       <div>
                         <strong>{node.label}</strong>
-                        <p>{nodeRuntime?.output_summary ?? workflowNodeSummary(node, draftPipeline, runSummary)}</p>
+                        <p>{nodeRuntime?.output_summary ?? workflowNodeSummary(node, draftRuntimeProfile, runSummary)}</p>
                     </div>
                     <div className="workflow-node-list-item-meta">
                       {nodeRuntime && <span className={`pill runtime-${nodeRuntime.status}`}>{runtimeStatusLabel(nodeRuntime.status)}</span>}
@@ -4709,7 +3421,7 @@ function WorkflowPipelinePage() {
                     <div key={`runtime-${node.node_id}`} className={`workflow-runtime-row ${nodeRuntime ? `is-${nodeRuntime.status}` : ""} ${activeRuntimeNode?.node_id === node.node_id ? "is-current" : ""}`.trim()}>
                       <div>
                         <strong>{node.label}</strong>
-                        <p>{nodeRuntime?.output_summary ?? workflowNodeSummary(node, draftPipeline, runSummary)}</p>
+                        <p>{nodeRuntime?.output_summary ?? workflowNodeSummary(node, draftRuntimeProfile, runSummary)}</p>
                       </div>
                       <div className="workflow-runtime-row-meta">
                         <span className={`pill ${nodeRuntime ? `runtime-${nodeRuntime.status}` : ""}`.trim()}>
@@ -4932,14 +3644,14 @@ function WorkflowPipelinePage() {
                   const nodeSelected = selectedNode?.node_id === node.node_id;
                   const nodeRuntime = runtimeNodeStates[node.node_id];
                   const nodeStepId = workflowNodeStepId(node);
-                  const nodeCanBypass = Boolean(nodeStepId && optionalPipelineSteps.includes(nodeStepId));
+                  const nodeCanBypass = Boolean(nodeStepId && optionalWorkflowSteps.includes(nodeStepId));
                   const nodeFrame = workflowNodeCanvasFrame(node);
                   const nodeInlinePreview = renderWorkflowNodePreview({
                     node,
                     project,
                     snapshot: { corpus: snapshot.corpus },
                     latestRun,
-                    draftPipeline,
+                    draftRuntimeProfile,
                     loading,
                     nodeDefinitionsByType,
                     availableSources,
@@ -5044,7 +3756,7 @@ function WorkflowPipelinePage() {
                         </div>
                         <strong>{node.label}</strong>
                         <p>{workflowNodeDescription(node)}</p>
-                        <small>{workflowNodeSummary(node, draftPipeline, runSummary)}</small>
+                        <small>{workflowNodeSummary(node, draftRuntimeProfile, runSummary)}</small>
                         {nodeRuntime && (
                           <div className={`workflow-node-runtime-card is-${nodeRuntime.status}`}>
                             <div className="workflow-node-runtime-head">
@@ -5365,6 +4077,9 @@ function DictionariesPage() {
             sheets: {} as DictionarySet["sheets"]
           }
         : project.dictionary_set
+    }, {
+      refresh: false,
+      actionLabel: "保存词表"
     });
   };
 
@@ -5522,7 +4237,7 @@ function DictionariesPage() {
               <p className="helper-note">停用词已拆成独立资源表，默认只打开“项目自定义”，不再一股脑把所有内置停用词全部铺在页面上。</p>
             )}
             <div className="button-row">
-              <button type="button" className="toolbar-button ghost" onClick={() => setActivePage("pipeline")} disabled={loading}>
+              <button type="button" className="toolbar-button ghost" onClick={() => setActivePage("workflow")} disabled={loading}>
                 去看流程里的这一步
               </button>
             </div>
@@ -5737,10 +4452,11 @@ function AnalysisPage() {
   const project = snapshot.current_project;
 
   if (!project) {
-    return <EmptyState title="分析结果待生成" body="先运行一次 pipeline，结果页会自动显示。" />;
+    return <EmptyState title="分析结果待生成" body="先运行一次工作流，结果页会自动显示。" />;
   }
 
-  const trendValues = project.results.term_year_table.map((item) => item.tf_in_year);
+  const trendRows = project.results.term_year_table.slice(0, 24);
+  const trendValues = trendRows.map((item) => item.tf_in_year);
 
   return (
     <>
@@ -5750,14 +4466,19 @@ function AnalysisPage() {
         </Panel>
 
         <Panel title="按年词频趋势">
-          <LineChart values={trendValues} labels={project.results.term_year_table.map((item) => String(item.year))} />
+          <LineChart values={trendValues} labels={trendRows.map((item) => String(item.year))} />
           <p className="chart-caption">示例词“分析”的逐年词频变化。</p>
         </Panel>
       </div>
 
       <div className="analysis-grid">
         <Panel title="共现热项">
-          <Table columns={["term_a", "term_b", "cooccurrence_count", "score"]} rows={project.results.cooccurrence_table} />
+          <PaginatedTable
+            columns={["term_a", "term_b", "cooccurrence_count", "score"]}
+            rows={project.results.cooccurrence_table}
+            rowKey={(row) => `${(row as { term_a: string; term_b: string }).term_a}-${(row as { term_a: string; term_b: string }).term_b}`}
+            pageSize={20}
+          />
         </Panel>
         <Panel title="文档聚类分布">
           <ScatterChart rows={project.results.clustering_result} />
@@ -5784,6 +4505,7 @@ function ResultsPage() {
     exportProjectBackup,
     openPath,
     revealPath,
+    resolveReviewTask,
     saveProjectPackagePath
   } = useWorkspace();
   const project = snapshot.current_project;
@@ -5798,6 +4520,8 @@ function ResultsPage() {
   const visibleExport = lastExport?.project_id === project.id ? lastExport : null;
   const exportDirPath = visibleExport?.export_dir ?? fallbackExportDir;
   const exportDirLabel = visibleExport?.relative_export_dir ?? project.paths.exports_dir;
+  const recentRuns = project.run_history.slice().reverse().slice(0, 24);
+  const reviewTasks = coerceReviewTasks(project);
   const generatedFiles = projectRootPath
     ? project.results.report_files.map((relativePath) => ({
         path: joinFsPath(projectRootPath, relativePath),
@@ -5869,10 +4593,10 @@ function ResultsPage() {
         </div>
       </Panel>
 
-      <div className="two-column">
-        <Panel title="历史运行记录">
-          <div className="stack-list">
-            {project.run_history.map((run) => (
+        <div className="two-column">
+          <Panel title="历史运行记录">
+            <div className="stack-list">
+              {recentRuns.map((run) => (
               <article key={run.run_id} className="run-card">
                 <div className="run-head">
                   <strong>{run.run_id}</strong>
@@ -5887,10 +4611,10 @@ function ResultsPage() {
                 </ul>
               </article>
             ))}
-          </div>
-        </Panel>
-        <Panel title={visibleExport ? "最近一次导出的文件" : "已生成文件"}>
-          <div className="artifact-list">
+            </div>
+          </Panel>
+          <Panel title={visibleExport ? "最近一次导出的文件" : "已生成文件"}>
+            <div className="artifact-list">
             {(visibleExport?.files.length ? visibleExport.files : generatedFiles).map((file) => (
               <article key={file.path} className="project-card artifact-row">
                 <div>
@@ -5913,12 +4637,22 @@ function ResultsPage() {
                 <span className="muted">先运行一次导出，这里会显示文件列表，并支持打开或定位。</span>
               </div>
             )}
-          </div>
-        </Panel>
-      </div>
-    </>
-  );
-}
+            </div>
+          </Panel>
+        </div>
+        <ReviewQueuePanel
+          tasks={reviewTasks}
+          loading={loading}
+          onResolve={async (reviewId, resolution) => {
+            await resolveReviewTask(reviewId, resolution);
+          }}
+          onReject={async (reviewId, resolution) => {
+            await resolveReviewTask(reviewId, resolution);
+          }}
+        />
+      </>
+    );
+  }
 
 function ReportPage() {
   const {
@@ -5929,6 +4663,8 @@ function ReportPage() {
   if (!project) {
     return <EmptyState title="暂无报告" body="生成结果后即可预览 HTML 报告结构。" />;
   }
+
+  const runtimeProfile = projectRuntimeProfile(project);
 
   return (
     <div className="report-layout">
@@ -5941,7 +4677,7 @@ function ReportPage() {
           <h4>2. 数据规模与流程参数</h4>
           <p>
             Source profile 为 <strong>{project.import_template.source_profile}</strong>，
-            使用 {project.pipeline.analysis.feature_term_count} 规模的特征词集进行后续分析。
+            使用 {runtimeProfile.analysis.feature_term_count} 规模的特征词集进行后续分析。
           </p>
         </div>
         <div className="report-block">
@@ -5949,6 +4685,7 @@ function ReportPage() {
           <ul className="feature-list">
             {project.results.keyword_cluster_result
               .filter((row) => row.is_label_term)
+              .slice(0, 24)
               .map((row) => (
                 <li key={`${row.cluster_id}-${row.term}`}>Cluster {row.cluster_id}: {row.topic_label}</li>
               ))}

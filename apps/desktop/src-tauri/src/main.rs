@@ -331,7 +331,7 @@ async fn wait_for_engine_ready(base_url: &str) -> Result<(), String> {
                 return Ok(());
             }
         }
-        sleep(Duration::from_millis(150)).await;
+        sleep(Duration::from_millis(200)).await;
     }
     Err("python engine did not become ready in time".to_string())
 }
@@ -404,7 +404,7 @@ async fn engine_request(
                     .error
                     .unwrap_or_else(|| "python task failed without details".to_string()))
             }
-            _ => sleep(Duration::from_millis(150)).await,
+            _ => sleep(Duration::from_millis(300)).await,
         }
     }
 }
@@ -582,12 +582,12 @@ async fn import_project_files(
 }
 
 #[tauri::command]
-async fn run_pipeline(
+async fn run_workflow(
     app: tauri::AppHandle,
     state: tauri::State<'_, EngineState>,
     project_id: String,
 ) -> Result<Value, String> {
-    engine_request(&app, &state, "run-pipeline", json!({ "project_id": project_id })).await
+    engine_request(&app, &state, "run-workflow", json!({ "project_id": project_id })).await
 }
 
 #[tauri::command]
@@ -706,6 +706,65 @@ async fn import_dictionary_sheet(
 }
 
 #[tauri::command]
+async fn create_review_task(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    task: Value,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "create-review-task",
+        json!({
+            "project_id": project_id,
+            "task": task
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn list_review_tasks(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    status: Option<String>,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "list-review-tasks",
+        json!({
+            "project_id": project_id,
+            "status": status
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn resolve_review_task(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    review_id: String,
+    resolution: Value,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "resolve-review-task",
+        json!({
+            "project_id": project_id,
+            "review_id": review_id,
+            "resolution": resolution
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
 async fn export_dictionary_sheet(
     app: tauri::AppHandle,
     state: tauri::State<'_, EngineState>,
@@ -816,7 +875,7 @@ fn main() {
             duplicate_project,
             delete_project,
             import_project_files,
-            run_pipeline,
+            run_workflow,
             export_project,
             export_project_backup,
             save_project,
@@ -824,6 +883,9 @@ fn main() {
             update_corpus_document,
             delete_corpus_document,
             import_dictionary_sheet,
+            create_review_task,
+            list_review_tasks,
+            resolve_review_task,
             export_dictionary_sheet,
             pick_files,
             pick_json_file,

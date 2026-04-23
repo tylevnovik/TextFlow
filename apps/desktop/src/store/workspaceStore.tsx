@@ -25,9 +25,11 @@ import type {
   EngineProgressEvent,
   ExportProjectResponse,
   ExportProjectBackupResponse,
-  ImportProjectFilesResponse
+  ImportProjectFilesResponse,
+  ResolveReviewTaskResponse
 } from "../bridge/desktopBridge";
 import { desktopBridge } from "../bridge/desktopBridge";
+import type { ReviewResolutionInput } from "../features/review/reviewTypes";
 
 interface TaskProgressState {
   action: string;
@@ -53,6 +55,20 @@ type WorkspaceAction =
   | { type: "setStatus"; statusLine: string }
   | { type: "prependProject"; project: ProjectSummary }
   | { type: "patchProject"; project: ProjectManifest; summary: ProjectSummary; statusLine?: string }
+  | {
+      type: "applyLocalPatch";
+      project?: ProjectManifest;
+      summary?: ProjectSummary;
+      corpus?: CorpusItem[];
+      appendCorpus?: CorpusItem[];
+      patchDocument?: CorpusItem;
+      removeDocId?: string;
+      sourceFiles?: ProjectManifest["source_files"];
+      dictionarySet?: ProjectManifest["dictionary_set"];
+      projectUpdatedAt?: string;
+      loading?: boolean;
+      statusLine?: string;
+    }
   | { type: "setLastExport"; lastExport: ExportProjectResponse | null }
   | { type: "setUiScale"; uiScale: number };
 
@@ -83,13 +99,14 @@ interface WorkspaceContextValue {
   saveProjectPackagePath: (defaultFileName?: string) => Promise<string | null>;
   importProjectPackage: (path: string) => Promise<void>;
   saveProject: (project: ProjectManifest, options?: SaveProjectOptions) => Promise<boolean>;
-  runPipeline: () => Promise<RunRecord | null>;
+  runWorkflow: () => Promise<RunRecord | null>;
   exportProject: (formats: ExportFormat[]) => Promise<ExportProjectResponse | null>;
   openPath: (path: string) => Promise<void>;
   revealPath: (path: string) => Promise<void>;
   exportProjectBackup: (path?: string) => Promise<ExportProjectBackupResponse | null>;
   updateCorpusDocument: (document: CorpusItem) => Promise<CorpusItem | null>;
   deleteCorpusDocument: (docId: string) => Promise<DeleteCorpusDocumentResponse | null>;
+  resolveReviewTask: (reviewId: string, resolution: ReviewResolutionInput) => Promise<ResolveReviewTaskResponse | null>;
 }
 
 const emptySnapshot: WorkspaceSnapshot = {
@@ -118,8 +135,55 @@ function sameProgressState(left: TaskProgressState, right: TaskProgressState): b
     left.status === right.status &&
     left.message === right.message &&
     Math.abs(left.value - right.value) < 0.005 &&
-    JSON.stringify(left.detail ?? null) === JSON.stringify(right.detail ?? null)
+    progressDetailSignature(left.detail) === progressDetailSignature(right.detail)
   );
+}
+
+function progressDetailSignature(detail: TaskProgressState["detail"]): string {
+  if (!detail) {
+    return "";
+  }
+  if (detail.kind === "workflow_run") {
+    return [
+      detail.kind,
+      detail.stage,
+      detail.current_node_id ?? "",
+      detail.current_node_label ?? "",
+      String(detail.completed_nodes),
+      String(detail.total_nodes),
+      detail.detail ?? "",
+      detail.full_node_state_sync ? "1" : "0",
+      Object.keys(detail.node_state_delta ?? {}).join(",")
+    ].join("|");
+  }
+  if ("node_label" in detail) {
+    return `${detail.kind ?? "node"}|${detail.node_label ?? ""}|${detail.detail ?? ""}`;
+  }
+  return `${detail.kind ?? ""}`;
+}
+
+function mergeWorkflowRunDetail(
+  previous: TaskProgressState["detail"],
+  incoming: NonNullable<TaskProgressState["detail"]>
+): TaskProgressState["detail"] {
+  if (incoming.kind !== "workflow_run") {
+    return incoming;
+  }
+  const previousWorkflowDetail = previous?.kind === "workflow_run" ? previous : undefined;
+  const nextNodeStates = incoming.full_node_state_sync
+    ? { ...(incoming.node_states ?? {}), ...(incoming.node_state_delta ?? {}) }
+    : {
+        ...(previousWorkflowDetail?.node_states ?? {}),
+        ...(incoming.node_states ?? {}),
+        ...(incoming.node_state_delta ?? {})
+      };
+  return {
+    ...(previousWorkflowDetail ?? {}),
+    ...incoming,
+    node_states: nextNodeStates,
+    node_state_delta: incoming.node_state_delta ?? {},
+    full_node_state_sync: Boolean(incoming.full_node_state_sync)
+  };
 }
 
 function normalizeProgressDetail(
@@ -127,7 +191,7 @@ function normalizeProgressDetail(
   previous: TaskProgressState
 ): TaskProgressState["detail"] {
   if (event.detail) {
-    return event.detail;
+    return mergeWorkflowRunDetail(previous.detail, event.detail);
   }
   const nodeMatch = event.message.match(/^正在执行节点：(.+)$/);
   if (nodeMatch) {
@@ -136,7 +200,7 @@ function normalizeProgressDetail(
       node_label: nodeMatch[1].trim()
     };
   }
-  if (event.action === "run-pipeline" && event.status === "running" && previous.detail?.kind === "node") {
+  if (event.action === "run-workflow" && event.status === "running" && previous.detail?.kind === "node") {
     return previous.detail;
   }
   return undefined;
@@ -172,6 +236,27 @@ function formatErrorMessage(error: unknown): string {
   } catch {
     return "未知错误";
   }
+}
+
+function buildProjectSummary(
+  project: ProjectManifest,
+  corpus: CorpusItem[],
+  recentProjects: ProjectSummary[],
+  summary?: ProjectSummary
+): ProjectSummary {
+  if (summary) {
+    return summary;
+  }
+  const existingSummary = recentProjects.find((item) => item.id === project.id);
+  return {
+    id: project.id,
+    name: project.name,
+    description: project.description,
+    path: existingSummary?.path ?? project.paths.root,
+    updated_at: project.updated_at,
+    document_count: corpus.length,
+    run_count: project.run_history.length
+  };
 }
 
 function reducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState {
@@ -216,6 +301,64 @@ function reducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState
         },
         statusLine: action.statusLine ?? state.statusLine
       };
+    case "applyLocalPatch": {
+      const currentProject = action.project ?? state.snapshot.current_project;
+      let nextProject = currentProject;
+      if (nextProject && action.sourceFiles) {
+        nextProject = {
+          ...nextProject,
+          source_files: action.sourceFiles
+        };
+      }
+      if (nextProject && action.dictionarySet) {
+        nextProject = {
+          ...nextProject,
+          dictionary_set: action.dictionarySet
+        };
+      }
+      if (nextProject && action.projectUpdatedAt) {
+        nextProject = {
+          ...nextProject,
+          updated_at: action.projectUpdatedAt
+        };
+      }
+
+      let nextCorpus = action.corpus ?? state.snapshot.corpus;
+      if (action.appendCorpus?.length) {
+        const appendLookup = new Map(action.appendCorpus.map((item) => [item.doc_id, item]));
+        nextCorpus = [
+          ...nextCorpus.filter((item) => !appendLookup.has(item.doc_id)),
+          ...action.appendCorpus
+        ];
+      }
+      if (action.patchDocument) {
+        const hasExisting = nextCorpus.some((item) => item.doc_id === action.patchDocument!.doc_id);
+        nextCorpus = hasExisting
+          ? nextCorpus.map((item) => (item.doc_id === action.patchDocument!.doc_id ? action.patchDocument! : item))
+          : [...nextCorpus, action.patchDocument];
+      }
+      if (action.removeDocId) {
+        nextCorpus = nextCorpus.filter((item) => item.doc_id !== action.removeDocId);
+      }
+
+      const nextSummary = nextProject
+        ? buildProjectSummary(nextProject, nextCorpus, state.snapshot.recent_projects, action.summary)
+        : undefined;
+
+      return {
+        ...state,
+        loading: action.loading ?? false,
+        snapshot: {
+          ...state.snapshot,
+          current_project: nextProject,
+          corpus: nextCorpus,
+          recent_projects: nextSummary
+            ? [nextSummary, ...state.snapshot.recent_projects.filter((item) => item.id !== nextSummary.id)]
+            : state.snapshot.recent_projects
+        },
+        statusLine: action.statusLine ?? state.statusLine
+      };
+    }
     case "setLastExport":
       return {
         ...state,
@@ -443,7 +586,23 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           ? `导入 ${result.imported_documents} 篇文档，跳过 ${result.skipped_rows} 行`
           : `导入 ${result.imported_documents} 篇文档`;
         setLastActionAt(actionLabel);
-        await refresh(actionLabel);
+        if (result.project || result.documents?.length) {
+          dispatch({
+            type: "applyLocalPatch",
+            project: result.project,
+            appendCorpus: result.documents,
+            loading: false,
+            statusLine: actionLabel
+          });
+          updateProgress({
+            action: "import-project-files",
+            status: "completed",
+            value: 1,
+            message: `${actionLabel}完成`
+          });
+        } else {
+          await refresh(actionLabel);
+        }
         return result;
       } catch (error) {
         failAction("导入文件", error);
@@ -466,8 +625,24 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       try {
         const imported = await desktopBridge.importDictionaryTable(projectId, kind, path);
         setLastActionAt(`导入词表 ${kind}`);
-        await refresh(`导入词表 ${kind}`);
-        return imported;
+        if (imported.dictionary_set) {
+          dispatch({
+            type: "applyLocalPatch",
+            dictionarySet: imported.dictionary_set,
+            projectUpdatedAt: imported.project_updated_at,
+            loading: false,
+            statusLine: `导入词表 ${kind} 完成`
+          });
+          updateProgress({
+            action: "import-dictionary-sheet",
+            status: "completed",
+            value: 1,
+            message: `导入词表 ${kind} 完成`
+          });
+        } else {
+          await refresh(`导入词表 ${kind}`);
+        }
+        return imported.table;
       } catch (error) {
         failAction(`导入词表 ${kind}`, error);
         return null;
@@ -558,7 +733,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         return false;
       }
     },
-    runPipeline: async () => {
+    runWorkflow: async () => {
       const projectId = state.snapshot.current_project?.id;
       if (!projectId) {
         dispatch({ type: "setStatus", statusLine: "请先创建或打开项目。" });
@@ -566,16 +741,21 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       }
       dispatch({ type: "setLoading", loading: true, statusLine: "正在运行预处理与分析流程..." });
       updateProgress({
-        action: "run-pipeline",
+        action: "run-workflow",
         status: "running",
         value: 0.04,
         message: "正在运行预处理与分析流程..."
       });
       try {
-        const run = await desktopBridge.runPipeline(projectId);
+        const response = await desktopBridge.runWorkflow(projectId);
         setLastActionAt("运行流程");
-        await refresh("运行流程");
-        return run;
+        dispatch({
+          type: "applyLocalPatch",
+          project: response.project,
+          loading: false,
+          statusLine: `当前项目：${response.project.name}，最近一次动作：运行流程`
+        });
+        return response.run;
       } catch (error) {
         failAction("运行流程", error);
         return null;
@@ -614,6 +794,12 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           statusLine: exported.files.length
             ? `导出完成，结果已放到 ${exported.relative_export_dir}，并已自动打开文件夹。`
             : "导出完成，但本次没有生成新文件。"
+        });
+        updateProgress({
+          action: "export-project",
+          status: "completed",
+          value: 1,
+          message: "导出结果完成"
         });
         setLastActionAt("导出结果");
         return exported;
@@ -671,8 +857,21 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       try {
         const updated = await desktopBridge.updateCorpusDocument(projectId, document);
         setLastActionAt("保存语料文档");
-        await refresh("保存语料文档");
-        return updated;
+        dispatch({
+          type: "applyLocalPatch",
+          patchDocument: updated.document,
+          sourceFiles: updated.source_files,
+          projectUpdatedAt: updated.project_updated_at,
+          loading: false,
+          statusLine: "保存语料文档完成"
+        });
+        updateProgress({
+          action: "update-corpus-document",
+          status: "completed",
+          value: 1,
+          message: "保存语料文档完成"
+        });
+        return updated.document;
       } catch (error) {
         failAction("保存语料文档", error);
         return null;
@@ -694,10 +893,60 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       try {
         const result = await desktopBridge.deleteCorpusDocument(projectId, docId);
         setLastActionAt("删除语料文档");
-        await refresh("删除语料文档");
+        dispatch({
+          type: "applyLocalPatch",
+          removeDocId: result.doc_id,
+          sourceFiles: result.source_files,
+          projectUpdatedAt: result.project_updated_at,
+          loading: false,
+          statusLine: "删除语料文档完成"
+        });
+        updateProgress({
+          action: "delete-corpus-document",
+          status: "completed",
+          value: 1,
+          message: "删除语料文档完成"
+        });
         return result;
       } catch (error) {
         failAction("删除语料文档", error);
+        return null;
+      }
+    },
+    resolveReviewTask: async (reviewId, resolution) => {
+      const projectId = state.snapshot.current_project?.id;
+      if (!projectId) {
+        dispatch({ type: "setStatus", statusLine: "请先创建或打开项目。" });
+        return null;
+      }
+      dispatch({ type: "setLoading", loading: true, statusLine: "正在写回复核结果..." });
+      updateProgress({
+        action: "resolve-review-task",
+        status: "running",
+        value: 0.04,
+        message: "正在写回复核结果..."
+      });
+      try {
+        const result = await desktopBridge.resolveReviewTask(projectId, reviewId, resolution);
+        setLastActionAt(resolution.decision === "reject" ? "拒绝复核写回" : "写回复核结果");
+        dispatch({
+          type: "applyLocalPatch",
+          project: result.project,
+          corpus: result.corpus,
+          sourceFiles: result.source_files,
+          projectUpdatedAt: result.project_updated_at,
+          loading: false,
+          statusLine: resolution.decision === "reject" ? "复核任务已标记为拒绝" : "复核结果已写回项目"
+        });
+        updateProgress({
+          action: "resolve-review-task",
+          status: "completed",
+          value: 1,
+          message: resolution.decision === "reject" ? "复核任务已拒绝" : "复核结果已写回项目"
+        });
+        return result;
+      } catch (error) {
+        failAction(resolution.decision === "reject" ? "拒绝复核写回" : "写回复核结果", error);
         return null;
       }
     }
