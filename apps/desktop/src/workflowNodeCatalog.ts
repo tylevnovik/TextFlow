@@ -1,7 +1,7 @@
 import type {
   ExportParameters,
-  PipelineDefinition,
-  PipelineStepId,
+  WorkflowRuntimeProfile,
+  WorkflowStepId,
   RunScopeDefinition,
   WorkflowNodeType,
   WorkflowPort,
@@ -9,7 +9,7 @@ import type {
 } from "@textflow/shared-types";
 import { builtinWorkflowNodeSchema, type GeneratedWorkflowNodeSchema } from "./generatedBuiltinWorkflowNodeSchema";
 
-export type WorkflowStepRole = PipelineStepId | "scope" | "resource" | "merge" | "sink" | "utility";
+export type WorkflowStepRole = WorkflowStepId | "scope" | "resource" | "merge" | "sink" | "utility";
 
 export interface WorkflowCatalogPort extends WorkflowPort {
   result_bundle_key?: string;
@@ -27,12 +27,12 @@ export interface WorkflowNodeDefinition {
   outputs: WorkflowCatalogPort[];
   stepId: WorkflowStepRole;
   size?: { w: number; h: number };
-  defaultConfig: (pipeline: PipelineDefinition) => Record<string, unknown>;
+  defaultConfig: (runtimeProfile: WorkflowRuntimeProfile) => Record<string, unknown>;
 }
 
 interface WorkflowNodeUiDefinition {
   size?: { w: number; h: number };
-  defaultConfig: (pipeline: PipelineDefinition) => Record<string, unknown>;
+  defaultConfig: (runtimeProfile: WorkflowRuntimeProfile) => Record<string, unknown>;
 }
 
 export const corpusPortOrder: WorkflowPortType[] = [
@@ -49,6 +49,11 @@ export const defaultNodePositions: Partial<Record<WorkflowNodeType, { x: number;
   dictionary_input: { x: 120, y: 80 },
   corpus_input: { x: 120, y: 330 },
   merge_corpora: { x: 520, y: 330 },
+  filter_by_metadata: { x: 760, y: 120 },
+  deduplicate_documents: { x: 760, y: 330 },
+  sample_corpus: { x: 760, y: 540 },
+  split_corpus: { x: 900, y: 860 },
+  bucket_by_time: { x: 1260, y: 860 },
   clean_text: { x: 900, y: 330 },
   normalize_text: { x: 1280, y: 330 },
   tokenize: { x: 1680, y: 330 },
@@ -77,7 +82,7 @@ export const defaultNodePositions: Partial<Record<WorkflowNodeType, { x: number;
   export_results: { x: 3620, y: 360 }
 };
 
-export const executionOrder: PipelineStepId[] = [
+export const executionOrder: WorkflowStepId[] = [
   "ingestion",
   "cleaning",
   "normalization",
@@ -88,36 +93,36 @@ export const executionOrder: PipelineStepId[] = [
   "export"
 ];
 
-export const defaultRunScope = (pipeline: PipelineDefinition): RunScopeDefinition => ({
-  ...pipeline.run_scope,
-  mode: pipeline.run_scope?.mode ?? "all_documents",
-  source_values: [...(pipeline.run_scope?.source_values ?? [])],
-  institution_values: [...(pipeline.run_scope?.institution_values ?? [])],
-  category_values: [...(pipeline.run_scope?.category_values ?? [])],
-  year_from: pipeline.run_scope?.year_from ?? null,
-  year_to: pipeline.run_scope?.year_to ?? null,
-  selected_doc_ids: [...(pipeline.run_scope?.selected_doc_ids ?? [])]
+export const defaultRunScope = (runtimeProfile: WorkflowRuntimeProfile): RunScopeDefinition => ({
+  ...runtimeProfile.run_scope,
+  mode: runtimeProfile.run_scope?.mode ?? "all_documents",
+  source_values: [...(runtimeProfile.run_scope?.source_values ?? [])],
+  institution_values: [...(runtimeProfile.run_scope?.institution_values ?? [])],
+  category_values: [...(runtimeProfile.run_scope?.category_values ?? [])],
+  year_from: runtimeProfile.run_scope?.year_from ?? null,
+  year_to: runtimeProfile.run_scope?.year_to ?? null,
+  selected_doc_ids: [...(runtimeProfile.run_scope?.selected_doc_ids ?? [])]
 });
 
-export const defaultExport = (pipeline: PipelineDefinition): ExportParameters => ({
-  ...pipeline.export,
-  export_csv: pipeline.export?.export_csv ?? true,
-  export_xlsx: pipeline.export?.export_xlsx ?? true,
-  export_png: pipeline.export?.export_png ?? true,
-  export_html_report: pipeline.export?.export_html_report ?? true,
-  include_audit: pipeline.export?.include_audit ?? true,
-  chart_dpi: pipeline.export?.chart_dpi ?? 320,
-  watermark_enabled: pipeline.export?.watermark_enabled ?? false,
-  watermark_text: pipeline.export?.watermark_text ?? "TextFlow Studio"
+export const defaultExport = (runtimeProfile: WorkflowRuntimeProfile): ExportParameters => ({
+  ...runtimeProfile.export,
+  export_csv: runtimeProfile.export?.export_csv ?? true,
+  export_xlsx: runtimeProfile.export?.export_xlsx ?? true,
+  export_png: runtimeProfile.export?.export_png ?? true,
+  export_html_report: runtimeProfile.export?.export_html_report ?? true,
+  include_audit: runtimeProfile.export?.include_audit ?? true,
+  chart_dpi: runtimeProfile.export?.chart_dpi ?? 320,
+  watermark_enabled: runtimeProfile.export?.watermark_enabled ?? false,
+  watermark_text: runtimeProfile.export?.watermark_text ?? "TextFlow Studio"
 });
 
 const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiDefinition> = {
   corpus_input: {
     size: { w: 420, h: 340 },
-    defaultConfig: (pipeline) => ({
+    defaultConfig: (runtimeProfile) => ({
       resource_mode: "project_corpus",
       resource_id: "project:corpus",
-      ...(defaultRunScope(pipeline) as unknown as Record<string, unknown>)
+      ...(defaultRunScope(runtimeProfile) as unknown as Record<string, unknown>)
     })
   },
   dictionary_input: {
@@ -139,29 +144,69 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
     size: { w: 300, h: 210 },
     defaultConfig: () => ({ strategy: "append" })
   },
+  filter_by_metadata: {
+    size: { w: 340, h: 240 },
+    defaultConfig: () => ({
+      conditions: [{ field: "institution", operator: "in", values: ["OpenAI"] }]
+    })
+  },
+  deduplicate_documents: {
+    size: { w: 320, h: 220 },
+    defaultConfig: () => ({
+      dedupe_keys: ["title", "year"],
+      strategy: "keep_first"
+    })
+  },
+  sample_corpus: {
+    size: { w: 320, h: 240 },
+    defaultConfig: () => ({
+      sample_mode: "random",
+      sample_size: 200,
+      sample_ratio: null,
+      seed: 42
+    })
+  },
+  split_corpus: {
+    size: { w: 320, h: 240 },
+    defaultConfig: () => ({
+      split_strategy: "ratio",
+      splits: [
+        { name: "train", ratio: 0.7 },
+        { name: "test", ratio: 0.3 }
+      ],
+      seed: 42
+    })
+  },
+  bucket_by_time: {
+    size: { w: 320, h: 220 },
+    defaultConfig: () => ({
+      field: "year",
+      granularity: "year"
+    })
+  },
   clean_text: {
     size: { w: 320, h: 230 },
-    defaultConfig: (pipeline) => ({ ...pipeline.cleaning })
+    defaultConfig: (runtimeProfile) => ({ ...runtimeProfile.cleaning })
   },
   normalize_text: {
     size: { w: 330, h: 240 },
-    defaultConfig: (pipeline) => ({ ...pipeline.normalization })
+    defaultConfig: (runtimeProfile) => ({ ...runtimeProfile.normalization })
   },
   tokenize: {
     size: { w: 320, h: 230 },
-    defaultConfig: (pipeline) => ({ ...pipeline.tokenization })
+    defaultConfig: (runtimeProfile) => ({ ...runtimeProfile.tokenization })
   },
   apply_dictionary_rules: {
     size: { w: 340, h: 240 },
-    defaultConfig: (pipeline) => ({ ...pipeline.dictionary })
+    defaultConfig: (runtimeProfile) => ({ ...runtimeProfile.dictionary })
   },
   filter_terms: {
     size: { w: 320, h: 230 },
-    defaultConfig: (pipeline) => ({ ...pipeline.filtering })
+    defaultConfig: (runtimeProfile) => ({ ...runtimeProfile.filtering })
   },
   frequency_statistics: {
     size: { w: 280, h: 210 },
-    defaultConfig: (pipeline) => ({ top_n: pipeline.analysis.top_n })
+    defaultConfig: (runtimeProfile) => ({ top_n: runtimeProfile.analysis.top_n })
   },
   term_document_analysis: {
     size: { w: 300, h: 210 },
@@ -173,29 +218,29 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
   },
   cooccurrence_analysis: {
     size: { w: 320, h: 230 },
-    defaultConfig: (pipeline) => ({
-      cooccurrence_window: pipeline.analysis.cooccurrence_window,
-      min_cooccurrence: pipeline.analysis.min_cooccurrence
+    defaultConfig: (runtimeProfile) => ({
+      cooccurrence_window: runtimeProfile.analysis.cooccurrence_window,
+      min_cooccurrence: runtimeProfile.analysis.min_cooccurrence
     })
   },
   feature_term_selection: {
     size: { w: 320, h: 220 },
-    defaultConfig: (pipeline) => ({
-      feature_term_count: pipeline.analysis.feature_term_count
+    defaultConfig: (runtimeProfile) => ({
+      feature_term_count: runtimeProfile.analysis.feature_term_count
     })
   },
   keyword_extraction: {
     size: { w: 320, h: 220 },
-    defaultConfig: (pipeline) => ({
-      top_k_per_doc: pipeline.analysis.top_k_per_doc,
-      top_k_project: pipeline.analysis.top_k_project
+    defaultConfig: (runtimeProfile) => ({
+      top_k_per_doc: runtimeProfile.analysis.top_k_per_doc,
+      top_k_project: runtimeProfile.analysis.top_k_project
     })
   },
   keyword_clustering: {
     size: { w: 320, h: 220 },
-    defaultConfig: (pipeline) => ({
-      keyword_cluster_k: pipeline.analysis.keyword_cluster_k,
-      topic_model_k: pipeline.analysis.topic_model_k
+    defaultConfig: (runtimeProfile) => ({
+      keyword_cluster_k: runtimeProfile.analysis.keyword_cluster_k,
+      topic_model_k: runtimeProfile.analysis.topic_model_k
     })
   },
   institution_keyword_analysis: {
@@ -204,11 +249,11 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
   },
   institution_topic_analysis: {
     size: { w: 300, h: 210 },
-    defaultConfig: (pipeline) => ({ topic_model_k: pipeline.analysis.topic_model_k })
+    defaultConfig: (runtimeProfile) => ({ topic_model_k: runtimeProfile.analysis.topic_model_k })
   },
   document_clustering: {
     size: { w: 300, h: 210 },
-    defaultConfig: (pipeline) => ({ document_cluster_k: pipeline.analysis.document_cluster_k })
+    defaultConfig: (runtimeProfile) => ({ document_cluster_k: runtimeProfile.analysis.document_cluster_k })
   },
   save_csv: {
     size: { w: 280, h: 210 },
@@ -220,16 +265,16 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
   },
   save_png: {
     size: { w: 300, h: 220 },
-    defaultConfig: (pipeline) => ({
+    defaultConfig: (runtimeProfile) => ({
       file_prefix: "charts",
-      chart_dpi: defaultExport(pipeline).chart_dpi
+      chart_dpi: defaultExport(runtimeProfile).chart_dpi
     })
   },
   save_html_report: {
     size: { w: 320, h: 230 },
-    defaultConfig: (pipeline) => ({
+    defaultConfig: (runtimeProfile) => ({
       file_prefix: "report",
-      include_audit: defaultExport(pipeline).include_audit
+      include_audit: defaultExport(runtimeProfile).include_audit
     })
   },
   note: {
@@ -244,16 +289,16 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
     defaultConfig: () => ({})
   },
   filter_corpus: {
-    defaultConfig: (pipeline) => ({ ...(defaultRunScope(pipeline) as unknown as Record<string, unknown>) })
+    defaultConfig: (runtimeProfile) => ({ ...(defaultRunScope(runtimeProfile) as unknown as Record<string, unknown>) })
   },
   project_dictionary_set: {
     defaultConfig: () => ({})
   },
   analyze_corpus: {
-    defaultConfig: (pipeline) => ({ ...pipeline.analysis })
+    defaultConfig: (runtimeProfile) => ({ ...runtimeProfile.analysis })
   },
   export_results: {
-    defaultConfig: (pipeline) => ({ ...defaultExport(pipeline) })
+    defaultConfig: (runtimeProfile) => ({ ...defaultExport(runtimeProfile) })
   }
 };
 

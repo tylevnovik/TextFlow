@@ -1,7 +1,7 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import type {
   CorpusItem,
-  PipelineDefinition,
+  WorkflowRuntimeProfile,
   ProjectManifest,
   RegisteredWorkflowNodeDefinition,
   RunRecord,
@@ -14,7 +14,7 @@ interface WorkflowNodeEditorContext {
   project: ProjectManifest;
   snapshot: { corpus: CorpusItem[] };
   latestRun?: RunRecord;
-  draftPipeline: PipelineDefinition;
+  draftRuntimeProfile: WorkflowRuntimeProfile;
   loading: boolean;
   nodeDefinitionsByType: Map<string, RegisteredWorkflowNodeDefinition>;
   availableSources: string[];
@@ -293,11 +293,232 @@ function renderDictionaryInputEditor(context: WorkflowNodeEditorContext) {
   );
 }
 
+function csvList(value: unknown): string {
+  return Array.isArray(value) ? value.map((item) => String(item)).join(", ") : "";
+}
+
+function parseCsvList(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function conditionText(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value
+    .filter((item): item is { field?: unknown; operator?: unknown; values?: unknown } => typeof item === "object" && item !== null)
+    .map((item) => `${String(item.field ?? "")}|${String(item.operator ?? "in")}|${Array.isArray(item.values) ? item.values.map((entry) => String(entry)).join(",") : ""}`)
+    .join("\n");
+}
+
+function parseConditionText(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [field, operator = "in", valuesText = ""] = line.split("|");
+      return {
+        field: field?.trim() ?? "",
+        operator: operator.trim() || "in",
+        values: parseCsvList(valuesText)
+      };
+    })
+    .filter((condition) => condition.field);
+}
+
+function splitText(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value
+    .filter((item): item is { name?: unknown; ratio?: unknown } => typeof item === "object" && item !== null)
+    .map((item) => `${String(item.name ?? "")}:${String(item.ratio ?? "")}`)
+    .join("\n");
+}
+
+function parseSplitText(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [name, ratioText = "0"] = line.split(":");
+      return {
+        name: name?.trim() ?? "",
+        ratio: Number(ratioText.trim() || "0")
+      };
+    })
+    .filter((item) => item.name);
+}
+
+function renderFilterByMetadataEditor(context: WorkflowNodeEditorContext) {
+  return (
+    <div className="workflow-node-inline-editor-grid">
+      <label className="field compact">
+        <span>条件列表</span>
+        <textarea
+          value={conditionText(context.node.config.conditions)}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { conditions: parseConditionText(event.target.value) })}
+          placeholder="institution|in|OpenAI,Anthropic"
+          disabled={context.loading}
+          rows={4}
+        />
+      </label>
+      <small>每行一个条件：`字段|运算符|值1,值2`</small>
+    </div>
+  );
+}
+
+function renderDeduplicateDocumentsEditor(context: WorkflowNodeEditorContext) {
+  return (
+    <div className="workflow-node-inline-editor-grid">
+      <label className="field compact">
+        <span>去重字段</span>
+        <input
+          value={csvList(context.node.config.dedupe_keys)}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { dedupe_keys: parseCsvList(event.target.value) })}
+          placeholder="title, year"
+          disabled={context.loading}
+        />
+      </label>
+      <label className="field compact">
+        <span>保留策略</span>
+        <select
+          value={String(context.node.config.strategy ?? "keep_first")}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { strategy: event.target.value })}
+          disabled={context.loading}
+        >
+          <option value="keep_first">保留首条</option>
+        </select>
+      </label>
+    </div>
+  );
+}
+
+function renderSampleCorpusEditor(context: WorkflowNodeEditorContext) {
+  return (
+    <div className="workflow-node-inline-editor-grid">
+      <label className="field compact">
+        <span>抽样方式</span>
+        <select
+          value={String(context.node.config.sample_mode ?? "random")}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { sample_mode: event.target.value })}
+          disabled={context.loading}
+        >
+          <option value="random">随机抽样</option>
+        </select>
+      </label>
+      <label className="field compact">
+        <span>样本数量</span>
+        <input
+          type="number"
+          value={numericValue(context.node.config.sample_size)}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { sample_size: event.target.value ? Number(event.target.value) : null })}
+          disabled={context.loading}
+        />
+      </label>
+      <label className="field compact">
+        <span>抽样比例</span>
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          max="1"
+          value={numericValue(context.node.config.sample_ratio)}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { sample_ratio: event.target.value ? Number(event.target.value) : null })}
+          disabled={context.loading}
+        />
+      </label>
+      <label className="field compact">
+        <span>随机种子</span>
+        <input
+          type="number"
+          value={numericValue(context.node.config.seed)}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { seed: event.target.value ? Number(event.target.value) : 42 })}
+          disabled={context.loading}
+        />
+      </label>
+    </div>
+  );
+}
+
+function renderSplitCorpusEditor(context: WorkflowNodeEditorContext) {
+  return (
+    <div className="workflow-node-inline-editor-grid">
+      <label className="field compact">
+        <span>切分方式</span>
+        <select
+          value={String(context.node.config.split_strategy ?? "ratio")}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { split_strategy: event.target.value })}
+          disabled={context.loading}
+        >
+          <option value="ratio">按比例</option>
+        </select>
+      </label>
+      <label className="field compact">
+        <span>切分定义</span>
+        <textarea
+          value={splitText(context.node.config.splits)}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { splits: parseSplitText(event.target.value) })}
+          placeholder={"train:0.7\ntest:0.3"}
+          disabled={context.loading}
+          rows={4}
+        />
+      </label>
+      <label className="field compact">
+        <span>随机种子</span>
+        <input
+          type="number"
+          value={numericValue(context.node.config.seed)}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { seed: event.target.value ? Number(event.target.value) : 42 })}
+          disabled={context.loading}
+        />
+      </label>
+    </div>
+  );
+}
+
+function renderBucketByTimeEditor(context: WorkflowNodeEditorContext) {
+  return (
+    <div className="workflow-node-inline-editor-grid">
+      <label className="field compact">
+        <span>时间字段</span>
+        <input
+          value={String(context.node.config.field ?? "year")}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { field: event.target.value })}
+          disabled={context.loading}
+        />
+      </label>
+      <label className="field compact">
+        <span>分桶粒度</span>
+        <select
+          value={String(context.node.config.granularity ?? "year")}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { granularity: event.target.value })}
+          disabled={context.loading}
+        >
+          <option value="year">按年</option>
+          <option value="5_year">五年</option>
+          <option value="decade">十年</option>
+        </select>
+      </label>
+    </div>
+  );
+}
+
 type WorkflowNodeInlineRenderer = (context: WorkflowNodeEditorContext) => ReactNode;
 
 const workflowNodeInlineRenderers: Partial<Record<WorkflowNodeInstance["node_type"], WorkflowNodeInlineRenderer>> = {
   corpus_input: renderCorpusInputEditor,
-  dictionary_input: renderDictionaryInputEditor
+  dictionary_input: renderDictionaryInputEditor,
+  filter_by_metadata: renderFilterByMetadataEditor,
+  deduplicate_documents: renderDeduplicateDocumentsEditor,
+  sample_corpus: renderSampleCorpusEditor,
+  split_corpus: renderSplitCorpusEditor,
+  bucket_by_time: renderBucketByTimeEditor
 };
 
 export function renderWorkflowNodeInlineEditor(context: WorkflowNodeEditorContext) {

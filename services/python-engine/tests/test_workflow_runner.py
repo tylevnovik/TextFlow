@@ -349,6 +349,97 @@ def _set_export_nodes(
         node_lookup["save_png"]["config"]["watermark_text"] = watermark_text
 
 
+def _build_custom_node(node_type: str, node_id: str, config: dict[str, Any], *, x: int = 700, y: int = 330) -> dict[str, Any]:
+    definition = build_node_registry().definitions_by_type[node_type]
+    return {
+        "node_id": node_id,
+        "node_type": node_type,
+        "label": str(definition.get("title") or node_type),
+        "position": {"x": x, "y": y},
+        "inputs": deepcopy(definition.get("inputs") or []),
+        "outputs": deepcopy(definition.get("outputs") or []),
+        "config": deepcopy(config),
+        "ui_state": {"collapsed": False, "bypassed": False},
+        "runtime_meta": {"node_impl_version": "1.0.0"},
+    }
+
+
+def _insert_corpus_process_node(
+    workflow: dict[str, Any],
+    *,
+    node_type: str,
+    node_id: str,
+    config: dict[str, Any],
+    x: int = 700,
+    y: int = 330,
+) -> dict[str, Any]:
+    corpus_input = _workflow_node(workflow, "corpus_input")
+    clean_text = _workflow_node(workflow, "clean_text")
+    node = _build_custom_node(node_type, node_id, config, x=x, y=y)
+    workflow["nodes"].append(node)
+    workflow["edges"] = [
+        edge
+        for edge in workflow.get("edges", [])
+        if not (
+            str(edge.get("from_node") or "") == str(corpus_input["node_id"])
+            and str(edge.get("to_node") or "") == str(clean_text["node_id"])
+        )
+    ]
+    workflow["edges"].extend(
+        [
+            {
+                "edge_id": f"edge-{uuid4().hex[:8]}",
+                "from_node": corpus_input["node_id"],
+                "from_port": "corpus",
+                "to_node": node_id,
+                "to_port": "corpus_in",
+            },
+            {
+                "edge_id": f"edge-{uuid4().hex[:8]}",
+                "from_node": node_id,
+                "from_port": str(node["outputs"][0]["port_id"]),
+                "to_node": clean_text["node_id"],
+                "to_port": "corpus_in",
+            },
+        ]
+    )
+    return node
+
+
+def _attach_table_node_to_csv_sink(
+    workflow: dict[str, Any],
+    *,
+    node_type: str,
+    node_id: str,
+    config: dict[str, Any],
+    x: int = 900,
+    y: int = 900,
+) -> dict[str, Any]:
+    corpus_input = _workflow_node(workflow, "corpus_input")
+    save_csv = _workflow_node(workflow, "save_csv")
+    node = _build_custom_node(node_type, node_id, config, x=x, y=y)
+    workflow["nodes"].append(node)
+    workflow["edges"].extend(
+        [
+            {
+                "edge_id": f"edge-{uuid4().hex[:8]}",
+                "from_node": corpus_input["node_id"],
+                "from_port": "corpus",
+                "to_node": node_id,
+                "to_port": "corpus_in",
+            },
+            {
+                "edge_id": f"edge-{uuid4().hex[:8]}",
+                "from_node": node_id,
+                "from_port": str(node["outputs"][0]["port_id"]),
+                "to_node": save_csv["node_id"],
+                "to_port": "table_in",
+            },
+        ]
+    )
+    return node
+
+
 def test_workflow_runner_end_to_end_generates_outputs(isolated_workspace):
     project_name = f"pytest-{uuid4().hex[:8]}"
     project_dir, manifest, corpus = _create_test_project(project_name, "workflow test project")
@@ -1216,6 +1307,118 @@ def test_disabled_dictionary_entries_are_ignored():
 
     assert tokens == ["analysis"]
     assert audits == []
+
+
+def test_filter_by_metadata_node_restricts_documents(isolated_workspace):
+    project_name = f"pytest-{uuid4().hex[:8]}"
+    project_dir, manifest, corpus = _create_test_project(project_name, "metadata filter node")
+    workflow = manifest["workflow_definitions"][0]
+    _insert_corpus_process_node(
+        workflow,
+        node_type="filter_by_metadata",
+        node_id="node-filter-by-metadata",
+        config={"conditions": [{"field": "institution", "operator": "in", "values": ["清华大学"]}]},
+    )
+    _bypass_analysis_except(workflow, "term_document_analysis")
+    _set_export_nodes(workflow, csv_enabled=False, xlsx_enabled=False, png_enabled=False, html_enabled=False)
+
+    manifest, _processed_corpus, run_record = run_project_workflow(project_dir, manifest, corpus)
+
+    assert run_record["processed_document_count"] == 1
+    assert {row["doc_id"] for row in manifest["results"]["term_document_table"]} == {"DOC-002"}
+
+
+def test_deduplicate_documents_node_keeps_single_copy(isolated_workspace):
+    project_name = f"pytest-{uuid4().hex[:8]}"
+    project_dir, manifest, corpus = _create_test_project(project_name, "deduplicate node")
+    duplicate = deepcopy(corpus[0])
+    duplicate["id"] = "DOC-004"
+    duplicate["doc_id"] = "DOC-004"
+    corpus.append(duplicate)
+    workflow = manifest["workflow_definitions"][0]
+    _insert_corpus_process_node(
+        workflow,
+        node_type="deduplicate_documents",
+        node_id="node-deduplicate-documents",
+        config={"dedupe_keys": ["title", "year"], "strategy": "keep_first"},
+        y=540,
+    )
+    _bypass_analysis_except(workflow, "term_document_analysis")
+    _set_export_nodes(workflow, csv_enabled=False, xlsx_enabled=False, png_enabled=False, html_enabled=False)
+
+    manifest, _processed_corpus, run_record = run_project_workflow(project_dir, manifest, corpus)
+
+    assert run_record["processed_document_count"] == 3
+    assert {row["doc_id"] for row in manifest["results"]["term_document_table"]} == {"DOC-001", "DOC-002", "DOC-003"}
+
+
+def test_sample_corpus_node_is_seeded_and_reproducible(isolated_workspace):
+    project_name = f"pytest-{uuid4().hex[:8]}"
+    project_dir, manifest, corpus = _create_test_project(project_name, "sample corpus node")
+    workflow = manifest["workflow_definitions"][0]
+    _insert_corpus_process_node(
+        workflow,
+        node_type="sample_corpus",
+        node_id="node-sample-corpus",
+        config={"sample_mode": "random", "sample_size": 2, "seed": 42},
+        y=720,
+    )
+    _bypass_analysis_except(workflow, "term_document_analysis")
+    _set_export_nodes(workflow, csv_enabled=False, xlsx_enabled=False, png_enabled=False, html_enabled=False)
+
+    manifest, _processed_corpus, _first_run = run_project_workflow(project_dir, manifest, corpus)
+    first_sample = [row["doc_id"] for row in manifest["results"]["term_document_table"]]
+
+    manifest, _processed_corpus, _second_run = run_project_workflow(project_dir, manifest, corpus)
+    second_sample = [row["doc_id"] for row in manifest["results"]["term_document_table"]]
+
+    assert len(set(first_sample)) == 2
+    assert first_sample == second_sample
+
+
+def test_split_corpus_node_creates_named_views(isolated_workspace):
+    project_name = f"pytest-{uuid4().hex[:8]}"
+    project_dir, manifest, corpus = _create_test_project(project_name, "split corpus node")
+    workflow = manifest["workflow_definitions"][0]
+    _attach_table_node_to_csv_sink(
+        workflow,
+        node_type="split_corpus",
+        node_id="node-split-corpus",
+        config={
+            "split_strategy": "ratio",
+            "splits": [{"name": "train", "ratio": 0.67}, {"name": "test", "ratio": 0.33}],
+            "seed": 42,
+        },
+    )
+    _retain_output_bindings(workflow, {"save_csv": {"split_corpus"}})
+    _bypass_analysis_except(workflow)
+    _set_export_nodes(workflow, csv_enabled=True, xlsx_enabled=False, png_enabled=False, html_enabled=False)
+
+    manifest, _processed_corpus, _run_record = run_project_workflow(project_dir, manifest, corpus)
+
+    assert {row["split_name"] for row in manifest["results"]["split_assignments"]} == {"train", "test"}
+    assert len(manifest["results"]["split_assignments"]) == 3
+
+
+def test_bucket_by_time_node_emits_time_bucket_assignments(isolated_workspace):
+    project_name = f"pytest-{uuid4().hex[:8]}"
+    project_dir, manifest, corpus = _create_test_project(project_name, "bucket by time node")
+    workflow = manifest["workflow_definitions"][0]
+    _attach_table_node_to_csv_sink(
+        workflow,
+        node_type="bucket_by_time",
+        node_id="node-bucket-by-time",
+        config={"field": "year", "granularity": "decade"},
+        x=1260,
+        y=900,
+    )
+    _retain_output_bindings(workflow, {"save_csv": {"bucket_by_time"}})
+    _bypass_analysis_except(workflow)
+    _set_export_nodes(workflow, csv_enabled=True, xlsx_enabled=False, png_enabled=False, html_enabled=False)
+
+    manifest, _processed_corpus, _run_record = run_project_workflow(project_dir, manifest, corpus)
+
+    assert {row["time_bucket"] for row in manifest["results"]["time_bucket_assignments"]} == {"2020s"}
 
 
 def test_large_node_output_is_registered_as_artifact(isolated_workspace):

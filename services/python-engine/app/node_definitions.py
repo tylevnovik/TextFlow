@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
-from .defaults import default_pipeline
+from .defaults import default_runtime_profile
 
 if TYPE_CHECKING:
     from .node_registry import NodeRegistryBuilder
@@ -89,14 +89,18 @@ def _runtime(
     cacheable: bool,
     previewable: bool,
     output_node: bool = False,
+    parallel_safe: bool = False,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "step_id": step_id,
         "executor": executor,
         "cacheable": cacheable,
         "previewable": previewable,
         "output_node": output_node,
     }
+    if parallel_safe:
+        payload["parallel_safe"] = True
+    return payload
 
 
 def _analysis_node(
@@ -117,14 +121,14 @@ def _analysis_node(
         "inputs": inputs,
         "outputs": outputs,
         "params": params,
-        "runtime": _runtime("analysis", executor, cacheable=True, previewable=True),
+        "runtime": _runtime("analysis", executor, cacheable=True, previewable=True, parallel_safe=True),
     }
 
 
-def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    pipeline_definition = deepcopy(pipeline if isinstance(pipeline, dict) else default_pipeline())
-    analysis = deepcopy(pipeline_definition.get("analysis") or {})
-    export = deepcopy(pipeline_definition.get("export") or {})
+def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    runtime_profile_definition = deepcopy(runtime_profile if isinstance(runtime_profile, dict) else default_runtime_profile())
+    analysis = deepcopy(runtime_profile_definition.get("analysis") or {})
+    export = deepcopy(runtime_profile_definition.get("export") or {})
 
     return [
         {
@@ -152,8 +156,8 @@ def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> li
                         ("selected_documents", "指定文档"),
                     ],
                 ),
-                _number_param("year_from", "起始年份", pipeline_definition["run_scope"].get("year_from")),
-                _number_param("year_to", "结束年份", pipeline_definition["run_scope"].get("year_to")),
+                _number_param("year_from", "起始年份", runtime_profile_definition["run_scope"].get("year_from")),
+                _number_param("year_to", "结束年份", runtime_profile_definition["run_scope"].get("year_to")),
             ],
             "runtime": _runtime("scope", "scope.select_corpus", cacheable=False, previewable=True),
         },
@@ -197,6 +201,99 @@ def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> li
             "runtime": _runtime("merge", "graph.merge_corpora", cacheable=False, previewable=True),
         },
         {
+            "type": "filter_by_metadata",
+            "title": "按元数据筛选",
+            "category": "process",
+            "description": "按机构、来源、年份或扩展元数据字段筛选当前语料。",
+            "inputs": [_port("corpus_in", "CorpusTable", "语料输入")],
+            "outputs": [_port("filtered_corpus", "CorpusTable", "筛选后语料")],
+            "params": [
+                _string_param("field", "筛选字段", "institution"),
+                _enum_param(
+                    "operator",
+                    "运算符",
+                    "in",
+                    [("in", "包含"), ("not_in", "排除"), ("contains", "包含文本"), ("eq", "等于")],
+                ),
+                _string_param("values_text", "筛选值", "OpenAI"),
+            ],
+            "runtime": _runtime("scope", "scope.filter_by_metadata", cacheable=True, previewable=True, parallel_safe=True),
+        },
+        {
+            "type": "deduplicate_documents",
+            "title": "文档去重",
+            "category": "process",
+            "description": "按指定字段组合移除重复文档，保持结果可复现。",
+            "inputs": [_port("corpus_in", "CorpusTable", "语料输入")],
+            "outputs": [_port("deduped_corpus", "CorpusTable", "去重后语料")],
+            "params": [
+                _string_param("dedupe_keys_text", "去重字段", "title,year"),
+                _enum_param("strategy", "保留策略", "keep_first", [("keep_first", "保留首条")]),
+            ],
+            "runtime": _runtime("scope", "scope.deduplicate_documents", cacheable=True, previewable=True, parallel_safe=True),
+        },
+        {
+            "type": "sample_corpus",
+            "title": "语料抽样",
+            "category": "process",
+            "description": "按固定随机种子抽取样本，支持数量或比例模式。",
+            "inputs": [_port("corpus_in", "CorpusTable", "语料输入")],
+            "outputs": [_port("sampled_corpus", "CorpusTable", "抽样后语料")],
+            "params": [
+                _enum_param("sample_mode", "抽样方式", "random", [("random", "随机抽样")]),
+                _number_param("sample_size", "样本数量", 200),
+                _number_param("sample_ratio", "抽样比例", None),
+                _number_param("seed", "随机种子", 42),
+            ],
+            "runtime": _runtime("scope", "scope.sample_corpus", cacheable=True, previewable=True, parallel_safe=True),
+        },
+        {
+            "type": "split_corpus",
+            "title": "语料切分",
+            "category": "analysis",
+            "description": "按命名分组输出语料切分分配表，而不是复制多份全文数据。",
+            "inputs": [_port("corpus_in", "CorpusTable", "语料输入")],
+            "outputs": [
+                _port(
+                    "split_assignment_table",
+                    "AnyTable",
+                    "切分分配表",
+                    result_bundle_key="split_assignments",
+                )
+            ],
+            "params": [
+                _enum_param("split_strategy", "切分方式", "ratio", [("ratio", "按比例")]),
+                _string_param("splits_text", "切分定义", "train:0.7\ntest:0.3"),
+                _number_param("seed", "随机种子", 42),
+            ],
+            "runtime": _runtime("analysis", "analysis.split_corpus", cacheable=True, previewable=True, parallel_safe=True),
+        },
+        {
+            "type": "bucket_by_time",
+            "title": "时间分桶",
+            "category": "analysis",
+            "description": "把年份或时间字段映射到可复用的时间桶，便于后续比较。",
+            "inputs": [_port("corpus_in", "CorpusTable", "语料输入")],
+            "outputs": [
+                _port(
+                    "time_bucket_table",
+                    "AnyTable",
+                    "时间分桶表",
+                    result_bundle_key="time_bucket_assignments",
+                )
+            ],
+            "params": [
+                _string_param("field", "时间字段", "year"),
+                _enum_param(
+                    "granularity",
+                    "分桶粒度",
+                    "year",
+                    [("year", "按年"), ("5_year", "五年"), ("decade", "十年")],
+                ),
+            ],
+            "runtime": _runtime("analysis", "analysis.bucket_by_time", cacheable=True, previewable=True, parallel_safe=True),
+        },
+        {
             "type": "clean_text",
             "title": "基础清洗",
             "category": "process",
@@ -204,38 +301,38 @@ def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> li
             "inputs": [_port("corpus_in", "CorpusTable", "语料输入")],
             "outputs": [_port("clean_corpus", "CleanCorpus", "清洗后语料")],
             "params": [
-                _bool_param("strip_html", "去 HTML", bool(pipeline_definition["cleaning"].get("strip_html", True))),
-                _bool_param("strip_urls", "去 URL", bool(pipeline_definition["cleaning"].get("strip_urls", True))),
-                _bool_param("strip_email", "去邮箱", bool(pipeline_definition["cleaning"].get("strip_email", False))),
-                _bool_param("strip_phone", "去手机号", bool(pipeline_definition["cleaning"].get("strip_phone", False))),
+                _bool_param("strip_html", "去 HTML", bool(runtime_profile_definition["cleaning"].get("strip_html", True))),
+                _bool_param("strip_urls", "去 URL", bool(runtime_profile_definition["cleaning"].get("strip_urls", True))),
+                _bool_param("strip_email", "去邮箱", bool(runtime_profile_definition["cleaning"].get("strip_email", False))),
+                _bool_param("strip_phone", "去手机号", bool(runtime_profile_definition["cleaning"].get("strip_phone", False))),
                 _bool_param(
                     "normalize_whitespace",
                     "统一空白",
-                    bool(pipeline_definition["cleaning"].get("normalize_whitespace", True)),
+                    bool(runtime_profile_definition["cleaning"].get("normalize_whitespace", True)),
                 ),
                 _bool_param(
                     "normalize_punctuation",
                     "统一标点",
-                    bool(pipeline_definition["cleaning"].get("normalize_punctuation", True)),
+                    bool(runtime_profile_definition["cleaning"].get("normalize_punctuation", True)),
                 ),
                 _bool_param(
                     "full_half_width_normalize",
                     "全半角归一",
-                    bool(pipeline_definition["cleaning"].get("full_half_width_normalize", True)),
+                    bool(runtime_profile_definition["cleaning"].get("full_half_width_normalize", True)),
                 ),
                 _bool_param(
                     "lowercase_english",
                     "英文小写",
-                    bool(pipeline_definition["cleaning"].get("lowercase_english", True)),
+                    bool(runtime_profile_definition["cleaning"].get("lowercase_english", True)),
                 ),
-                _bool_param("remove_emoji", "去表情", bool(pipeline_definition["cleaning"].get("remove_emoji", False))),
+                _bool_param("remove_emoji", "去表情", bool(runtime_profile_definition["cleaning"].get("remove_emoji", False))),
                 _bool_param(
                     "remove_special_chars",
                     "去特殊字符",
-                    bool(pipeline_definition["cleaning"].get("remove_special_chars", False)),
+                    bool(runtime_profile_definition["cleaning"].get("remove_special_chars", False)),
                 ),
             ],
-            "runtime": _runtime("cleaning", "pipeline.clean_text", cacheable=True, previewable=True),
+            "runtime": _runtime("cleaning", "workflow.clean_text", cacheable=True, previewable=True),
         },
         {
             "type": "normalize_text",
@@ -248,31 +345,31 @@ def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> li
                 _bool_param(
                     "convert_traditional_to_simplified",
                     "繁转简",
-                    bool(pipeline_definition["normalization"].get("convert_traditional_to_simplified", False)),
+                    bool(runtime_profile_definition["normalization"].get("convert_traditional_to_simplified", False)),
                 ),
                 _bool_param(
                     "normalize_numbers",
                     "数字归一",
-                    bool(pipeline_definition["normalization"].get("normalize_numbers", False)),
+                    bool(runtime_profile_definition["normalization"].get("normalize_numbers", False)),
                 ),
                 _bool_param(
                     "normalize_time_expr",
                     "时间表达归一",
-                    bool(pipeline_definition["normalization"].get("normalize_time_expr", False)),
+                    bool(runtime_profile_definition["normalization"].get("normalize_time_expr", False)),
                 ),
                 _bool_param(
                     "apply_regex_rules",
                     "应用 Regex 规则",
-                    bool(pipeline_definition["normalization"].get("apply_regex_rules", True)),
+                    bool(runtime_profile_definition["normalization"].get("apply_regex_rules", True)),
                 ),
                 _enum_param(
                     "regex_rule_priority",
                     "Regex 优先策略",
-                    str(pipeline_definition["normalization"].get("regex_rule_priority", "rule_order")),
+                    str(runtime_profile_definition["normalization"].get("regex_rule_priority", "rule_order")),
                     [("rule_order", "按规则顺序"), ("first_match", "命中首条后停止")],
                 ),
             ],
-            "runtime": _runtime("normalization", "pipeline.normalize_text", cacheable=True, previewable=True),
+            "runtime": _runtime("normalization", "workflow.normalize_text", cacheable=True, previewable=True),
         },
         {
             "type": "tokenize",
@@ -285,57 +382,57 @@ def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> li
                 _enum_param(
                     "language_mode",
                     "语言模式",
-                    str(pipeline_definition["tokenization"].get("language_mode", "mixed")),
+                    str(runtime_profile_definition["tokenization"].get("language_mode", "mixed")),
                     [("auto", "自动"), ("zh", "中文"), ("en", "英文"), ("mixed", "中英混合")],
                 ),
                 _enum_param(
                     "tokenizer_backend",
                     "切词引擎",
-                    str(pipeline_definition["tokenization"].get("tokenizer_backend", "default")),
+                    str(runtime_profile_definition["tokenization"].get("tokenizer_backend", "default")),
                     [("default", "默认")],
                 ),
                 _bool_param(
                     "use_custom_lexicon",
                     "使用自定义词典",
-                    bool(pipeline_definition["tokenization"].get("use_custom_lexicon", True)),
+                    bool(runtime_profile_definition["tokenization"].get("use_custom_lexicon", True)),
                 ),
                 _bool_param(
                     "use_phrase_lexicon",
                     "使用短语词典",
-                    bool(pipeline_definition["tokenization"].get("use_phrase_lexicon", True)),
+                    bool(runtime_profile_definition["tokenization"].get("use_phrase_lexicon", True)),
                 ),
                 _bool_param(
                     "preserve_domain_phrases",
                     "保留领域短语",
-                    bool(pipeline_definition["tokenization"].get("preserve_domain_phrases", True)),
+                    bool(runtime_profile_definition["tokenization"].get("preserve_domain_phrases", True)),
                 ),
                 _bool_param(
                     "split_hyphenated_terms",
                     "拆分连字符",
-                    bool(pipeline_definition["tokenization"].get("split_hyphenated_terms", True)),
+                    bool(runtime_profile_definition["tokenization"].get("split_hyphenated_terms", True)),
                 ),
                 _bool_param(
                     "split_slash_terms",
                     "拆分斜杠词",
-                    bool(pipeline_definition["tokenization"].get("split_slash_terms", False)),
+                    bool(runtime_profile_definition["tokenization"].get("split_slash_terms", False)),
                 ),
                 _bool_param(
                     "normalize_camel_case",
                     "拆分 CamelCase",
-                    bool(pipeline_definition["tokenization"].get("normalize_camel_case", True)),
+                    bool(runtime_profile_definition["tokenization"].get("normalize_camel_case", True)),
                 ),
                 _bool_param(
                     "keep_original_order",
                     "保留原始顺序",
-                    bool(pipeline_definition["tokenization"].get("keep_original_order", True)),
+                    bool(runtime_profile_definition["tokenization"].get("keep_original_order", True)),
                 ),
                 _number_param(
                     "min_token_length_before_filter",
                     "切词前最短长度",
-                    int(pipeline_definition["tokenization"].get("min_token_length_before_filter", 1)),
+                    int(runtime_profile_definition["tokenization"].get("min_token_length_before_filter", 1)),
                 ),
             ],
-            "runtime": _runtime("tokenization", "pipeline.tokenize", cacheable=True, previewable=True),
+            "runtime": _runtime("tokenization", "workflow.tokenize", cacheable=True, previewable=True),
         },
         {
             "type": "apply_dictionary_rules",
@@ -360,36 +457,36 @@ def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> li
                 _bool_param(
                     "apply_standard_terms",
                     "应用标准词",
-                    bool(pipeline_definition["dictionary"].get("apply_standard_terms", True)),
+                    bool(runtime_profile_definition["dictionary"].get("apply_standard_terms", True)),
                 ),
                 _bool_param(
                     "apply_synonym_map",
                     "应用同义词",
-                    bool(pipeline_definition["dictionary"].get("apply_synonym_map", True)),
+                    bool(runtime_profile_definition["dictionary"].get("apply_synonym_map", True)),
                 ),
                 _bool_param(
                     "apply_near_synonym_map",
                     "应用近义词",
-                    bool(pipeline_definition["dictionary"].get("apply_near_synonym_map", True)),
+                    bool(runtime_profile_definition["dictionary"].get("apply_near_synonym_map", True)),
                 ),
                 _bool_param(
                     "apply_stopwords",
                     "应用停用词",
-                    bool(pipeline_definition["dictionary"].get("apply_stopwords", True)),
+                    bool(runtime_profile_definition["dictionary"].get("apply_stopwords", True)),
                 ),
                 _bool_param(
                     "apply_exclusion_terms",
                     "应用排除词",
-                    bool(pipeline_definition["dictionary"].get("apply_exclusion_terms", True)),
+                    bool(runtime_profile_definition["dictionary"].get("apply_exclusion_terms", True)),
                 ),
                 _enum_param(
                     "conflict_resolution",
                     "冲突处理",
-                    str(pipeline_definition["dictionary"].get("conflict_resolution", "priority")),
+                    str(runtime_profile_definition["dictionary"].get("conflict_resolution", "priority")),
                     [("priority", "按词表优先级"), ("first_match", "命中首条后停止")],
                 ),
             ],
-            "runtime": _runtime("dictionary_application", "pipeline.apply_dictionary_rules", cacheable=True, previewable=True),
+            "runtime": _runtime("dictionary_application", "workflow.apply_dictionary_rules", cacheable=True, previewable=True),
         },
         {
             "type": "filter_terms",
@@ -402,30 +499,30 @@ def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> li
                 _number_param(
                     "min_term_frequency",
                     "最小词频",
-                    int(pipeline_definition["filtering"].get("min_term_frequency", 1)),
+                    int(runtime_profile_definition["filtering"].get("min_term_frequency", 1)),
                 ),
                 _number_param(
                     "min_token_length",
                     "最小词长",
-                    int(pipeline_definition["filtering"].get("min_token_length", 2)),
+                    int(runtime_profile_definition["filtering"].get("min_token_length", 2)),
                 ),
                 _bool_param(
                     "filter_numeric_tokens",
                     "过滤纯数字",
-                    bool(pipeline_definition["filtering"].get("filter_numeric_tokens", False)),
+                    bool(runtime_profile_definition["filtering"].get("filter_numeric_tokens", False)),
                 ),
                 _bool_param(
                     "filter_by_pos",
                     "按词性过滤",
-                    bool(pipeline_definition["filtering"].get("filter_by_pos", False)),
+                    bool(runtime_profile_definition["filtering"].get("filter_by_pos", False)),
                 ),
                 _bool_param(
                     "keep_single_char_important_terms",
                     "保留关键单字词",
-                    bool(pipeline_definition["filtering"].get("keep_single_char_important_terms", True)),
+                    bool(runtime_profile_definition["filtering"].get("keep_single_char_important_terms", True)),
                 ),
             ],
-            "runtime": _runtime("filtering", "pipeline.filter_terms", cacheable=True, previewable=True),
+            "runtime": _runtime("filtering", "workflow.filter_terms", cacheable=True, previewable=True),
         },
         _analysis_node(
             "frequency_statistics",
@@ -619,7 +716,7 @@ def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> li
             "inputs": [_port("table_in", "AnyTable", "表格输入", allow_multiple=True)],
             "outputs": [_port("artifact", "ExportArtifact", "导出产物")],
             "params": [_string_param("file_prefix", "文件名前缀", "tables")],
-            "runtime": _runtime("export", "export.save_csv", cacheable=False, previewable=True, output_node=True),
+            "runtime": _runtime("export", "export.save_csv", cacheable=False, previewable=True, output_node=True, parallel_safe=True),
         },
         {
             "type": "save_xlsx",
@@ -629,7 +726,7 @@ def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> li
             "inputs": [_port("table_in", "AnyTable", "表格输入", allow_multiple=True)],
             "outputs": [_port("artifact", "ExportArtifact", "导出产物")],
             "params": [_string_param("file_prefix", "文件名前缀", "tables")],
-            "runtime": _runtime("export", "export.save_xlsx", cacheable=False, previewable=True, output_node=True),
+            "runtime": _runtime("export", "export.save_xlsx", cacheable=False, previewable=True, output_node=True, parallel_safe=True),
         },
         {
             "type": "save_png",
@@ -642,7 +739,7 @@ def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> li
                 _string_param("file_prefix", "文件名前缀", "charts"),
                 _number_param("chart_dpi", "PNG 分辨率（DPI）", int(export.get("chart_dpi", 320))),
             ],
-            "runtime": _runtime("export", "export.save_png", cacheable=False, previewable=True, output_node=True),
+            "runtime": _runtime("export", "export.save_png", cacheable=False, previewable=True, output_node=True, parallel_safe=True),
         },
         {
             "type": "save_html_report",
@@ -655,7 +752,7 @@ def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> li
                 _string_param("file_prefix", "文件名前缀", "report"),
                 _bool_param("include_audit", "附带审计摘要", bool(export.get("include_audit", True))),
             ],
-            "runtime": _runtime("export", "export.save_html_report", cacheable=False, previewable=True, output_node=True),
+            "runtime": _runtime("export", "export.save_html_report", cacheable=False, previewable=True, output_node=True, parallel_safe=True),
         },
         {
             "type": "note",
@@ -741,14 +838,14 @@ def build_builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> li
     ]
 
 
-def builtin_node_definition_map(pipeline: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+def builtin_node_definition_map(runtime_profile: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
     return {
         str(definition.get("type") or ""): definition
-        for definition in build_builtin_node_definitions(pipeline)
+        for definition in build_builtin_node_definitions(runtime_profile)
         if definition.get("type")
     }
 
 
 def register_builtin_node_definitions(builder: "NodeRegistryBuilder") -> None:
-    for definition in build_builtin_node_definitions(builder.pipeline_definition):
+    for definition in build_builtin_node_definitions(builder.runtime_profile_definition):
         builder.register_definition(definition)

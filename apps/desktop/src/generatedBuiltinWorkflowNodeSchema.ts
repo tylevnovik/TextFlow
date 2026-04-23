@@ -43,6 +43,46 @@ export const builtinWorkflowNodeSchema: Record<WorkflowNodeType, GeneratedWorkfl
     outputs: [{ port_id: "corpus", port_type: "CorpusTable", label: "合并后语料" }],
     stepId: "merge"
   },
+  filter_by_metadata: {
+    label: "按元数据筛选",
+    description: "按机构、来源、年份或扩展元数据字段筛选当前语料。",
+    category: "process",
+    inputs: [{ port_id: "corpus_in", port_type: "CorpusTable", label: "语料输入" }],
+    outputs: [{ port_id: "filtered_corpus", port_type: "CorpusTable", label: "筛选后语料" }],
+    stepId: "scope"
+  },
+  deduplicate_documents: {
+    label: "文档去重",
+    description: "按指定字段组合移除重复文档，保持结果可复现。",
+    category: "process",
+    inputs: [{ port_id: "corpus_in", port_type: "CorpusTable", label: "语料输入" }],
+    outputs: [{ port_id: "deduped_corpus", port_type: "CorpusTable", label: "去重后语料" }],
+    stepId: "scope"
+  },
+  sample_corpus: {
+    label: "语料抽样",
+    description: "按固定随机种子抽取样本，支持数量或比例模式。",
+    category: "process",
+    inputs: [{ port_id: "corpus_in", port_type: "CorpusTable", label: "语料输入" }],
+    outputs: [{ port_id: "sampled_corpus", port_type: "CorpusTable", label: "抽样后语料" }],
+    stepId: "scope"
+  },
+  split_corpus: {
+    label: "语料切分",
+    description: "按命名分组输出语料切分分配表，而不是复制多份全文数据。",
+    category: "analysis",
+    inputs: [{ port_id: "corpus_in", port_type: "CorpusTable", label: "语料输入" }],
+    outputs: [{ port_id: "split_assignment_table", port_type: "AnyTable", label: "切分分配表", result_bundle_key: "split_assignments" }],
+    stepId: "analysis"
+  },
+  bucket_by_time: {
+    label: "时间分桶",
+    description: "把年份或时间字段映射到可复用的时间桶，便于后续比较。",
+    category: "analysis",
+    inputs: [{ port_id: "corpus_in", port_type: "CorpusTable", label: "语料输入" }],
+    outputs: [{ port_id: "time_bucket_table", port_type: "AnyTable", label: "时间分桶表", result_bundle_key: "time_bucket_assignments" }],
+    stepId: "analysis"
+  },
   clean_text: {
     label: "基础清洗",
     description: "去噪、清理空白并处理 HTML 与 URL。",

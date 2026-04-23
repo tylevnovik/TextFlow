@@ -135,3 +135,16 @@ def test_ts_generated_workflow_node_schema_matches_builtin_python_definitions():
             if not port_id:
                 continue
             assert _normalize_ts_port(_ts_output_port_block(node_block, port_id)) == _normalize_python_port(output_port)
+
+
+def test_builtin_schema_includes_new_corpus_selection_nodes():
+    definitions = {str(definition["type"]): definition for definition in build_builtin_node_definitions()}
+
+    for node_type in [
+        "filter_by_metadata",
+        "deduplicate_documents",
+        "sample_corpus",
+        "split_corpus",
+        "bucket_by_time",
+    ]:
+        assert node_type in definitions

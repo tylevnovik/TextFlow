@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from .defaults import (
-    default_pipeline,
+    default_runtime_profile,
     normalize_workflow_edges,
     workflow_active_node_ids_from_sinks,
     workflow_reachable_node_ids,
@@ -114,7 +114,15 @@ def _compile_dictionary_input(context: NodeCompileContext, node: dict[str, Any])
     )
 
 
-def _merge_pipeline_section(section_id: str, step_id: str):
+def _compile_passthrough_node(_context: NodeCompileContext, _node: dict[str, Any]) -> None:
+    return None
+
+
+def _compile_analysis_passthrough_node(context: NodeCompileContext, _node: dict[str, Any]) -> None:
+    context.enable_step("analysis")
+
+
+def _merge_runtime_section(section_id: str, step_id: str):
     def compiler(context: NodeCompileContext, node: dict[str, Any]) -> None:
         patch = node.get("config") if isinstance(node.get("config"), dict) else {}
         context.merge_section(section_id, patch)
@@ -243,12 +251,17 @@ def _compile_export_results(context: NodeCompileContext, node: dict[str, Any]) -
 BUILTIN_NODE_COMPILERS = {
     "corpus_input": _compile_scope,
     "filter_corpus": _compile_scope,
+    "filter_by_metadata": _compile_passthrough_node,
+    "deduplicate_documents": _compile_passthrough_node,
+    "sample_corpus": _compile_passthrough_node,
+    "split_corpus": _compile_analysis_passthrough_node,
+    "bucket_by_time": _compile_analysis_passthrough_node,
     "dictionary_input": _compile_dictionary_input,
-    "clean_text": _merge_pipeline_section("cleaning", "cleaning"),
-    "normalize_text": _merge_pipeline_section("normalization", "normalization"),
-    "tokenize": _merge_pipeline_section("tokenization", "tokenization"),
-    "apply_dictionary_rules": _merge_pipeline_section("dictionary", "dictionary_application"),
-    "filter_terms": _merge_pipeline_section("filtering", "filtering"),
+    "clean_text": _merge_runtime_section("cleaning", "cleaning"),
+    "normalize_text": _merge_runtime_section("normalization", "normalization"),
+    "tokenize": _merge_runtime_section("tokenization", "tokenization"),
+    "apply_dictionary_rules": _merge_runtime_section("dictionary", "dictionary_application"),
+    "filter_terms": _merge_runtime_section("filtering", "filtering"),
     "analyze_corpus": _compile_analyze_corpus,
     "frequency_statistics": _compile_frequency_statistics,
     "term_document_analysis": _compile_term_document_analysis,
@@ -273,19 +286,19 @@ def register_builtin_node_compilers(builder: NodeRegistryBuilder) -> None:
         builder.register_compiler(node_type, compiler)
 
 
-def compile_pipeline_from_workflow(
+def compile_runtime_profile_from_workflow(
     workflow_definition: dict[str, Any] | None,
-    pipeline: dict[str, Any] | None = None,
+    runtime_profile: dict[str, Any] | None = None,
     *,
     registry: NodeRegistry | None = None,
 ) -> dict[str, Any]:
     if registry is None:
         from .node_registry import build_node_registry
 
-        registry = build_node_registry(pipeline)
+        registry = build_node_registry(runtime_profile)
 
-    compiled = deepcopy(pipeline if isinstance(pipeline, dict) else default_pipeline())
-    execution_order = list(compiled.get("execution_order") or default_pipeline()["execution_order"])
+    compiled = deepcopy(runtime_profile if isinstance(runtime_profile, dict) else default_runtime_profile())
+    execution_order = list(compiled.get("execution_order") or default_runtime_profile()["execution_order"])
     nodes = workflow_definition.get("nodes") if isinstance(workflow_definition, dict) else []
     normalized_nodes = [node for node in nodes if isinstance(node, dict) and node.get("node_id")] if isinstance(nodes, list) else []
     normalized_edges = normalize_workflow_edges(workflow_definition, normalized_nodes)
@@ -324,8 +337,7 @@ def compile_pipeline_from_workflow(
         active_nodes.append(node)
         context.active_node_types.add(str(node.get("node_type") or ""))
 
-    if context.active_node_types.intersection(MODERN_ANALYSIS_NODE_TYPES):
-        context.merge_section("analysis", {flag_name: False for flag_name in ANALYSIS_OUTPUT_FLAGS})
+    context.merge_section("analysis", {flag_name: False for flag_name in ANALYSIS_OUTPUT_FLAGS})
 
     for node in active_nodes:
         compiler = registry.compilers.get(str(node.get("node_type") or ""))

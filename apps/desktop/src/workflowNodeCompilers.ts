@@ -1,14 +1,14 @@
 import type {
   ExportParameters,
-  PipelineDefinition,
-  PipelineStepId,
+  WorkflowRuntimeProfile,
+  WorkflowStepId,
   RunScopeDefinition,
   WorkflowNodeInstance
 } from "@textflow/shared-types";
 
 export interface WorkflowCompileContext {
-  compiled: PipelineDefinition;
-  enabledSteps: Set<PipelineStepId>;
+  compiled: WorkflowRuntimeProfile;
+  enabledSteps: Set<WorkflowStepId>;
   exportConfig: ExportParameters;
   activeNodeTypes: Set<string>;
 }
@@ -29,9 +29,8 @@ const analysisOutputFlagMap = {
 } as const;
 
 const analysisOutputFlags = Object.values(analysisOutputFlagMap);
-const modernAnalysisNodeTypes = new Set(Object.keys(analysisOutputFlagMap));
 
-const executionOrder: PipelineStepId[] = [
+const executionOrder: WorkflowStepId[] = [
   "ingestion",
   "cleaning",
   "normalization",
@@ -42,49 +41,49 @@ const executionOrder: PipelineStepId[] = [
   "export"
 ];
 
-function defaultRunScope(pipeline: PipelineDefinition): RunScopeDefinition {
+function defaultRunScope(runtimeProfile: WorkflowRuntimeProfile): RunScopeDefinition {
   return {
-    ...pipeline.run_scope,
-    mode: pipeline.run_scope?.mode ?? "all_documents",
-    source_values: [...(pipeline.run_scope?.source_values ?? [])],
-    institution_values: [...(pipeline.run_scope?.institution_values ?? [])],
-    category_values: [...(pipeline.run_scope?.category_values ?? [])],
-    year_from: pipeline.run_scope?.year_from ?? null,
-    year_to: pipeline.run_scope?.year_to ?? null,
-    selected_doc_ids: [...(pipeline.run_scope?.selected_doc_ids ?? [])]
+    ...runtimeProfile.run_scope,
+    mode: runtimeProfile.run_scope?.mode ?? "all_documents",
+    source_values: [...(runtimeProfile.run_scope?.source_values ?? [])],
+    institution_values: [...(runtimeProfile.run_scope?.institution_values ?? [])],
+    category_values: [...(runtimeProfile.run_scope?.category_values ?? [])],
+    year_from: runtimeProfile.run_scope?.year_from ?? null,
+    year_to: runtimeProfile.run_scope?.year_to ?? null,
+    selected_doc_ids: [...(runtimeProfile.run_scope?.selected_doc_ids ?? [])]
   };
 }
 
-function defaultExport(pipeline: PipelineDefinition): ExportParameters {
+function defaultExport(runtimeProfile: WorkflowRuntimeProfile): ExportParameters {
   return {
-    ...pipeline.export,
-    export_csv: pipeline.export?.export_csv ?? true,
-    export_xlsx: pipeline.export?.export_xlsx ?? true,
-    export_png: pipeline.export?.export_png ?? true,
-    export_html_report: pipeline.export?.export_html_report ?? true,
-    include_audit: pipeline.export?.include_audit ?? true,
-    chart_dpi: pipeline.export?.chart_dpi ?? 320,
-    watermark_enabled: pipeline.export?.watermark_enabled ?? false,
-    watermark_text: pipeline.export?.watermark_text ?? "TextFlow Studio"
+    ...runtimeProfile.export,
+    export_csv: runtimeProfile.export?.export_csv ?? true,
+    export_xlsx: runtimeProfile.export?.export_xlsx ?? true,
+    export_png: runtimeProfile.export?.export_png ?? true,
+    export_html_report: runtimeProfile.export?.export_html_report ?? true,
+    include_audit: runtimeProfile.export?.include_audit ?? true,
+    chart_dpi: runtimeProfile.export?.chart_dpi ?? 320,
+    watermark_enabled: runtimeProfile.export?.watermark_enabled ?? false,
+    watermark_text: runtimeProfile.export?.watermark_text ?? "TextFlow Studio"
   };
 }
 
-function clonePipeline(pipeline: PipelineDefinition): PipelineDefinition {
+function cloneRuntimeProfile(runtimeProfile: WorkflowRuntimeProfile): WorkflowRuntimeProfile {
   return {
-    ...pipeline,
-    enabled_steps: [...pipeline.enabled_steps],
-    execution_order: [...pipeline.execution_order],
-    cleaning: { ...pipeline.cleaning },
-    normalization: { ...pipeline.normalization },
-    tokenization: { ...pipeline.tokenization },
-    dictionary: { ...pipeline.dictionary },
-    filtering: { ...pipeline.filtering },
-    analysis: { ...pipeline.analysis },
-    export: { ...defaultExport(pipeline) },
-    run_scope: defaultRunScope(pipeline),
-    nodes: [...pipeline.nodes],
-    edges: [...pipeline.edges],
-    node_configs: { ...pipeline.node_configs }
+    ...runtimeProfile,
+    enabled_steps: [...runtimeProfile.enabled_steps],
+    execution_order: [...runtimeProfile.execution_order],
+    cleaning: { ...runtimeProfile.cleaning },
+    normalization: { ...runtimeProfile.normalization },
+    tokenization: { ...runtimeProfile.tokenization },
+    dictionary: { ...runtimeProfile.dictionary },
+    filtering: { ...runtimeProfile.filtering },
+    analysis: { ...runtimeProfile.analysis },
+    export: { ...defaultExport(runtimeProfile) },
+    run_scope: defaultRunScope(runtimeProfile),
+    nodes: [...runtimeProfile.nodes],
+    edges: [...runtimeProfile.edges],
+    node_configs: { ...runtimeProfile.node_configs }
   };
 }
 
@@ -98,7 +97,7 @@ function resetExportFlags(exportConfig: ExportParameters): ExportParameters {
   };
 }
 
-function classifyOutputBundle(exportConfig: ExportParameters): PipelineDefinition["output_bundle_id"] {
+function classifyOutputBundle(exportConfig: ExportParameters): WorkflowRuntimeProfile["output_bundle_id"] {
   if (exportConfig.export_csv && exportConfig.export_xlsx && exportConfig.export_png && exportConfig.export_html_report && exportConfig.include_audit) {
     return "full_report";
   }
@@ -114,13 +113,13 @@ function classifyOutputBundle(exportConfig: ExportParameters): PipelineDefinitio
   return "custom";
 }
 
-function mergePipelineSection<T extends keyof PipelineDefinition>(sectionId: T, stepId: PipelineStepId): WorkflowNodeCompiler {
+function mergeRuntimeSection<T extends keyof WorkflowRuntimeProfile>(sectionId: T, stepId: WorkflowStepId): WorkflowNodeCompiler {
   return (context, node) => {
-    const patch = node.config as Partial<PipelineDefinition[T]>;
+    const patch = node.config as Partial<WorkflowRuntimeProfile[T]>;
     context.compiled[sectionId] = {
       ...(context.compiled[sectionId] as Record<string, unknown>),
       ...patch
-    } as PipelineDefinition[T];
+    } as WorkflowRuntimeProfile[T];
     context.enabledSteps.add(stepId);
   };
 }
@@ -128,7 +127,7 @@ function mergePipelineSection<T extends keyof PipelineDefinition>(sectionId: T, 
 function enableAnalysisOutput(
   context: WorkflowCompileContext,
   nodeType: keyof typeof analysisOutputFlagMap,
-  patch: Partial<PipelineDefinition["analysis"]> = {}
+  patch: Partial<WorkflowRuntimeProfile["analysis"]> = {}
 ) {
   context.compiled.analysis = {
     ...context.compiled.analysis,
@@ -159,6 +158,15 @@ const workflowNodeCompilers: Record<string, WorkflowNodeCompiler> = {
       selected_doc_ids: [...((node.config.selected_doc_ids as string[] | undefined) ?? context.compiled.run_scope.selected_doc_ids)]
     };
   },
+  filter_by_metadata: () => {},
+  deduplicate_documents: () => {},
+  sample_corpus: () => {},
+  split_corpus: (context) => {
+    context.enabledSteps.add("analysis");
+  },
+  bucket_by_time: (context) => {
+    context.enabledSteps.add("analysis");
+  },
   dictionary_input: (context, node) => {
     context.compiled.tokenization = {
       ...context.compiled.tokenization,
@@ -178,16 +186,16 @@ const workflowNodeCompilers: Record<string, WorkflowNodeCompiler> = {
       apply_exclusion_terms: Boolean(node.config.apply_exclusion_terms ?? context.compiled.dictionary.apply_exclusion_terms)
     };
   },
-  clean_text: mergePipelineSection("cleaning", "cleaning"),
-  normalize_text: mergePipelineSection("normalization", "normalization"),
-  tokenize: mergePipelineSection("tokenization", "tokenization"),
-  apply_dictionary_rules: mergePipelineSection("dictionary", "dictionary_application"),
-  filter_terms: mergePipelineSection("filtering", "filtering"),
+  clean_text: mergeRuntimeSection("cleaning", "cleaning"),
+  normalize_text: mergeRuntimeSection("normalization", "normalization"),
+  tokenize: mergeRuntimeSection("tokenization", "tokenization"),
+  apply_dictionary_rules: mergeRuntimeSection("dictionary", "dictionary_application"),
+  filter_terms: mergeRuntimeSection("filtering", "filtering"),
   analyze_corpus: (context, node) => {
     context.compiled.analysis = {
       ...context.compiled.analysis,
       ...Object.fromEntries(analysisOutputFlags.map((flag) => [flag, true])),
-      ...(node.config as Partial<PipelineDefinition["analysis"]>)
+      ...(node.config as Partial<WorkflowRuntimeProfile["analysis"]>)
     };
     context.enabledSteps.add("analysis");
   },
@@ -273,25 +281,23 @@ const workflowNodeCompilers: Record<string, WorkflowNodeCompiler> = {
   }
 };
 
-export function compileActiveWorkflowNodesIntoPipeline(
+export function compileActiveWorkflowNodesIntoRuntimeProfile(
   activeNodes: WorkflowNodeInstance[],
-  pipeline: PipelineDefinition
-): PipelineDefinition {
-  const compiled = clonePipeline(pipeline);
+  runtimeProfile: WorkflowRuntimeProfile
+): WorkflowRuntimeProfile {
+  const compiled = cloneRuntimeProfile(runtimeProfile);
   const activeNodeTypes = new Set(activeNodes.map((node) => node.node_type));
   const context: WorkflowCompileContext = {
     compiled,
-    enabledSteps: new Set<PipelineStepId>(["ingestion"]),
+    enabledSteps: new Set<WorkflowStepId>(["ingestion"]),
     exportConfig: resetExportFlags(defaultExport(compiled)),
     activeNodeTypes
   };
 
-  if ([...activeNodeTypes].some((nodeType) => modernAnalysisNodeTypes.has(nodeType))) {
-    context.compiled.analysis = {
-      ...context.compiled.analysis,
-      ...Object.fromEntries(analysisOutputFlags.map((flag) => [flag, false]))
-    };
-  }
+  context.compiled.analysis = {
+    ...context.compiled.analysis,
+    ...Object.fromEntries(analysisOutputFlags.map((flag) => [flag, false]))
+  };
 
   for (const node of activeNodes) {
     if (node.ui_state?.bypassed) {
