@@ -671,6 +671,82 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
             executor="analysis.keyness",
         ),
         _analysis_node(
+            "topic_modeling",
+            "主题建模",
+            "使用 NMF 对语料做轻量主题建模，输出主题词项、文档主题和主题摘要。",
+            inputs=[_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
+            outputs=[
+                _port(
+                    "topic_term_table",
+                    "AnyTable",
+                    "主题词项表",
+                    result_bundle_key="topic_term_table",
+                ),
+                _port(
+                    "document_topic_table",
+                    "AnyTable",
+                    "文档主题表",
+                    result_bundle_key="document_topic_table",
+                ),
+                _port(
+                    "topic_summary_table",
+                    "AnyTable",
+                    "主题摘要表",
+                    result_bundle_key="topic_summary_table",
+                ),
+            ],
+            params=[
+                _number_param("topic_model_k", "主题数量", int(analysis.get("topic_model_k", 4))),
+                _number_param("top_terms_per_topic", "每主题词项数", 5),
+            ],
+            executor="analysis.topic_modeling",
+        ),
+        _analysis_node(
+            "cluster_evaluation",
+            "聚类评估",
+            "基于现有聚类结果计算轮廓系数、Davies-Bouldin 指标和簇规模分布。",
+            inputs=[_port("document_cluster_table_in", "DocumentClusterTable", "文档聚类输入")],
+            outputs=[
+                _port(
+                    "cluster_evaluation_table",
+                    "AnyTable",
+                    "聚类评估表",
+                    result_bundle_key="cluster_evaluation_table",
+                )
+            ],
+            params=[],
+            executor="analysis.cluster_evaluation",
+        ),
+        _analysis_node(
+            "join_results",
+            "连接结果表",
+            "按命名键连接两张结果表，支持内连接与外连接等受控模式。",
+            inputs=[
+                _port("left_table_in", "AnyTable", "左表"),
+                _port("right_table_in", "AnyTable", "右表"),
+            ],
+            outputs=[
+                _port(
+                    "joined_table",
+                    "AnyTable",
+                    "连接结果表",
+                    result_bundle_key="joined_table",
+                )
+            ],
+            params=[
+                _string_param("left_artifact", "左侧结果键", "frequency_table"),
+                _string_param("right_artifact", "右侧结果键", "keyness_table"),
+                _string_param("join_keys_text", "连接键", "term"),
+                _enum_param(
+                    "join_type",
+                    "连接方式",
+                    "inner",
+                    [("inner", "内连接"), ("left", "左连接"), ("right", "右连接"), ("outer", "全连接")],
+                ),
+            ],
+            executor="analysis.join_results",
+        ),
+        _analysis_node(
             "feature_term_selection",
             "特征词筛选",
             "从语料中筛出进入后续聚类和主题建模的特征词。",

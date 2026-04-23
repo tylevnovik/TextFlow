@@ -242,6 +242,66 @@ export const builtinWorkflowNodeSchema: Record<WorkflowNodeType, GeneratedWorkfl
     ],
     stepId: "analysis"
   },
+  topic_modeling: {
+    label: "主题建模",
+    description: "使用 NMF 对语料做轻量主题建模，输出主题词项、文档主题和主题摘要。",
+    category: "analysis",
+    inputs: [{ port_id: "token_corpus_in", port_type: "FilteredTokenCorpus", label: "分析词项" }],
+    outputs: [
+      {
+        port_id: "topic_term_table",
+        port_type: "AnyTable",
+        label: "主题词项表",
+        result_bundle_key: "topic_term_table"
+      },
+      {
+        port_id: "document_topic_table",
+        port_type: "AnyTable",
+        label: "文档主题表",
+        result_bundle_key: "document_topic_table"
+      },
+      {
+        port_id: "topic_summary_table",
+        port_type: "AnyTable",
+        label: "主题摘要表",
+        result_bundle_key: "topic_summary_table"
+      }
+    ],
+    stepId: "analysis"
+  },
+  cluster_evaluation: {
+    label: "聚类评估",
+    description: "基于现有聚类结果计算轮廓系数、Davies-Bouldin 指标和簇规模分布。",
+    category: "analysis",
+    inputs: [{ port_id: "document_cluster_table_in", port_type: "DocumentClusterTable", label: "文档聚类输入" }],
+    outputs: [
+      {
+        port_id: "cluster_evaluation_table",
+        port_type: "AnyTable",
+        label: "聚类评估表",
+        result_bundle_key: "cluster_evaluation_table"
+      }
+    ],
+    stepId: "analysis"
+  },
+  join_results: {
+    label: "连接结果表",
+    description: "按命名键连接两张结果表，支持内连接与外连接等受控模式。",
+    category: "analysis",
+    inputs: [
+      { port_id: "left_table_in", port_type: "AnyTable", label: "左表" },
+      { port_id: "right_table_in", port_type: "AnyTable", label: "右表" }
+    ],
+    outputs: [
+      {
+        port_id: "joined_table",
+        port_type: "AnyTable",
+        label: "连接结果表",
+        result_bundle_key: "joined_table"
+      }
+    ],
+    stepId: "analysis"
+  },
   feature_term_selection: {
     label: "特征词筛选",
     description: "从语料中筛出进入后续聚类和主题建模的特征词。",

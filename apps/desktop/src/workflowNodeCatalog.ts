@@ -67,12 +67,15 @@ export const defaultNodePositions: Partial<Record<WorkflowNodeType, { x: number;
   cooccurrence_analysis: { x: 2860, y: 860 },
   group_compare: { x: 2860, y: 1380 },
   feature_term_selection: { x: 2860, y: 1120 },
+  topic_modeling: { x: 2860, y: 1640 },
   keyword_extraction: { x: 3240, y: 80 },
   keyword_clustering: { x: 3240, y: 340 },
   institution_keyword_analysis: { x: 3240, y: 600 },
   institution_topic_analysis: { x: 3240, y: 860 },
   document_clustering: { x: 3240, y: 1120 },
   keyness_analysis: { x: 3240, y: 1380 },
+  cluster_evaluation: { x: 3240, y: 1640 },
+  join_results: { x: 3620, y: 1380 },
   save_csv: { x: 3620, y: 80 },
   save_xlsx: { x: 3620, y: 340 },
   save_png: { x: 3620, y: 600 },
@@ -265,6 +268,27 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
       baseline_group: "OpenAI",
       comparison_group: "Anthropic",
       min_frequency: 2
+    })
+  },
+  topic_modeling: {
+    size: { w: 360, h: 260 },
+    defaultConfig: (runtimeProfile) => ({
+      topic_model_k: runtimeProfile.analysis.topic_model_k,
+      top_terms_per_topic: 5
+    })
+  },
+  cluster_evaluation: {
+    size: { w: 320, h: 210 },
+    defaultConfig: () => ({})
+  },
+  join_results: {
+    size: { w: 360, h: 260 },
+    defaultConfig: () => ({
+      left_artifact: "frequency_table",
+      right_artifact: "keyness_table",
+      join_keys: ["term"],
+      join_keys_text: "term",
+      join_type: "inner"
     })
   },
   feature_term_selection: {

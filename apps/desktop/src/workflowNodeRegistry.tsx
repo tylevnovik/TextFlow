@@ -70,6 +70,26 @@ interface OverlayRuleRow {
   enabled: boolean;
 }
 
+const resultTableOptions = [
+  { value: "frequency_table", label: "词频统计" },
+  { value: "term_document_table", label: "词项文档分析" },
+  { value: "term_year_table", label: "词项年份分析" },
+  { value: "cooccurrence_table", label: "共现分析" },
+  { value: "group_compare_table", label: "分组比较" },
+  { value: "keyness_table", label: "关键性分析" },
+  { value: "selected_feature_terms", label: "特征词筛选" },
+  { value: "keyword_result", label: "关键词提取" },
+  { value: "keyword_cluster_result", label: "关键词聚类" },
+  { value: "institution_keyword_cooccurrence", label: "机构关键词分析" },
+  { value: "institution_topic_cooccurrence", label: "机构主题分析" },
+  { value: "clustering_result", label: "文档聚类" },
+  { value: "topic_term_table", label: "主题词项表" },
+  { value: "document_topic_table", label: "文档主题表" },
+  { value: "topic_summary_table", label: "主题摘要表" },
+  { value: "cluster_evaluation_table", label: "聚类评估表" },
+  { value: "joined_table", label: "连接结果表" }
+] as const;
+
 function numericValue(value: unknown): string {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
     return "";
@@ -917,6 +937,106 @@ function renderKeynessAnalysisEditor(context: WorkflowNodeEditorContext) {
   );
 }
 
+function renderTopicModelingEditor(context: WorkflowNodeEditorContext) {
+  return (
+    <div className="workflow-node-inline-editor-grid">
+      <label className="field compact">
+        <span>主题数量</span>
+        <input
+          type="number"
+          min="1"
+          value={numericValue(context.node.config.topic_model_k)}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, {
+            topic_model_k: event.target.value ? Number(event.target.value) : 2
+          })}
+          disabled={context.loading}
+        />
+      </label>
+      <label className="field compact">
+        <span>每主题词项数</span>
+        <input
+          type="number"
+          min="1"
+          value={numericValue(context.node.config.top_terms_per_topic)}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, {
+            top_terms_per_topic: event.target.value ? Number(event.target.value) : 5
+          })}
+          disabled={context.loading}
+        />
+      </label>
+    </div>
+  );
+}
+
+function renderClusterEvaluationEditor() {
+  return (
+    <div className="workflow-node-inline-pill-block">
+      <strong>评估说明</strong>
+      <small>连接文档聚类节点后，会自动计算轮廓系数、Davies-Bouldin 指标和簇规模分布。</small>
+    </div>
+  );
+}
+
+function renderJoinResultsEditor(context: WorkflowNodeEditorContext) {
+  const joinKeys = normalizeStringList(
+    Array.isArray(context.node.config.join_keys) ? context.node.config.join_keys : context.node.config.join_keys_text
+  );
+
+  return (
+    <>
+      <div className="workflow-node-inline-editor-grid">
+        <label className="field compact">
+          <span>左侧结果</span>
+          <select
+            value={String(context.node.config.left_artifact ?? "frequency_table")}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { left_artifact: event.target.value })}
+            disabled={context.loading}
+          >
+            {resultTableOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>右侧结果</span>
+          <select
+            value={String(context.node.config.right_artifact ?? "keyness_table")}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { right_artifact: event.target.value })}
+            disabled={context.loading}
+          >
+            {resultTableOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>连接方式</span>
+          <select
+            value={String(context.node.config.join_type ?? "inner")}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { join_type: event.target.value })}
+            disabled={context.loading}
+          >
+            <option value="inner">内连接</option>
+            <option value="left">左连接</option>
+            <option value="right">右连接</option>
+            <option value="outer">全连接</option>
+          </select>
+        </label>
+        <label className="field compact">
+          <span>连接键</span>
+          <input
+            value={joinKeys.join(", ")}
+            onChange={(event) => persistStringList(context, "join_keys", "join_keys_text", parseCsvList(event.target.value))}
+            placeholder="term"
+            disabled={context.loading}
+          />
+        </label>
+      </div>
+      <small>也可以通过左右输入端显式连线；未连线时会回退到这里选中的结果表。</small>
+    </>
+  );
+}
+
 type WorkflowNodeInlineRenderer = (context: WorkflowNodeEditorContext) => ReactNode;
 
 const workflowNodeInlineRenderers: Partial<Record<WorkflowNodeInstance["node_type"], WorkflowNodeInlineRenderer>> = {
@@ -930,7 +1050,10 @@ const workflowNodeInlineRenderers: Partial<Record<WorkflowNodeInstance["node_typ
   split_corpus: renderSplitCorpusEditor,
   bucket_by_time: renderBucketByTimeEditor,
   group_compare: renderGroupCompareEditor,
-  keyness_analysis: renderKeynessAnalysisEditor
+  keyness_analysis: renderKeynessAnalysisEditor,
+  topic_modeling: renderTopicModelingEditor,
+  cluster_evaluation: renderClusterEvaluationEditor,
+  join_results: renderJoinResultsEditor
 };
 
 export function renderWorkflowNodeInlineEditor(context: WorkflowNodeEditorContext) {
@@ -957,6 +1080,7 @@ export function renderWorkflowNodeInlineEditor(context: WorkflowNodeEditorContex
 export function renderWorkflowNodePreview(context: WorkflowNodeEditorContext) {
   const latestRun = context.latestRun;
   const results = context.project.results;
+  const dynamicResults = results as unknown as Record<string, Array<Record<string, unknown>>>;
   const matchedDocuments = context.snapshot.corpus.filter((item) => context.corpusMatchesRunScope(item, context.runScopeForNode(context.node)));
 
   if (context.node.node_type === "frequency_statistics") {
@@ -985,6 +1109,22 @@ export function renderWorkflowNodePreview(context: WorkflowNodeEditorContext) {
 
   if (context.node.node_type === "document_clustering") {
     return <small>文档聚类: {results.clustering_result.slice(0, 2).map((row) => `${row.title}→簇${row.cluster_id}`).join(" / ") || "暂无结果"}</small>;
+  }
+
+  if (context.node.node_type === "topic_modeling") {
+    const rows = Array.isArray(dynamicResults.topic_summary_table) ? dynamicResults.topic_summary_table : [];
+    return <small>主题: {rows.slice(0, 2).map((row) => String(row.topic_label ?? "")).filter(Boolean).join(" / ") || "暂无结果"}</small>;
+  }
+
+  if (context.node.node_type === "cluster_evaluation") {
+    const rows = Array.isArray(dynamicResults.cluster_evaluation_table) ? dynamicResults.cluster_evaluation_table : [];
+    const overall = rows.find((row) => row.row_type === "overall");
+    return <small>轮廓系数: {overall ? String(overall.silhouette_score ?? "0") : "暂无结果"}</small>;
+  }
+
+  if (context.node.node_type === "join_results") {
+    const rows = Array.isArray(dynamicResults.joined_table) ? dynamicResults.joined_table : [];
+    return <small>连接结果: {rows.length ? `${rows.length} 行` : "暂无结果"}</small>;
   }
 
   if (context.node.node_type === "save_html_report" || context.node.node_type === "save_png" || context.node.node_type === "save_csv" || context.node.node_type === "save_xlsx") {

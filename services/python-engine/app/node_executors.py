@@ -97,6 +97,45 @@ def _shared_pop(context: Any, key: str) -> Any:
     return None
 
 
+def _is_table_rows(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    if not value:
+        return True
+    return isinstance(value[0], dict)
+
+
+def _table_rows_from_inputs_or_results(
+    context: Any,
+    inputs: dict[str, Any],
+    input_key: str,
+    artifact_key: str = "",
+) -> list[dict[str, Any]]:
+    input_value = inputs.get(input_key)
+    if _is_table_rows(input_value):
+        return deepcopy(input_value)
+    if isinstance(input_value, dict):
+        return [deepcopy(input_value)]
+    if artifact_key:
+        bundle = getattr(context, "result_bundle", {})
+        value = bundle.get(artifact_key) if isinstance(bundle, dict) else None
+        if _is_table_rows(value):
+            return deepcopy(value)
+        shared_value = _shared_get(context, artifact_key)
+        if _is_table_rows(shared_value):
+            return deepcopy(shared_value)
+    return []
+
+
+def _join_keys(config: dict[str, Any]) -> list[str]:
+    raw_keys = config.get("join_keys")
+    if isinstance(raw_keys, list):
+        join_keys = [str(item).strip() for item in raw_keys if str(item).strip()]
+        if join_keys:
+            return join_keys
+    return [item.strip() for item in str(config.get("join_keys_text") or "").split(",") if item.strip()]
+
+
 def _report_corpus_progress(context: Any, node: dict[str, Any], completed: int, total: int, stage: str) -> None:
     if not total:
         return
@@ -883,6 +922,57 @@ def execute_keyness_analysis(context: Any, node: dict[str, Any], inputs: dict[st
     return {"keyness_table": rows}
 
 
+def execute_topic_modeling(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    analysis_ops = _analysis_ops()
+    corpus = _scoped_corpus_from_inputs(context, inputs)
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    analysis_params = _analysis_params(
+        context,
+        {
+            "topic_model_k": config.get("topic_model_k"),
+            "feature_term_count": config.get("feature_term_count"),
+        },
+    )
+    payload = _feature_term_payload(
+        context,
+        corpus,
+        {"feature_term_count": analysis_params.get("feature_term_count")},
+    )
+    topic_term_rows, document_topic_rows, topic_summary_rows = analysis_ops.topic_model_tables(
+        corpus,
+        payload["tfidf_bundle"],
+        analysis_params,
+        top_terms_per_topic=int(config.get("top_terms_per_topic", 5) or 5),
+    )
+    return {
+        "topic_term_table": topic_term_rows,
+        "document_topic_table": document_topic_rows,
+        "topic_summary_table": topic_summary_rows,
+    }
+
+
+def execute_cluster_evaluation(context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    analysis_ops = _analysis_ops()
+    cluster_rows = inputs.get("document_cluster_table_in") or []
+    if not isinstance(cluster_rows, list):
+        cluster_rows = [cluster_rows] if isinstance(cluster_rows, dict) else []
+    return {"cluster_evaluation_table": analysis_ops.cluster_evaluation_rows(cluster_rows)}
+
+
+def execute_join_results(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    analysis_ops = _analysis_ops()
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    left_rows = _table_rows_from_inputs_or_results(context, inputs, "left_table_in", str(config.get("left_artifact") or ""))
+    right_rows = _table_rows_from_inputs_or_results(context, inputs, "right_table_in", str(config.get("right_artifact") or ""))
+    joined_rows = analysis_ops.join_table_rows(
+        left_rows,
+        right_rows,
+        _join_keys(config),
+        join_type=str(config.get("join_type") or "inner"),
+    )
+    return {"joined_table": joined_rows}
+
+
 def execute_feature_term_selection(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     corpus = _scoped_corpus_from_inputs(context, inputs)
     params = node.get("config") if isinstance(node.get("config"), dict) else {}
@@ -1187,6 +1277,9 @@ EXECUTORS_BY_TYPE = {
     "cooccurrence_analysis": execute_cooccurrence_analysis,
     "group_compare": execute_group_compare,
     "keyness_analysis": execute_keyness_analysis,
+    "topic_modeling": execute_topic_modeling,
+    "cluster_evaluation": execute_cluster_evaluation,
+    "join_results": execute_join_results,
     "feature_term_selection": execute_feature_term_selection,
     "keyword_extraction": execute_keyword_extraction,
     "keyword_clustering": execute_keyword_clustering,

@@ -224,6 +224,15 @@ const workflowNodeCompilers: Record<string, WorkflowNodeCompiler> = {
   keyness_analysis: (context) => {
     context.enabledSteps.add("analysis");
   },
+  topic_modeling: (context) => {
+    context.enabledSteps.add("analysis");
+  },
+  cluster_evaluation: (context) => {
+    context.enabledSteps.add("analysis");
+  },
+  join_results: (context) => {
+    context.enabledSteps.add("analysis");
+  },
   feature_term_selection: (context, node) => {
     const rawValue = node.config.feature_term_count;
     enableAnalysisOutput(context, "feature_term_selection", {
