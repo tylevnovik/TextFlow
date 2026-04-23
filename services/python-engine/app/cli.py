@@ -12,7 +12,9 @@ import pandas as pd
 
 from .defaults import deep_copy_manifest
 from .ingestion import ensure_sample_files, import_files, parse_optional_year
-from .pipeline import run_project_pipeline
+from .ingestion_specs import list_ingestion_specs, save_ingestion_spec
+from .resource_store import create_corpus_view, delete_corpus_view, update_corpus_view
+from .workflow_runner import run_project_workflow
 from .project_store import (
     build_project_summary,
     create_project,
@@ -153,6 +155,19 @@ def load_project_or_fail(project_id: str) -> tuple[Any, dict[str, Any], list[dic
     return project_dir, manifest, corpus
 
 
+def _save_sections_from_project_payload(payload: dict[str, Any]) -> set[str]:
+    dirty_sections = {"manifest"}
+    if "import_template" in payload:
+        dirty_sections.add("import_template")
+    if "dictionary_set" in payload:
+        dirty_sections.add("dictionary_set")
+    if "corpus_views" in payload:
+        dirty_sections.add("corpus_views")
+    if "ingestion_specs" in payload:
+        dirty_sections.add("ingestion_specs")
+    return dirty_sections
+
+
 def normalize_corpus_document(document: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
     normalized = dict(current or {})
     normalized.update(document)
@@ -219,7 +234,6 @@ def action_create_project(payload: dict[str, Any], progress_callback: ProgressCa
     name = payload["name"]
     description = payload.get("description", "")
     project_dir, manifest = create_project(name, description)
-    save_project(project_dir, manifest, [])
     remember_project(manifest["id"], set_current=True)
     notify(progress_callback, 1.0, "项目已创建")
     return build_project_summary(project_dir, manifest, [])
@@ -284,13 +298,15 @@ def action_import_project_files(payload: dict[str, Any], progress_callback: Prog
     corpus.extend(imported_corpus)
     manifest["source_files"] = [*manifest.get("source_files", []), *source_files]
     notify(progress_callback, 0.8, "正在保存导入结果")
-    save_project(project_dir, manifest, corpus)
+    save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections={"manifest", "corpus"})
     remember_project(manifest["id"], set_current=True)
 
     notify(progress_callback, 1.0, "导入完成")
     return {
         "project_id": manifest["id"],
         "imported_documents": len(imported_corpus),
+        "documents": imported_corpus,
+        "project": manifest,
         "source_files": source_files,
         "document_count": len(corpus),
         "skipped_rows": len(validation_issues),
@@ -298,7 +314,7 @@ def action_import_project_files(payload: dict[str, Any], progress_callback: Prog
     }
 
 
-def action_run_pipeline(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+def action_run_workflow(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
     notify(progress_callback, 0.05, "正在准备流程", {
         "kind": "workflow_run",
         "stage": "preparing",
@@ -313,7 +329,7 @@ def action_run_pipeline(payload: dict[str, Any], progress_callback: ProgressCall
         notify(progress_callback, 0.12, "当前项目为空，正在载入示例语料")
         corpus, source_files, _issues = import_files(ensure_sample_files(), manifest["import_template"], project_dir=project_dir)
         manifest["source_files"] = source_files
-    manifest, corpus, run_record = run_project_pipeline(
+    manifest, corpus, run_record = run_project_workflow(
         project_dir,
         manifest,
         corpus,
@@ -329,7 +345,7 @@ def action_run_pipeline(payload: dict[str, Any], progress_callback: ProgressCall
             detail_message="正在保存运行结果",
         ),
     )
-    save_project(project_dir, manifest, corpus)
+    save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections={"manifest", "corpus"})
     remember_project(manifest["id"], set_current=True)
     notify(
         progress_callback,
@@ -341,7 +357,10 @@ def action_run_pipeline(payload: dict[str, Any], progress_callback: ProgressCall
             detail_message="流程运行完成",
         ),
     )
-    return run_record
+    return {
+        "run": run_record,
+        "project": manifest,
+    }
 
 
 def action_export_project(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
@@ -351,8 +370,8 @@ def action_export_project(payload: dict[str, Any], progress_callback: ProgressCa
     formats = payload.get("formats", [])
     if not manifest.get("run_history"):
         notify(progress_callback, 0.2, "尚无运行结果，先生成一次分析结果")
-        manifest, corpus, _ = run_project_pipeline(project_dir, manifest, corpus, progress_callback=progress_callback)
-        save_project(project_dir, manifest, corpus)
+        manifest, corpus, _ = run_project_workflow(project_dir, manifest, corpus, progress_callback=progress_callback)
+        save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections={"manifest", "corpus"})
 
     latest_run = manifest["run_history"][-1]["run_id"]
     latest_run_dir = project_dir / "runs" / latest_run
@@ -392,11 +411,15 @@ def action_export_project(payload: dict[str, Any], progress_callback: ProgressCa
 
     if "xlsx" in formats:
         notify(progress_callback, 0.84, "正在写出 Excel 汇总")
+        source_xlsx = latest_run_dir / "outputs" / "analysis_bundle.xlsx"
         xlsx_path = export_dir / "analysis_bundle.xlsx"
-        with pd.ExcelWriter(xlsx_path) as writer:
-            for key, rows in manifest["results"].items():
-                if isinstance(rows, list) and key != "report_files":
-                    pd.DataFrame(rows).to_excel(writer, sheet_name=key[:31], index=False)
+        if source_xlsx.exists():
+            shutil.copy2(source_xlsx, xlsx_path)
+        else:
+            with pd.ExcelWriter(xlsx_path) as writer:
+                for key, rows in manifest["results"].items():
+                    if isinstance(rows, list) and key != "report_files":
+                        pd.DataFrame(rows).to_excel(writer, sheet_name=key[:31], index=False)
         exported.append({
             "path": str(xlsx_path),
             "relative_path": str(xlsx_path.relative_to(project_dir).as_posix()),
@@ -502,7 +525,7 @@ def action_save_project(payload: dict[str, Any], progress_callback: ProgressCall
     project_dir, manifest, corpus = load_project_or_fail(payload["id"])
     updated = deep_copy_manifest(manifest)
     updated.update(payload)
-    save_project(project_dir, updated, corpus)
+    save_project(project_dir, updated, corpus, dirty_sections=_save_sections_from_project_payload(payload))
     remember_project(updated["id"], set_current=True)
     notify(progress_callback, 1.0, "项目设置已保存")
     return build_project_summary(project_dir, updated, corpus)
@@ -530,10 +553,16 @@ def action_update_corpus_document(payload: dict[str, Any], progress_callback: Pr
         next_corpus.append(normalized)
 
     manifest = refresh_source_files(project_dir, manifest, next_corpus)
-    save_project(project_dir, manifest, next_corpus)
+    save_project(project_dir, manifest, next_corpus, already_normalized=True, dirty_sections={"manifest", "corpus"})
     remember_project(manifest["id"], set_current=True)
     notify(progress_callback, 1.0, "语料文档已保存，请重新运行处理流程")
-    return normalized
+    return {
+        **normalized,
+        "document": normalized,
+        "document_count": len(next_corpus),
+        "source_files": manifest.get("source_files", []),
+        "project_updated_at": manifest.get("updated_at"),
+    }
 
 
 def action_delete_corpus_document(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
@@ -546,10 +575,15 @@ def action_delete_corpus_document(payload: dict[str, Any], progress_callback: Pr
         raise ValueError(f"Corpus document {doc_id} not found")
 
     manifest = refresh_source_files(project_dir, manifest, next_corpus)
-    save_project(project_dir, manifest, next_corpus)
+    save_project(project_dir, manifest, next_corpus, already_normalized=True, dirty_sections={"manifest", "corpus"})
     remember_project(manifest["id"], set_current=True)
     notify(progress_callback, 1.0, "语料文档已删除，请重新运行处理流程")
-    return {"doc_id": doc_id, "document_count": len(next_corpus)}
+    return {
+        "doc_id": doc_id,
+        "document_count": len(next_corpus),
+        "source_files": manifest.get("source_files", []),
+        "project_updated_at": manifest.get("updated_at"),
+    }
 
 
 def action_import_dictionary_sheet(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
@@ -588,10 +622,15 @@ def action_import_dictionary_sheet(payload: dict[str, Any], progress_callback: P
     imported_table.setdefault("entries", [])
     collection.setdefault("tables", []).append(imported_table)
     notify(progress_callback, 0.7, "正在写入项目词表")
-    save_project(project_dir, manifest, corpus)
+    save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections={"manifest", "dictionary_set"})
     remember_project(manifest["id"], set_current=True)
     notify(progress_callback, 1.0, "词表已导入")
-    return imported_table
+    return {
+        **imported_table,
+        "table": imported_table,
+        "dictionary_set": manifest["dictionary_set"],
+        "project_updated_at": manifest.get("updated_at"),
+    }
 
 
 def action_export_dictionary_sheet(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
@@ -621,6 +660,63 @@ def action_export_dictionary_sheet(payload: dict[str, Any], progress_callback: P
     }
 
 
+def action_save_ingestion_spec(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在保存导入规格")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    spec_payload = payload.get("spec") if isinstance(payload.get("spec"), dict) else {key: value for key, value in payload.items() if key != "project_id"}
+    saved = save_ingestion_spec(project_dir, manifest, spec_payload)
+    save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections={"manifest", "ingestion_specs"})
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "导入规格已保存")
+    return saved
+
+
+def action_list_ingestion_specs(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> list[dict[str, Any]]:
+    notify(progress_callback, 0.1, "正在读取导入规格")
+    ensure_bootstrap_project()
+    project_dir, manifest, _corpus = load_project_or_fail(payload["project_id"])
+    specs = list_ingestion_specs(project_dir, manifest)
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "导入规格已加载")
+    return specs
+
+
+def action_create_corpus_view(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在创建语料视图")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    view_payload = payload.get("view") if isinstance(payload.get("view"), dict) else {key: value for key, value in payload.items() if key != "project_id"}
+    created = create_corpus_view(project_dir, manifest, view_payload)
+    save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections={"manifest", "corpus_views"})
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "语料视图已创建")
+    return created
+
+
+def action_update_corpus_view(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在更新语料视图")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    view_payload = payload.get("view") if isinstance(payload.get("view"), dict) else {key: value for key, value in payload.items() if key != "project_id"}
+    updated = update_corpus_view(project_dir, manifest, view_payload)
+    save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections={"manifest", "corpus_views"})
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "语料视图已更新")
+    return updated
+
+
+def action_delete_corpus_view(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在删除语料视图")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    removed = delete_corpus_view(project_dir, manifest, str(payload.get("view_id") or payload.get("id") or ""))
+    save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections={"manifest", "corpus_views"})
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "语料视图已删除")
+    return removed
+
+
 ACTION_HANDLERS: dict[str, Callable[..., Any]] = {
     "load-workspace": action_load_workspace,
     "create-project": action_create_project,
@@ -629,7 +725,7 @@ ACTION_HANDLERS: dict[str, Callable[..., Any]] = {
     "duplicate-project": action_duplicate_project,
     "delete-project": action_delete_project,
     "import-project-files": action_import_project_files,
-    "run-pipeline": action_run_pipeline,
+    "run-workflow": action_run_workflow,
     "export-project": action_export_project,
     "export-project-backup": action_export_project_backup,
     "import-project-package": action_import_project_package,
@@ -643,6 +739,11 @@ ACTION_HANDLERS: dict[str, Callable[..., Any]] = {
     "delete-corpus-document": action_delete_corpus_document,
     "import-dictionary-sheet": action_import_dictionary_sheet,
     "export-dictionary-sheet": action_export_dictionary_sheet,
+    "save-ingestion-spec": action_save_ingestion_spec,
+    "list-ingestion-specs": action_list_ingestion_specs,
+    "create-corpus-view": action_create_corpus_view,
+    "update-corpus-view": action_update_corpus_view,
+    "delete-corpus-view": action_delete_corpus_view,
 }
 
 

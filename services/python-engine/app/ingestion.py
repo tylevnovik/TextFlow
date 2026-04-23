@@ -36,6 +36,11 @@ SOURCE_PROFILE_VALUES = {
 }
 
 
+def stable_payload_hash(payload: Any) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
 def sample_records() -> list[dict[str, Any]]:
     return [
         {

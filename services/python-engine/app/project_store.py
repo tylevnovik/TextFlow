@@ -28,6 +28,8 @@ from .runtime_support import workflow_runtime_profile
 
 PROJECT_FILENAME = "project.json"
 CORPUS_FILENAME = "metadata/corpus.json"
+CORPUS_VIEWS_FILENAME = "metadata/corpus_views.json"
+INGESTION_SPECS_FILENAME = "metadata/ingestion_specs.json"
 WORKSPACE_FILENAME = "workspace.json"
 WORKSPACE_ENV_VAR = "TEXTFLOW_WORKSPACE_ROOT"
 PROJECT_TEMPLATES_DIRNAME = "project_templates"
@@ -703,6 +705,10 @@ def write_project_payload(
     if normalized_dirty is None or "dictionary_set" in normalized_dirty:
         for kind, collection in storage_manifest["dictionary_set"].get("collections", {}).items():
             write_json(project_dir / f"dictionaries/{kind}.json", collection)
+    if normalized_dirty is None or "corpus_views" in normalized_dirty:
+        write_json(project_dir / CORPUS_VIEWS_FILENAME, storage_manifest.get("corpus_views", []))
+    if normalized_dirty is None or "ingestion_specs" in normalized_dirty:
+        write_json(project_dir / INGESTION_SPECS_FILENAME, storage_manifest.get("ingestion_specs", []))
 
 
 def normalize_workflow_definition_record(
@@ -1082,6 +1088,10 @@ def save_project(
 def load_project(project_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     manifest = read_json(project_dir / PROJECT_FILENAME)
     corpus = read_json(project_dir / CORPUS_FILENAME) if (project_dir / CORPUS_FILENAME).exists() else []
+    if (project_dir / CORPUS_VIEWS_FILENAME).exists():
+        manifest["corpus_views"] = read_json(project_dir / CORPUS_VIEWS_FILENAME)
+    if (project_dir / INGESTION_SPECS_FILENAME).exists():
+        manifest["ingestion_specs"] = read_json(project_dir / INGESTION_SPECS_FILENAME)
     manifest = normalize_project_manifest(manifest, corpus, project_dir)
     return manifest, corpus
 
