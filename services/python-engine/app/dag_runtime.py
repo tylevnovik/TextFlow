@@ -1,29 +1,44 @@
 from __future__ import annotations
 
-from collections import defaultdict, deque
+from collections import defaultdict
+from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
 import gzip
 import hashlib
 import json
+import os
+import pickle
 from pathlib import Path
+import threading
 from time import perf_counter
 from typing import Any
 
 import numpy as np
 
+from .artifact_store import write_artifact
 from .defaults import (
-    compile_pipeline_from_workflow,
     empty_result_bundle,
     normalize_workflow_edges,
     utc_now_iso,
     workflow_active_node_ids_from_sinks,
     workflow_reachable_node_ids,
+    workflow_payload_hash,
 )
 from .node_registry import NodeRegistry, build_node_registry
-from .reporting import write_run_outputs
+from .reporting import result_bundle_table_entries, write_run_outputs
+from .runtime_support import (
+    build_artifact_handle,
+    build_run_record,
+    describe_output_bundle,
+    describe_run_scope,
+    dispatch_progress_callback,
+    notify_progress,
+    select_active_workflow,
+    update_log,
+    workflow_runtime_profile,
+)
 
-LEGACY_BRIDGE_NODE_TYPES = {"analyze_corpus", "export_results"}
 UTILITY_NODE_TYPES = {"note", "group"}
 CORPUS_PORT_TYPES = {
     "CorpusTable",
@@ -34,6 +49,7 @@ CORPUS_PORT_TYPES = {
     "TokenCorpus",
     "FilteredTokenCorpus",
 }
+DEFAULT_DAG_PARALLEL_WORKERS = 4
 
 
 def _json_ready(value: Any) -> Any:
@@ -175,15 +191,21 @@ def _hash_port_value(port_type: str, value: Any) -> str:
             if port_type == "FilteredTokenCorpus":
                 base["filtered_tokens"] = item.get("filtered_tokens")
             normalized_rows.append(base)
-        return _stable_hash(normalized_rows)
-    return _stable_hash(value)
+        encoded = json.dumps(normalized_rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _cache_payload_path(project_dir: Path, node_id: str, cache_key: str) -> Path:
+    return project_dir / "cache" / "nodes" / node_id / f"{cache_key}.pkl"
+
+
+def _legacy_json_cache_payload_path(project_dir: Path, node_id: str, cache_key: str) -> Path:
     return project_dir / "cache" / "nodes" / node_id / f"{cache_key}.json"
 
 
-def _legacy_cache_payload_path(project_dir: Path, node_id: str, cache_key: str) -> Path:
+def _legacy_gzip_cache_payload_path(project_dir: Path, node_id: str, cache_key: str) -> Path:
     return project_dir / "cache" / "nodes" / node_id / f"{cache_key}.json.gz"
 
 
@@ -193,24 +215,32 @@ def _write_cache_payload(project_dir: Path, node_id: str, cache_key: str, output
         "node_id": node_id,
         "cache_key": cache_key,
         "created_at": utc_now_iso(),
-        "outputs": _json_ready(outputs),
+        "outputs": outputs,
         "output_hashes": output_hashes,
     }
-    _write_json_file(cache_path, payload)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("wb") as handle:
+        pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
     return str(cache_path)
 
 
 def _read_cache_payload(project_dir: Path, node_id: str, cache_key: str) -> tuple[dict[str, Any], dict[str, str], str] | None:
     cache_path = _cache_payload_path(project_dir, node_id, cache_key)
     if cache_path.exists():
-        payload = _read_json_file(cache_path)
+        with cache_path.open("rb") as handle:
+            payload = pickle.load(handle)
     else:
-        legacy_cache_path = _legacy_cache_payload_path(project_dir, node_id, cache_key)
+        legacy_cache_path = _legacy_json_cache_payload_path(project_dir, node_id, cache_key)
         if not legacy_cache_path.exists():
-            return None
-        with gzip.open(legacy_cache_path, "rt", encoding="utf-8") as handle:
-            payload = json.load(handle)
-        cache_path = legacy_cache_path
+            legacy_cache_path = _legacy_gzip_cache_payload_path(project_dir, node_id, cache_key)
+            if not legacy_cache_path.exists():
+                return None
+            with gzip.open(legacy_cache_path, "rt", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            cache_path = legacy_cache_path
+        else:
+            payload = _read_json_file(legacy_cache_path)
+            cache_path = legacy_cache_path
     outputs = payload.get("outputs") if isinstance(payload, dict) else None
     output_hashes = payload.get("output_hashes") if isinstance(payload, dict) else None
     if not isinstance(outputs, dict) or not isinstance(output_hashes, dict):
@@ -228,7 +258,7 @@ def _node_cache_key(
     payload = {
         "project_id": manifest.get("id"),
         "workflow_id": workflow_definition.get("workflow_id"),
-        "workflow_hash": manifest.get("pipeline", {}).get("workflow_hash"),
+        "workflow_hash": workflow_payload_hash(workflow_definition),
         "dictionary_version": ((manifest.get("dictionary_set") or {}).get("version")),
         "node_id": node.get("node_id"),
         "node_type": node.get("node_type"),
@@ -266,8 +296,6 @@ def supports_native_execution(workflow_definition: dict[str, Any] | None, regist
         node_type = str(node.get("node_type") or "")
         if not node_type or node_type in UTILITY_NODE_TYPES:
             continue
-        if node_type in LEGACY_BRIDGE_NODE_TYPES:
-            return False
         definition = definition_map.get(node_type)
         if not isinstance(definition, dict):
             return False
@@ -277,20 +305,13 @@ def supports_native_execution(workflow_definition: dict[str, Any] | None, regist
             return False
     return True
 
-
-def _select_active_workflow(manifest: dict[str, Any]) -> dict[str, Any]:
-    workflow_definitions = [
-        workflow
-        for workflow in manifest.get("workflow_definitions", [])
-        if isinstance(workflow, dict) and workflow.get("workflow_id")
-    ]
-    active_workflow_id = str(manifest.get("active_workflow_id") or "")
-    workflow_lookup = {str(workflow["workflow_id"]): workflow for workflow in workflow_definitions}
-    return workflow_lookup.get(active_workflow_id) or (workflow_definitions[0] if workflow_definitions else {})
-
-
-def _topological_active_nodes(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _topological_active_node_batches(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     node_lookup = {str(node.get("node_id") or ""): node for node in nodes}
+    node_order = {
+        str(node.get("node_id") or ""): index
+        for index, node in enumerate(nodes)
+        if node.get("node_id")
+    }
     indegree = {node_id: 0 for node_id in node_lookup}
     outgoing: dict[str, list[str]] = defaultdict(list)
     for edge in edges:
@@ -300,18 +321,74 @@ def _topological_active_nodes(nodes: list[dict[str, Any]], edges: list[dict[str,
             continue
         outgoing[from_node_id].append(to_node_id)
         indegree[to_node_id] += 1
-    queue = deque([node_id for node_id, degree in indegree.items() if degree == 0])
-    order: list[dict[str, Any]] = []
-    while queue:
-        node_id = queue.popleft()
-        order.append(node_lookup[node_id])
-        for target_id in outgoing.get(node_id, []):
-            indegree[target_id] -= 1
-            if indegree[target_id] == 0:
-                queue.append(target_id)
-    if len(order) != len(node_lookup):
+
+    ready = sorted(
+        [node_id for node_id, degree in indegree.items() if degree == 0],
+        key=lambda node_id: node_order.get(node_id, 0),
+    )
+    batches: list[list[dict[str, Any]]] = []
+    order_count = 0
+    while ready:
+        current_batch = list(ready)
+        batches.append([node_lookup[node_id] for node_id in current_batch])
+        order_count += len(current_batch)
+        next_ready: list[str] = []
+        for node_id in current_batch:
+            for target_id in sorted(outgoing.get(node_id, []), key=lambda item: node_order.get(item, 0)):
+                indegree[target_id] -= 1
+                if indegree[target_id] == 0:
+                    next_ready.append(target_id)
+        ready = sorted(next_ready, key=lambda node_id: node_order.get(node_id, 0))
+    if order_count != len(node_lookup):
         raise ValueError("Workflow graph contains an unsupported cycle")
-    return order
+    return batches
+
+
+def _topological_active_nodes(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    batches = _topological_active_node_batches(nodes, edges)
+    return [node for batch in batches for node in batch]
+
+
+def _node_runtime_parallel_safe(definition: dict[str, Any]) -> bool:
+    runtime = definition.get("runtime") if isinstance(definition.get("runtime"), dict) else {}
+    if "parallel_safe" in runtime:
+        return bool(runtime.get("parallel_safe"))
+    category = str(definition.get("category") or "")
+    node_type = str(definition.get("type") or "")
+    return category in {"analysis", "output"} and node_type not in {"analyze_corpus", "export_results"}
+
+
+def dag_parallel_worker_count(
+    nodes: list[dict[str, Any]],
+    definitions_by_type: dict[str, dict[str, Any]],
+) -> int:
+    if os.environ.get("TEXTFLOW_DISABLE_DAG_PARALLEL") == "1":
+        return 1
+
+    override = os.environ.get("TEXTFLOW_DAG_WORKERS")
+    if override is not None:
+        try:
+            requested = max(1, int(override))
+        except ValueError:
+            requested = 1
+        parallel_candidates = sum(
+            1
+            for node in nodes
+            if _node_runtime_parallel_safe(definitions_by_type.get(str(node.get("node_type") or ""), {}))
+        )
+        return max(1, min(requested, max(parallel_candidates, 1)))
+
+    cpu_count = os.cpu_count() or 1
+    if cpu_count <= 1:
+        return 1
+    parallel_candidates = sum(
+        1
+        for node in nodes
+        if _node_runtime_parallel_safe(definitions_by_type.get(str(node.get("node_type") or ""), {}))
+    )
+    if parallel_candidates < 2:
+        return 1
+    return max(1, min(parallel_candidates, min(DEFAULT_DAG_PARALLEL_WORKERS, cpu_count)))
 
 
 def _definition_output_ports(definition: dict[str, Any]) -> list[dict[str, Any]]:
@@ -365,6 +442,32 @@ def _result_bundle_bindings(definition: dict[str, Any]) -> list[tuple[str, str]]
     return bindings
 
 
+def _result_bundle_binding_map(
+    workflow_definition: dict[str, Any],
+    registry: NodeRegistry,
+) -> dict[str, tuple[str, str]]:
+    bindings: dict[str, tuple[str, str]] = {}
+    for node in workflow_definition.get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("node_id") or "")
+        node_type = str(node.get("node_type") or "")
+        if not node_id or not node_type:
+            continue
+        definition = registry.definitions_by_type.get(node_type) or {}
+        for _port_id, result_key in _result_bundle_bindings(definition):
+            bindings[result_key] = (node_id, node_type)
+    return bindings
+
+
+def _artifact_kind_for_result_value(value: Any) -> str | None:
+    if isinstance(value, list):
+        return "table"
+    if isinstance(value, dict):
+        return "object"
+    return None
+
+
 def _export_selection_from_active_graph(
     node_lookup: dict[str, dict[str, Any]],
     active_edges: list[dict[str, Any]],
@@ -410,6 +513,28 @@ class NodeExecutionState:
     cache_path: str | None = None
 
 
+@dataclass
+class PreparedNodeExecution:
+    node: dict[str, Any]
+    node_index: int
+    node_id: str
+    node_type: str
+    definition: dict[str, Any]
+    executor: Any
+    input_payload: dict[str, Any]
+    cache_key: str | None
+    cached: tuple[dict[str, Any], dict[str, str], str] | None
+
+
+@dataclass
+class ExecutedNodeResult:
+    prepared: PreparedNodeExecution
+    state: NodeExecutionState
+    started_at: str
+    start_clock: float
+    error: BaseException | None = None
+
+
 class WorkflowExecutionContext:
     def __init__(
         self,
@@ -417,7 +542,7 @@ class WorkflowExecutionContext:
         project_dir: Path,
         manifest: dict[str, Any],
         workflow_definition: dict[str, Any],
-        compiled_pipeline: dict[str, Any],
+        runtime_profile: dict[str, Any],
         full_corpus: list[dict[str, Any]],
         logs: list[dict[str, Any]],
         warnings: list[str],
@@ -429,7 +554,7 @@ class WorkflowExecutionContext:
         self.project_dir = project_dir
         self.manifest = manifest
         self.workflow_definition = workflow_definition
-        self.compiled_pipeline = compiled_pipeline
+        self.runtime_profile = runtime_profile
         self.full_corpus = full_corpus
         self.logs = logs
         self.warnings = warnings
@@ -445,6 +570,9 @@ class WorkflowExecutionContext:
         self.node_runs: list[dict[str, Any]] = []
         self.node_runtime_states: dict[str, dict[str, Any]] = {}
         self._node_started_clocks: dict[str, float] = {}
+        self._active_node_ids: set[str] = set()
+        self._dirty_node_ids: set[str] = set()
+        self._lock = threading.RLock()
         self.workflow_id = str(workflow_definition.get("workflow_id") or "")
         self.workflow_name = str(workflow_definition.get("name") or manifest.get("name") or "当前工作流")
         self.run_started_at = utc_now_iso()
@@ -457,34 +585,91 @@ class WorkflowExecutionContext:
         }
 
     def log(self, node: dict[str, Any], message: str, level: str = "info") -> None:
-        from .pipeline import update_log
-
         definition_step = str(((node.get("runtime_meta") or {}).get("step_id")) or "system")
         step = definition_step if definition_step in {"cleaning", "normalization", "tokenization", "dictionary_application", "filtering", "analysis", "export", "ingestion"} else "system"
-        update_log(self.logs, step, message, level)
+        with self._lock:
+            update_log(self.logs, step, message, level)
 
     def warning(self, message: str, node: dict[str, Any] | None = None) -> None:
-        self.warnings.append(message)
+        with self._lock:
+            self.warnings.append(message)
         self.log(node or {}, message, "warning")
 
     def add_audits(self, rows: list[dict[str, Any]]) -> None:
         if not rows:
             return
-        self.result_bundle["audit_table"] = [*self.result_bundle["audit_table"], *rows]
+        with self._lock:
+            self.result_bundle["audit_table"] = [*self.result_bundle["audit_table"], *rows]
 
-    def graph_progress(self, fraction: float = 0.0) -> float:
-        bounded_fraction = min(max(float(fraction), 0.0), 0.995)
-        return min(0.9, 0.08 + ((self.current_node_index - 1) + bounded_fraction) / self.total_nodes * 0.78)
+    def get_shared_value(self, key: str, default: Any = None) -> Any:
+        with self._lock:
+            return self.shared.get(key, default)
+
+    def set_shared_value(self, key: str, value: Any) -> Any:
+        with self._lock:
+            self.shared[key] = value
+        return value
+
+    def get_shared_cache_value(self, bucket: str, cache_key: Any) -> Any:
+        with self._lock:
+            cache = self.shared.get(bucket)
+            if not isinstance(cache, dict):
+                return None
+            return cache.get(cache_key)
+
+    def set_shared_cache_value(self, bucket: str, cache_key: Any, value: Any) -> Any:
+        with self._lock:
+            cache = self.shared.get(bucket)
+            if not isinstance(cache, dict):
+                cache = {}
+                self.shared[bucket] = cache
+            cache[cache_key] = value
+        return value
+
+    def graph_progress(self) -> float:
+        with self._lock:
+            aggregate_fraction = sum(
+                min(max(float(state.get("progress") or 0.0), 0.0), 1.0)
+                for state in self.node_runtime_states.values()
+            )
+        return min(0.9, 0.08 + aggregate_fraction / self.total_nodes * 0.78)
 
     def completed_node_count(self) -> int:
-        return sum(
-            1
-            for state in self.node_runtime_states.values()
-            if str(state.get("status") or "") in {"completed", "cached", "failed", "skipped"}
-        )
+        with self._lock:
+            return sum(
+                1
+                for state in self.node_runtime_states.values()
+                if str(state.get("status") or "") in {"completed", "cached", "failed", "skipped"}
+            )
 
-    def runtime_detail(self, *, stage: str, detail: str | None = None) -> dict[str, Any]:
-        current_state = self.node_runtime_states.get(self.current_node_id or "") if self.current_node_id else None
+    def runtime_detail(
+        self,
+        *,
+        stage: str,
+        detail: str | None = None,
+        full_node_state_sync: bool = False,
+    ) -> dict[str, Any]:
+        with self._lock:
+            current_state = self.node_runtime_states.get(self.current_node_id or "") if self.current_node_id else None
+            completed_nodes = sum(
+                1
+                for state in self.node_runtime_states.values()
+                if str(state.get("status") or "") in {"completed", "cached", "failed", "skipped"}
+            )
+            if full_node_state_sync:
+                node_states = deepcopy(self.node_runtime_states)
+                node_state_delta = deepcopy(self.node_runtime_states)
+            else:
+                dirty_node_ids = set(self._dirty_node_ids)
+                node_state_delta = {
+                    node_id: deepcopy(self.node_runtime_states[node_id])
+                    for node_id in dirty_node_ids
+                    if node_id in self.node_runtime_states
+                }
+                node_states = {}
+            self._dirty_node_ids.clear()
+            current_node_id = self.current_node_id
+            last_completed_node_id = self.last_completed_node_id
         return {
             "kind": "workflow_run",
             "run_id": self.run_id,
@@ -492,14 +677,16 @@ class WorkflowExecutionContext:
             "workflow_name": self.workflow_name,
             "stage": stage,
             "total_nodes": self.total_nodes,
-            "completed_nodes": self.completed_node_count(),
-            "current_node_id": self.current_node_id,
+            "completed_nodes": completed_nodes,
+            "current_node_id": current_node_id,
             "current_node_label": current_state.get("label") if isinstance(current_state, dict) else None,
             "current_node_index": current_state.get("node_index") if isinstance(current_state, dict) else None,
-            "last_completed_node_id": self.last_completed_node_id,
+            "last_completed_node_id": last_completed_node_id,
             "elapsed_ms": round((perf_counter() - self.run_started_clock) * 1000, 3),
             "detail": detail,
-            "node_states": deepcopy(self.node_runtime_states),
+            "node_states": node_states,
+            "node_state_delta": node_state_delta,
+            "full_node_state_sync": full_node_state_sync,
         }
 
     def emit_runtime_progress(
@@ -510,35 +697,51 @@ class WorkflowExecutionContext:
         stage: str,
         detail: str | None = None,
         force: bool = False,
+        full_node_state_sync: bool = False,
     ) -> None:
         if self.progress_callback is None:
             return
-        now = perf_counter()
-        if not force and now - self._last_runtime_emit_at < 0.12:
-            return
-        self._last_runtime_emit_at = now
-        self.progress_callback(progress, message, self.runtime_detail(stage=stage, detail=detail or message))
+
+        with self._lock:
+            now = perf_counter()
+            if not force and now - self._last_runtime_emit_at < 0.2:
+                return
+            self._last_runtime_emit_at = now
+            detail_payload = self.runtime_detail(
+                stage=stage,
+                detail=detail or message,
+                full_node_state_sync=full_node_state_sync,
+            )
+        dispatch_progress_callback(
+            self.progress_callback,
+            progress,
+            message,
+            detail_payload,
+        )
 
     def begin_node(self, node: dict[str, Any], node_index: int) -> tuple[str, str]:
         node_id = str(node.get("node_id") or "")
         label = str(node.get("label") or node.get("node_type") or "节点")
         started_at = utc_now_iso()
-        self.current_node_index = node_index
-        self.current_node_id = node_id
-        self.node_runtime_states[node_id] = {
-            "node_id": node_id,
-            "node_type": str(node.get("node_type") or ""),
-            "label": label,
-            "status": "running",
-            "node_index": node_index,
-            "total_nodes": self.total_nodes,
-            "progress": 0.0,
-            "started_at": started_at,
-            "detail": f"正在执行节点：{label}",
-        }
-        self._node_started_clocks[node_id] = perf_counter()
+        with self._lock:
+            self.current_node_index = node_index
+            self.current_node_id = node_id
+            self._active_node_ids.add(node_id)
+            self.node_runtime_states[node_id] = {
+                "node_id": node_id,
+                "node_type": str(node.get("node_type") or ""),
+                "label": label,
+                "status": "running",
+                "node_index": node_index,
+                "total_nodes": self.total_nodes,
+                "progress": 0.0,
+                "started_at": started_at,
+                "detail": f"正在执行节点：{label}",
+            }
+            self._node_started_clocks[node_id] = perf_counter()
+            self._dirty_node_ids.add(node_id)
         self.emit_runtime_progress(
-            self.graph_progress(0.0),
+            self.graph_progress(),
             f"正在执行节点：{label}",
             stage="running",
             detail=f"正在执行节点：{label}",
@@ -550,28 +753,46 @@ class WorkflowExecutionContext:
         if self.progress_callback is None:
             return
         node_id = str(node.get("node_id") or "")
-        state = self.node_runtime_states.get(node_id)
-        if state is None:
-            _, _started_at = self.begin_node(node, self.current_node_index)
-            state = self.node_runtime_states.get(node_id) or {}
         bounded_fraction = min(max(float(fraction), 0.0), 0.995)
         label = str(node.get("label") or node.get("node_type") or "节点")
-        previous_fraction = float(state.get("progress") or 0.0)
-        previous_detail = str(state.get("detail") or "")
         next_detail = detail or f"正在执行节点：{label}"
-        started_clock = self._node_started_clocks.get(node_id)
-        duration_ms = round((perf_counter() - float(started_clock)) * 1000, 3) if isinstance(started_clock, (int, float)) else None
-        state.update({
-            "status": "running",
-            "progress": bounded_fraction,
-            "detail": next_detail,
-            "duration_ms": duration_ms,
-        })
-        progress_changed = abs(bounded_fraction - previous_fraction) >= 0.08
-        detail_changed = previous_detail != next_detail
+        with self._lock:
+            state = self.node_runtime_states.get(node_id)
+            if state is None:
+                self.current_node_index = max(self.current_node_index, 1)
+                self.current_node_id = node_id
+                self._active_node_ids.add(node_id)
+                self.node_runtime_states[node_id] = {
+                    "node_id": node_id,
+                    "node_type": str(node.get("node_type") or ""),
+                    "label": label,
+                    "status": "running",
+                    "node_index": self.current_node_index,
+                    "total_nodes": self.total_nodes,
+                    "progress": 0.0,
+                    "started_at": utc_now_iso(),
+                    "detail": next_detail,
+                }
+                self._node_started_clocks[node_id] = perf_counter()
+                state = self.node_runtime_states[node_id]
+            previous_fraction = float(state.get("progress") or 0.0)
+            previous_detail = str(state.get("detail") or "")
+            started_clock = self._node_started_clocks.get(node_id)
+            duration_ms = round((perf_counter() - float(started_clock)) * 1000, 3) if isinstance(started_clock, (int, float)) else None
+            state.update({
+                "status": "running",
+                "progress": bounded_fraction,
+                "detail": next_detail,
+                "duration_ms": duration_ms,
+            })
+            self.current_node_id = node_id
+            progress_changed = abs(bounded_fraction - previous_fraction) >= 0.08
+            detail_changed = previous_detail != next_detail
+            if progress_changed or detail_changed:
+                self._dirty_node_ids.add(node_id)
         if progress_changed or detail_changed:
             self.emit_runtime_progress(
-                self.graph_progress(bounded_fraction),
+                self.graph_progress(),
                 next_detail,
                 stage="running",
                 detail=next_detail,
@@ -592,33 +813,46 @@ class WorkflowExecutionContext:
         ended_at = utc_now_iso()
         duration_ms = round((perf_counter() - start_clock) * 1000, 3)
         output_summary, sample_outputs = _summarize_runtime_outputs(state.outputs)
-        runtime_state = self.node_runtime_states.get(node_id) or {
-            "node_id": node_id,
-            "node_type": str(node.get("node_type") or ""),
-            "label": str(node.get("label") or node.get("node_type") or "节点"),
-            "node_index": node_index,
-            "total_nodes": self.total_nodes,
-        }
-        runtime_state.update({
-            "status": status,
-            "progress": 1.0,
-            "started_at": started_at,
-            "ended_at": ended_at,
-            "duration_ms": duration_ms,
-            "cache_hit": bool(state.cache_hit),
-            "cache_key": state.cache_key,
-            "cache_path": state.cache_path,
-            "output_ports": list(state.outputs.keys()),
-            "output_summary": output_summary,
-            "sample_outputs": sample_outputs,
-            "detail": output_summary,
-            "error": error,
-        })
-        self.node_runtime_states[node_id] = runtime_state
-        self._node_started_clocks.pop(node_id, None)
-        self.last_completed_node_id = node_id
+        with self._lock:
+            runtime_state = self.node_runtime_states.get(node_id) or {
+                "node_id": node_id,
+                "node_type": str(node.get("node_type") or ""),
+                "label": str(node.get("label") or node.get("node_type") or "节点"),
+                "node_index": node_index,
+                "total_nodes": self.total_nodes,
+            }
+            runtime_state.update({
+                "status": status,
+                "progress": 1.0,
+                "started_at": started_at,
+                "ended_at": ended_at,
+                "duration_ms": duration_ms,
+                "cache_hit": bool(state.cache_hit),
+                "cache_key": state.cache_key,
+                "cache_path": state.cache_path,
+                "output_ports": list(state.outputs.keys()),
+                "output_summary": output_summary,
+                "sample_outputs": sample_outputs,
+                "detail": output_summary,
+                "error": error,
+            })
+            self.node_runtime_states[node_id] = runtime_state
+            self._node_started_clocks.pop(node_id, None)
+            self._active_node_ids.discard(node_id)
+            self._dirty_node_ids.add(node_id)
+            self.last_completed_node_id = node_id
+            if self.current_node_id == node_id:
+                if self._active_node_ids:
+                    next_current_id = min(
+                        self._active_node_ids,
+                        key=lambda item: int((self.node_runtime_states.get(item) or {}).get("node_index") or 0),
+                    )
+                    self.current_node_id = next_current_id
+                    self.current_node_index = int((self.node_runtime_states.get(next_current_id) or {}).get("node_index") or 1)
+                else:
+                    self.current_node_id = None
         self.emit_runtime_progress(
-            self.graph_progress(1.0),
+            self.graph_progress(),
             f"节点 {runtime_state['label']} 已{'命中缓存' if state.cache_hit else '执行完成'}",
             stage="running",
             detail=output_summary or f"节点 {runtime_state['label']} 已完成",
@@ -628,19 +862,220 @@ class WorkflowExecutionContext:
     def sync_corpus(self, corpus_rows: Any) -> None:
         if not isinstance(corpus_rows, list):
             return
-        for item in corpus_rows:
-            if not isinstance(item, dict):
+        with self._lock:
+            for item in corpus_rows:
+                if not isinstance(item, dict):
+                    continue
+                doc_id = str(item.get("doc_id") or item.get("id") or "")
+                if not doc_id:
+                    continue
+                existing = self._full_corpus_lookup.get(doc_id)
+                if existing is None:
+                    self.full_corpus.append(item)
+                    self._full_corpus_lookup[doc_id] = item
+                    continue
+                existing.clear()
+                existing.update(item)
+
+
+def _prepare_node_execution(
+    *,
+    project_dir: Path,
+    manifest: dict[str, Any],
+    workflow_definition: dict[str, Any],
+    node: dict[str, Any],
+    node_index: int,
+    node_states: dict[str, NodeExecutionState],
+    incoming_by_port: dict[tuple[str, str], list[dict[str, Any]]],
+    definition_map: dict[str, dict[str, Any]],
+    registry: NodeRegistry,
+) -> PreparedNodeExecution:
+    node_id = str(node.get("node_id") or "")
+    node_type = str(node.get("node_type") or "")
+    definition = definition_map.get(node_type) or {}
+    runtime = definition.get("runtime") if isinstance(definition.get("runtime"), dict) else {}
+    executor_id = str(runtime.get("executor") or "")
+    executor = registry.executors.get(executor_id)
+    if executor is None:
+        raise ValueError(f"Missing executor for node type: {node_type}")
+
+    input_payload: dict[str, Any] = {}
+    input_hashes: dict[str, Any] = {}
+    for port in node.get("inputs", []):
+        if not isinstance(port, dict):
+            continue
+        port_id = str(port.get("port_id") or "")
+        edges = incoming_by_port.get((node_id, port_id), [])
+        if not edges:
+            continue
+        values = []
+        source_hashes: list[str] = []
+        for edge in edges:
+            upstream_state = node_states.get(str(edge.get("from_node") or ""))
+            if upstream_state is None:
                 continue
-            doc_id = str(item.get("doc_id") or item.get("id") or "")
-            if not doc_id:
-                continue
-            existing = self._full_corpus_lookup.get(doc_id)
-            if existing is None:
-                self.full_corpus.append(item)
-                self._full_corpus_lookup[doc_id] = item
-                continue
-            existing.clear()
-            existing.update(item)
+            from_port = str(edge.get("from_port") or "")
+            values.append(upstream_state.outputs.get(from_port))
+            source_hashes.append(str(upstream_state.output_hashes.get(from_port) or ""))
+        if not values:
+            continue
+        input_payload[port_id] = values if bool(port.get("allow_multiple")) else values[-1]
+        input_hashes[port_id] = source_hashes if bool(port.get("allow_multiple")) else source_hashes[-1]
+
+    cacheable = bool(runtime.get("cacheable", False))
+    cache_key = _node_cache_key(manifest, workflow_definition, node, executor_id, input_hashes) if cacheable else None
+    cached = _read_cache_payload(project_dir, node_id, cache_key) if cache_key else None
+    return PreparedNodeExecution(
+        node=node,
+        node_index=node_index,
+        node_id=node_id,
+        node_type=node_type,
+        definition=definition,
+        executor=executor,
+        input_payload=input_payload,
+        cache_key=cache_key,
+        cached=cached,
+    )
+
+
+def _execute_prepared_node(
+    context: WorkflowExecutionContext,
+    prepared: PreparedNodeExecution,
+    started_at: str,
+    start_clock: float,
+) -> ExecutedNodeResult:
+    try:
+        if prepared.cached is not None:
+            outputs, output_hashes, cache_path = prepared.cached
+            state = NodeExecutionState(
+                outputs=outputs,
+                output_hashes=output_hashes,
+                cache_hit=True,
+                cache_key=prepared.cache_key,
+                cache_path=cache_path,
+            )
+            return ExecutedNodeResult(prepared=prepared, state=state, started_at=started_at, start_clock=start_clock)
+
+        outputs = prepared.executor(context, prepared.node, prepared.input_payload)
+        if not isinstance(outputs, dict):
+            outputs = {}
+        normalized_outputs = _json_ready(outputs)
+        output_port_types = {
+            str(port.get("port_id") or ""): str(port.get("port_type") or "")
+            for port in prepared.node.get("outputs", [])
+            if isinstance(port, dict)
+        }
+        output_hashes = {
+            str(port_id): _hash_port_value(output_port_types.get(str(port_id), ""), value)
+            for port_id, value in normalized_outputs.items()
+        }
+        cache_path = (
+            _write_cache_payload(context.project_dir, prepared.node_id, prepared.cache_key, normalized_outputs, output_hashes)
+            if prepared.cache_key
+            else None
+        )
+        state = NodeExecutionState(
+            outputs=normalized_outputs,
+            output_hashes=output_hashes,
+            cache_hit=False,
+            cache_key=prepared.cache_key,
+            cache_path=cache_path,
+        )
+        return ExecutedNodeResult(prepared=prepared, state=state, started_at=started_at, start_clock=start_clock)
+    except Exception as error:  # pragma: no cover - exercised through integration tests
+        failed_state = NodeExecutionState(
+            outputs={},
+            output_hashes={},
+            cache_hit=False,
+            cache_key=prepared.cache_key,
+            cache_path=None,
+        )
+        return ExecutedNodeResult(
+            prepared=prepared,
+            state=failed_state,
+            started_at=started_at,
+            start_clock=start_clock,
+            error=error,
+        )
+
+
+def _record_completed_node(
+    context: WorkflowExecutionContext,
+    logs: list[dict[str, Any]],
+    node_states: dict[str, NodeExecutionState],
+    executed: ExecutedNodeResult,
+) -> None:
+    prepared = executed.prepared
+    state = executed.state
+    node_states[prepared.node_id] = state
+
+    for output_port in prepared.node.get("outputs", []):
+        if not isinstance(output_port, dict):
+            continue
+        port_id = str(output_port.get("port_id") or "")
+        port_type = str(output_port.get("port_type") or "")
+        value = state.outputs.get(port_id)
+        if port_type in CORPUS_PORT_TYPES:
+            context.sync_corpus(value)
+            if port_type == "FilteredTokenCorpus":
+                context.set_shared_value("filtered_corpus", value)
+            elif port_type == "TokenCorpus":
+                context.set_shared_value("token_corpus", value)
+            elif port_type == "NormalizedCorpus":
+                context.set_shared_value("normalized_corpus", value)
+            elif port_type == "CleanCorpus":
+                context.set_shared_value("clean_corpus", value)
+            else:
+                context.set_shared_value("scoped_corpus", value)
+
+    for output_port_id, result_key in _result_bundle_bindings(prepared.definition):
+        context.result_bundle[result_key] = state.outputs.get(output_port_id) or []
+
+    ended_at = utc_now_iso()
+    output_summary, sample_outputs = _summarize_runtime_outputs(state.outputs)
+    context.node_runs.append(
+        {
+            "node_id": prepared.node_id,
+            "node_type": prepared.node_type,
+            "label": str(prepared.node.get("label") or prepared.node_type),
+            "status": "cached" if state.cache_hit else "completed",
+            "started_at": executed.started_at,
+            "ended_at": ended_at,
+            "duration_ms": round((perf_counter() - executed.start_clock) * 1000, 3),
+            "cache_hit": state.cache_hit,
+            "cache_key": state.cache_key,
+            "cache_path": state.cache_path,
+            "output_ports": list(state.outputs.keys()),
+            "output_summary": output_summary,
+            "sample_outputs": sample_outputs,
+        }
+    )
+    context.finish_node(
+        prepared.node,
+        node_index=prepared.node_index,
+        state=state,
+        started_at=executed.started_at,
+        start_clock=executed.start_clock,
+        status="cached" if state.cache_hit else "completed",
+    )
+    update_log(
+        logs,
+        _artifact_step_for_node(prepared.definition),
+        f"节点 {prepared.node.get('label') or prepared.node_type} 已{'命中缓存' if state.cache_hit else '执行完成'}。",
+    )
+
+
+def _record_failed_node(context: WorkflowExecutionContext, executed: ExecutedNodeResult) -> None:
+    prepared = executed.prepared
+    context.finish_node(
+        prepared.node,
+        node_index=prepared.node_index,
+        state=executed.state,
+        started_at=executed.started_at,
+        start_clock=executed.start_clock,
+        status="failed",
+        error=str(executed.error) if executed.error is not None else "节点执行失败",
+    )
 
 
 def run_project_workflow_native(
@@ -649,19 +1084,13 @@ def run_project_workflow_native(
     corpus: list[dict[str, Any]],
     progress_callback: Any = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    from .pipeline import build_run_record, describe_output_bundle, describe_run_scope, notify_progress, update_log
-
     full_corpus = _copy_corpus_rows(corpus)
     logs: list[dict[str, Any]] = []
     warnings: list[str] = []
     errors: list[str] = []
-    registry = build_node_registry(manifest.get("pipeline"))
-    active_workflow = _select_active_workflow(manifest)
-    compiled_pipeline = compile_pipeline_from_workflow(active_workflow, manifest["pipeline"])
-    compiled_pipeline["run_scope"] = deepcopy(compiled_pipeline.get("run_scope") or {})
-    compiled_pipeline["recipe_id"] = compiled_pipeline.get("recipe_id", "standard_analysis")
-    compiled_pipeline["output_bundle_id"] = compiled_pipeline.get("output_bundle_id", "full_report")
-    manifest["pipeline"] = deepcopy(compiled_pipeline)
+    registry = build_node_registry()
+    active_workflow = select_active_workflow(manifest)
+    runtime_profile = workflow_runtime_profile(active_workflow)
 
     active_nodes = [
         node
@@ -682,10 +1111,16 @@ def run_project_workflow_native(
         for edge in normalized_edges
         if str(edge.get("from_node") or "") in selected_node_lookup and str(edge.get("to_node") or "") in selected_node_lookup
     ]
-    execution_order = _topological_active_nodes(selected_nodes, active_edges)
+    execution_batches = _topological_active_node_batches(selected_nodes, active_edges)
+    execution_order = [node for batch in execution_batches for node in batch]
+    node_index_by_id = {
+        str(node.get("node_id") or ""): index
+        for index, node in enumerate(execution_order, start=1)
+        if node.get("node_id")
+    }
     export_selection = _export_selection_from_active_graph(selected_node_lookup, active_edges, definition_map)
 
-    preliminary_scope = describe_run_scope(compiled_pipeline["run_scope"], len(full_corpus), len(full_corpus))
+    preliminary_scope = describe_run_scope(runtime_profile["run_scope"], len(full_corpus), len(full_corpus))
     run_record = build_run_record(
         manifest,
         logs,
@@ -693,9 +1128,9 @@ def run_project_workflow_native(
         errors,
         len(full_corpus),
         preliminary_scope,
-        compiled_pipeline["recipe_id"],
-        compiled_pipeline["output_bundle_id"],
-        describe_output_bundle(compiled_pipeline.get("export") or {}),
+        runtime_profile["recipe_id"],
+        runtime_profile["output_bundle_id"],
+        describe_output_bundle(runtime_profile.get("export") or {}),
         active_workflow,
     )
     total_nodes = max(len(execution_order), 1)
@@ -703,7 +1138,7 @@ def run_project_workflow_native(
         project_dir=project_dir,
         manifest=manifest,
         workflow_definition=active_workflow,
-        compiled_pipeline=compiled_pipeline,
+        runtime_profile=runtime_profile,
         full_corpus=full_corpus,
         logs=logs,
         warnings=warnings,
@@ -718,156 +1153,117 @@ def run_project_workflow_native(
         incoming_by_port[(str(edge.get("to_node") or ""), str(edge.get("to_port") or ""))].append(edge)
 
     update_log(logs, "system", f"本次执行节点：{', '.join(str(node.get('label') or node.get('node_type')) for node in execution_order)}")
+    dag_workers = dag_parallel_worker_count(execution_order, definition_map)
+    if dag_workers > 1:
+        update_log(logs, "system", f"原生 DAG 调度已启用并行执行，最多 {dag_workers} 个节点工作线程。")
+    else:
+        update_log(logs, "system", "原生 DAG 调度当前以串行模式执行节点。")
     context.emit_runtime_progress(0.08, "正在准备原生 DAG 执行", stage="preparing", detail="正在准备原生 DAG 执行", force=True)
     notify_progress(progress_callback, 0.08, "正在准备原生 DAG 执行")
 
     node_states: dict[str, NodeExecutionState] = {}
-    for index, node in enumerate(execution_order, start=1):
-        node_id = str(node.get("node_id") or "")
-        node_type = str(node.get("node_type") or "")
-        definition = definition_map.get(node_type) or {}
-        runtime = definition.get("runtime") if isinstance(definition.get("runtime"), dict) else {}
-        executor_id = str(runtime.get("executor") or "")
-        executor = registry.executors.get(executor_id)
-        if executor is None:
-            raise ValueError(f"Missing executor for node type: {node_type}")
-
-        input_payload: dict[str, Any] = {}
-        input_hashes: dict[str, Any] = {}
-        for port in node.get("inputs", []):
-            if not isinstance(port, dict):
-                continue
-            port_id = str(port.get("port_id") or "")
-            edges = incoming_by_port.get((node_id, port_id), [])
-            if not edges:
-                continue
-            values = []
-            source_hashes: list[str] = []
-            for edge in edges:
-                upstream_state = node_states.get(str(edge.get("from_node") or ""))
-                if upstream_state is None:
-                    continue
-                from_port = str(edge.get("from_port") or "")
-                values.append(upstream_state.outputs.get(from_port))
-                source_hashes.append(str(upstream_state.output_hashes.get(from_port) or ""))
-            if not values:
-                continue
-            input_payload[port_id] = values if bool(port.get("allow_multiple")) else values[-1]
-            input_hashes[port_id] = source_hashes if bool(port.get("allow_multiple")) else source_hashes[-1]
-
-        cacheable = bool(runtime.get("cacheable", False))
-        cache_key = _node_cache_key(manifest, active_workflow, node, executor_id, input_hashes) if cacheable else None
-        cached = _read_cache_payload(project_dir, node_id, cache_key) if cache_key else None
-        start_clock = perf_counter()
-        _, started_at = context.begin_node(node, index)
-
-        try:
-            if cached is not None:
-                outputs, output_hashes, cache_path = cached
-                state = NodeExecutionState(outputs=outputs, output_hashes=output_hashes, cache_hit=True, cache_key=cache_key, cache_path=cache_path)
-            else:
-                outputs = executor(context, node, input_payload)
-                if not isinstance(outputs, dict):
-                    outputs = {}
-                normalized_outputs = _json_ready(outputs)
-                output_port_types = {
-                    str(port.get("port_id") or ""): str(port.get("port_type") or "")
-                    for port in node.get("outputs", [])
-                    if isinstance(port, dict)
-                }
-                output_hashes = {
-                    str(port_id): _hash_port_value(output_port_types.get(str(port_id), ""), value)
-                    for port_id, value in normalized_outputs.items()
-                }
-                cache_path = _write_cache_payload(project_dir, node_id, cache_key, normalized_outputs, output_hashes) if cache_key else None
-                state = NodeExecutionState(
-                    outputs=normalized_outputs,
-                    output_hashes=output_hashes,
-                    cache_hit=False,
-                    cache_key=cache_key,
-                    cache_path=cache_path,
+    parallel_executor = (
+        ThreadPoolExecutor(max_workers=dag_workers, thread_name_prefix="textflow-dag")
+        if dag_workers > 1
+        else None
+    )
+    try:
+        for batch in execution_batches:
+            prepared_batch = [
+                _prepare_node_execution(
+                    project_dir=project_dir,
+                    manifest=manifest,
+                    workflow_definition=active_workflow,
+                    node=node,
+                    node_index=node_index_by_id[str(node.get("node_id") or "")],
+                    node_states=node_states,
+                    incoming_by_port=incoming_by_port,
+                    definition_map=definition_map,
+                    registry=registry,
                 )
-        except Exception as error:
-            failed_state = NodeExecutionState(outputs={}, output_hashes={}, cache_hit=False, cache_key=cache_key, cache_path=None)
-            context.finish_node(
-                node,
-                node_index=index,
-                state=failed_state,
-                started_at=started_at,
-                start_clock=start_clock,
-                status="failed",
-                error=str(error),
-            )
-            raise
-        node_states[node_id] = state
+                for node in batch
+            ]
+            cached_batch = [
+                prepared
+                for prepared in prepared_batch
+                if prepared.cached is not None
+            ]
+            serial_batch = [
+                prepared
+                for prepared in prepared_batch
+                if prepared.cached is None and (dag_workers <= 1 or not _node_runtime_parallel_safe(prepared.definition))
+            ]
+            parallel_batch = [
+                prepared
+                for prepared in prepared_batch
+                if prepared.cached is None and dag_workers > 1 and _node_runtime_parallel_safe(prepared.definition)
+            ]
 
-        for output_port in node.get("outputs", []):
-            if not isinstance(output_port, dict):
-                continue
-            port_id = str(output_port.get("port_id") or "")
-            port_type = str(output_port.get("port_type") or "")
-            value = state.outputs.get(port_id)
-            if port_type in CORPUS_PORT_TYPES:
-                context.sync_corpus(value)
-                if port_type == "FilteredTokenCorpus":
-                    context.shared["filtered_corpus"] = value
-                elif port_type == "TokenCorpus":
-                    context.shared["token_corpus"] = value
-                elif port_type == "NormalizedCorpus":
-                    context.shared["normalized_corpus"] = value
-                elif port_type == "CleanCorpus":
-                    context.shared["clean_corpus"] = value
-                else:
-                    context.shared["scoped_corpus"] = value
+            for prepared in cached_batch:
+                start_clock = perf_counter()
+                started_at = utc_now_iso()
+                executed = _execute_prepared_node(context, prepared, started_at, start_clock)
+                if executed.error is not None:
+                    _record_failed_node(context, executed)
+                    raise executed.error
+                _record_completed_node(context, logs, node_states, executed)
 
-        for output_port_id, result_key in _result_bundle_bindings(definition):
-            context.result_bundle[result_key] = state.outputs.get(output_port_id) or []
+            for prepared in serial_batch:
+                start_clock = perf_counter()
+                _, started_at = context.begin_node(prepared.node, prepared.node_index)
+                executed = _execute_prepared_node(context, prepared, started_at, start_clock)
+                if executed.error is not None:
+                    _record_failed_node(context, executed)
+                    raise executed.error
+                _record_completed_node(context, logs, node_states, executed)
 
-        ended_at = utc_now_iso()
-        output_summary, sample_outputs = _summarize_runtime_outputs(state.outputs)
-        context.node_runs.append(
-            {
-                "node_id": node_id,
-                "node_type": node_type,
-                "label": str(node.get("label") or node_type),
-                "status": "cached" if state.cache_hit else "completed",
-                "started_at": started_at,
-                "ended_at": ended_at,
-                "duration_ms": round((perf_counter() - start_clock) * 1000, 3),
-                "cache_hit": state.cache_hit,
-                "cache_key": state.cache_key,
-                "cache_path": state.cache_path,
-                "output_ports": list(state.outputs.keys()),
-                "output_summary": output_summary,
-                "sample_outputs": sample_outputs,
-            }
-        )
-        context.finish_node(
-            node,
-            node_index=index,
-            state=state,
-            started_at=started_at,
-            start_clock=start_clock,
-            status="cached" if state.cache_hit else "completed",
-        )
-        update_log(
-            logs,
-            _artifact_step_for_node(definition),
-            f"节点 {node.get('label') or node_type} 已{'命中缓存' if state.cache_hit else '执行完成'}。",
-        )
+            if parallel_batch:
+                futures: list[Future[ExecutedNodeResult]] = []
+                for prepared in parallel_batch:
+                    start_clock = perf_counter()
+                    _, started_at = context.begin_node(prepared.node, prepared.node_index)
+                    future = parallel_executor.submit(_execute_prepared_node, context, prepared, started_at, start_clock) if parallel_executor else None
+                    if future is None:
+                        continue
+                    futures.append(future)
+
+                executed_results = [future.result() for future in futures]
+                executed_results.sort(key=lambda executed: executed.prepared.node_index)
+                failed_results: list[ExecutedNodeResult] = []
+                for executed in executed_results:
+                    if executed.error is not None:
+                        _record_failed_node(context, executed)
+                        failed_results.append(executed)
+                        continue
+                    _record_completed_node(context, logs, node_states, executed)
+                if failed_results:
+                    raise failed_results[0].error or RuntimeError("并行节点执行失败")
+    finally:
+        if parallel_executor is not None:
+            parallel_executor.shutdown(wait=True, cancel_futures=False)
+
+    selected_analysis_outputs = [
+        str(node.get("label") or node.get("node_type") or "")
+        for node in execution_order
+        if str(((definition_map.get(str(node.get("node_type") or "")) or {}).get("category") or "")) == "analysis"
+    ]
+    if selected_analysis_outputs:
+        update_log(logs, "analysis", f"已按节点选择生成分析结果：{', '.join(selected_analysis_outputs)}。")
+    else:
+        update_log(logs, "analysis", "分析步骤已禁用，未生成分析结果。")
 
     scoped_corpus = context.shared.get("scoped_corpus")
     if not isinstance(scoped_corpus, list):
         scoped_corpus = full_corpus
-    run_scope = compiled_pipeline.get("run_scope") or {}
+    run_scope = runtime_profile.get("run_scope") or {}
     run_record["processed_document_count"] = len(scoped_corpus)
     run_record["run_scope_summary"] = context.shared.get("run_scope_summary") or describe_run_scope(run_scope, len(full_corpus), len(scoped_corpus))
-    run_record["output_summary"] = describe_output_bundle(compiled_pipeline.get("export") or {})
+    run_record["output_summary"] = describe_output_bundle(runtime_profile.get("export") or {})
     run_record["status"] = "completed" if not errors else "failed"
     run_record["ended_at"] = utc_now_iso()
     run_record["node_runs"] = context.node_runs
 
-    export_enabled = "export" in set(compiled_pipeline.get("enabled_steps") or [])
+    export_enabled = "export" in set(runtime_profile.get("enabled_steps") or [])
     export_message = (
         "正在写出原生 DAG 运行快照与导出文件"
         if export_enabled
@@ -881,6 +1277,8 @@ def run_project_workflow_native(
         project_dir,
         run_record["run_id"],
         manifest,
+        active_workflow,
+        runtime_profile,
         scoped_corpus,
         context.result_bundle,
         run_record,
@@ -893,46 +1291,41 @@ def run_project_workflow_native(
     )
     context.result_bundle["report_files"] = report_files
 
-    snapshot_prefix = f"runs/{run_record['run_id']}"
-    snapshot_files = [
-        f"{snapshot_prefix}/params_snapshot.json",
-        f"{snapshot_prefix}/logs.json",
-        f"{snapshot_prefix}/logs.txt",
-        f"{snapshot_prefix}/corpus_snapshot.json",
+    result_binding_map = _result_bundle_binding_map(active_workflow, registry)
+    run_artifact_records: list[dict[str, Any]] = []
+    for result_key, value in result_bundle_table_entries(context.result_bundle):
+        artifact_kind = _artifact_kind_for_result_value(value)
+        if artifact_kind is None:
+            continue
+        node_id, _node_type = result_binding_map.get(result_key, ("workflow-result", result_key))
+        run_artifact_records.append(
+            write_artifact(
+                project_dir,
+                run_record["run_id"],
+                node_id,
+                artifact_kind,
+                value,
+            )
+        )
+    run_record["artifacts"] = [build_artifact_handle(record) for record in run_artifact_records]
+    existing_artifacts = [
+        deepcopy(item)
+        for item in manifest.get("artifact_records", [])
+        if isinstance(item, dict) and str(item.get("run_id") or "") != run_record["run_id"]
     ]
-
-    step_artifacts: dict[str, dict[str, Any]] = defaultdict(lambda: {"output_files": [], "record_count": 0, "cache_hit": True})
-    for node_run in context.node_runs:
-        definition = registry.definitions_by_type.get(str(node_run["node_type"]) or "") or {}
-        step = _artifact_step_for_node(definition)
-        bucket = step_artifacts[step]
-        if node_run.get("cache_path"):
-            cache_path = Path(str(node_run["cache_path"]))
-            try:
-                bucket["output_files"].append(str(cache_path.relative_to(project_dir).as_posix()))
-            except Exception:
-                pass
-        bucket["record_count"] += len(node_run.get("output_ports") or [])
-        bucket["cache_hit"] = bool(bucket["cache_hit"] and node_run.get("cache_hit"))
-
-    step_artifacts["export"]["output_files"].extend([*snapshot_files, *report_files])
-    step_artifacts["export"]["record_count"] += len(report_files)
-    step_artifacts["export"]["cache_hit"] = False
-    run_record["artifacts"] = [
-        {
-            "step": step,
-            "output_files": artifact["output_files"],
-            "record_count": artifact["record_count"],
-            "cache_hit": artifact["cache_hit"],
-        }
-        for step, artifact in step_artifacts.items()
-        if artifact["output_files"] or artifact["record_count"]
-    ]
+    manifest["artifact_records"] = [*existing_artifacts, *run_artifact_records]
 
     manifest["results"] = context.result_bundle
     manifest["updated_at"] = utc_now_iso()
     manifest.setdefault("run_history", []).append(run_record)
     context.current_node_id = None
-    context.emit_runtime_progress(1.0, "本次原生 DAG 运行已完成", stage="completed", detail="本次原生 DAG 运行已完成", force=True)
+    context.emit_runtime_progress(
+        1.0,
+        "本次原生 DAG 运行已完成",
+        stage="completed",
+        detail="本次原生 DAG 运行已完成",
+        force=True,
+        full_node_state_sync=True,
+    )
     notify_progress(progress_callback, 1.0, "本次原生 DAG 运行已完成")
     return manifest, full_corpus, run_record

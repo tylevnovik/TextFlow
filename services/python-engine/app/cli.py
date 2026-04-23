@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
+from .artifact_store import load_artifact_payload, load_artifact_preview
 from .defaults import deep_copy_manifest
 from .ingestion import ensure_sample_files, import_files, parse_optional_year
 from .ingestion_specs import list_ingestion_specs, save_ingestion_spec
@@ -717,6 +718,40 @@ def action_delete_corpus_view(payload: dict[str, Any], progress_callback: Progre
     return removed
 
 
+def action_load_artifact_preview(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在读取产物预览")
+    ensure_bootstrap_project()
+    project_dir, manifest, _corpus = load_project_or_fail(payload["project_id"])
+    preview = load_artifact_preview(project_dir, str(payload["artifact_id"]), limit=int(payload.get("limit", 50) or 50))
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "产物预览已加载")
+    return preview
+
+
+def action_load_artifact_payload(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> Any:
+    notify(progress_callback, 0.1, "正在读取产物内容")
+    ensure_bootstrap_project()
+    project_dir, manifest, _corpus = load_project_or_fail(payload["project_id"])
+    artifact_payload = load_artifact_payload(project_dir, str(payload["artifact_id"]))
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "产物内容已加载")
+    return artifact_payload
+
+
+def action_list_run_artifacts(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> list[dict[str, Any]]:
+    notify(progress_callback, 0.1, "正在整理运行产物")
+    ensure_bootstrap_project()
+    _project_dir, manifest, _corpus = load_project_or_fail(payload["project_id"])
+    run_id = str(payload.get("run_id") or "")
+    records = [
+        deepcopy(item)
+        for item in manifest.get("artifact_records", [])
+        if isinstance(item, dict) and (not run_id or str(item.get("run_id") or "") == run_id)
+    ]
+    notify(progress_callback, 1.0, "运行产物已加载")
+    return records
+
+
 ACTION_HANDLERS: dict[str, Callable[..., Any]] = {
     "load-workspace": action_load_workspace,
     "create-project": action_create_project,
@@ -744,6 +779,9 @@ ACTION_HANDLERS: dict[str, Callable[..., Any]] = {
     "create-corpus-view": action_create_corpus_view,
     "update-corpus-view": action_update_corpus_view,
     "delete-corpus-view": action_delete_corpus_view,
+    "load-artifact-preview": action_load_artifact_preview,
+    "load-artifact-payload": action_load_artifact_payload,
+    "list-run-artifacts": action_list_run_artifacts,
 }
 
 

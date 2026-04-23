@@ -18,10 +18,16 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 from matplotlib.font_manager import FontProperties  # noqa: E402
 
+from .runtime_support import build_run_params_snapshot
+
 DEFAULT_CHART_DPI = 320
+CLUSTER_POINT_LABEL_LIMIT = 180
 CHART_BACKGROUND = "#f7f1e6"
 CHART_CARD = "#fffaf3"
 WATERMARK_DEFAULT_TEXT = "TextFlow Studio"
+FULL_CORPUS_SNAPSHOT_DOC_LIMIT = 80
+FULL_CORPUS_SNAPSHOT_CHAR_LIMIT = 120_000
+CORPUS_PREVIEW_TEXT_LIMIT = 240
 FONT_FAMILY_CANDIDATES = [
     "Microsoft YaHei",
     "SimHei",
@@ -139,8 +145,8 @@ REPORT_RESULT_TITLES = {
 }
 
 
-def chart_config(manifest: dict[str, Any]) -> dict[str, Any]:
-    export_params = manifest["pipeline"].get("export", {})
+def chart_config(export_params: dict[str, Any] | None) -> dict[str, Any]:
+    export_params = export_params if isinstance(export_params, dict) else {}
     dpi = int(export_params.get("chart_dpi", DEFAULT_CHART_DPI) or DEFAULT_CHART_DPI)
     dpi = max(160, min(dpi, 600))
     watermark_text = str(export_params.get("watermark_text") or WATERMARK_DEFAULT_TEXT).strip() or WATERMARK_DEFAULT_TEXT
@@ -799,9 +805,25 @@ def save_cluster_chart(cluster_rows: list[dict[str, Any]], output_path: Path, co
     fig, ax = plt.subplots(figsize=(8, 8), facecolor=CHART_BACKGROUND)
     ax.set_facecolor(CHART_CARD)
     ax.scatter(df["x"], df["y"], c=df["cluster_id"], cmap="Set2", s=88, alpha=0.85)
-    for _, row in df.iterrows():
-        ax.text(row["x"], row["y"], row["doc_id"], fontsize=8)
-    ax.set_title("文档聚类分布")
+    if len(df) <= CLUSTER_POINT_LABEL_LIMIT:
+        for row in df.itertuples(index=False):
+            ax.text(row.x, row.y, row.doc_id, fontsize=8)
+        ax.set_title("文档聚类分布")
+    else:
+        cluster_centers = df.groupby("cluster_id", as_index=False)[["x", "y"]].mean()
+        cluster_sizes = df.groupby("cluster_id").size().to_dict()
+        for row in cluster_centers.itertuples(index=False):
+            ax.text(
+                row.x,
+                row.y,
+                f"簇 {int(row.cluster_id)} ({cluster_sizes.get(int(row.cluster_id), 0)})",
+                fontsize=9,
+                fontweight="bold",
+                ha="center",
+                va="center",
+                bbox={"boxstyle": "round,pad=0.24", "facecolor": "#fffaf3", "edgecolor": "#d6a84f", "alpha": 0.9},
+            )
+        ax.set_title("文档聚类分布（大语料已省略点标签）")
     finalize_plot(fig, output_path, config)
 
 
@@ -811,16 +833,63 @@ def write_json_snapshot(path: Path, payload: Any) -> None:
         json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
 
 
+def _truncate_snapshot_text(value: Any, limit: int = CORPUS_PREVIEW_TEXT_LIMIT) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(0, limit - 1)].rstrip()}…"
+
+
+def build_corpus_snapshot(corpus: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    total_raw_chars = sum(len(str(item.get("raw_text") or "")) for item in corpus if isinstance(item, dict))
+    include_full_text = len(corpus) <= FULL_CORPUS_SNAPSHOT_DOC_LIMIT and total_raw_chars <= FULL_CORPUS_SNAPSHOT_CHAR_LIMIT
+    rows: list[dict[str, Any]] = []
+    for item in corpus:
+        if not isinstance(item, dict):
+            continue
+        snapshot_row = {
+            "doc_id": item.get("doc_id") or item.get("id"),
+            "title": item.get("title"),
+            "year": item.get("year"),
+            "source": item.get("source"),
+            "institution": item.get("institution"),
+            "country_or_region": item.get("country_or_region"),
+            "category_or_tag": item.get("category_or_tag"),
+            "status": item.get("status"),
+            "raw_hash": item.get("raw_hash"),
+            "token_count": len(item.get("tokens") or []),
+            "filtered_token_count": len(item.get("filtered_tokens") or []),
+            "phrase_hit_count": len(item.get("phrase_hits") or []),
+            "extra_metadata": item.get("extra_metadata") or {},
+        }
+        if include_full_text:
+            snapshot_row["raw_text"] = item.get("raw_text") or ""
+        else:
+            snapshot_row["raw_text_preview"] = _truncate_snapshot_text(item.get("raw_text"))
+        rows.append(snapshot_row)
+    return rows
+
+
 def emit_export_progress(progress_callback: Callable[[float, str], None] | None, fraction: float, message: str) -> None:
     if progress_callback is None:
         return
     progress_callback(min(max(fraction, 0.0), 1.0), message)
 
 
+def result_bundle_table_entries(result_bundle: dict[str, Any]) -> list[tuple[str, list[Any]]]:
+    return [
+        (key, rows)
+        for key, rows in result_bundle.items()
+        if key != "report_files" and isinstance(rows, list) and rows
+    ]
+
+
 def write_run_outputs(
     project_dir: Path,
     run_id: str,
-    manifest: dict[str, Any],
+    project_manifest: dict[str, Any],
+    workflow_definition: dict[str, Any],
+    runtime_profile: dict[str, Any],
     corpus: list[dict[str, Any]],
     result_bundle: dict[str, Any],
     run_record: dict[str, Any],
@@ -849,11 +918,11 @@ def write_run_outputs(
     outputs_dir.mkdir(parents=True, exist_ok=True)
     charts_dir.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)
-    export_params = manifest["pipeline"].get("export", {})
-    enabled_steps = manifest["pipeline"].get("enabled_steps")
+    export_params = runtime_profile.get("export", {}) if isinstance(runtime_profile, dict) else {}
+    enabled_steps = runtime_profile.get("enabled_steps") if isinstance(runtime_profile, dict) else None
     export_step_enabled = True if enabled_steps is None else "export" in set(enabled_steps)
     include_audit = export_params.get("include_audit", True)
-    config = chart_config(manifest)
+    config = chart_config(export_params)
     exported_files: list[str] = []
 
     exportable_tables = {
@@ -886,7 +955,7 @@ def write_run_outputs(
         }
 
     emit_export_progress(progress_callback, 0.05, "正在写出参数快照")
-    write_json_snapshot(run_root / "params_snapshot.json", manifest["pipeline"])
+    write_json_snapshot(run_root / "params_snapshot.json", build_run_params_snapshot(workflow_definition, runtime_profile))
     emit_export_progress(progress_callback, 0.12, "正在写出日志快照")
     write_json_snapshot(run_root / "logs.json", run_record["logs"])
     (run_root / "logs.txt").write_text(
@@ -897,7 +966,7 @@ def write_run_outputs(
         encoding="utf-8",
     )
     emit_export_progress(progress_callback, 0.22, "正在写出语料快照")
-    write_json_snapshot(run_root / "corpus_snapshot.json", corpus)
+    write_json_snapshot(run_root / "corpus_snapshot.json", build_corpus_snapshot(corpus))
 
     if export_step_enabled and export_params.get("export_csv", True):
         emit_export_progress(progress_callback, 0.35, "正在导出 CSV")
@@ -941,7 +1010,7 @@ def write_run_outputs(
         html_report = report_dir / "report.html"
         html_report.write_text(
             build_html_report(
-                manifest,
+                project_manifest,
                 corpus,
                 {
                     **report_result_bundle,
