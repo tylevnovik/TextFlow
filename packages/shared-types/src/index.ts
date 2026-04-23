@@ -6,7 +6,7 @@ export type SourceProfile =
   | "incopat"
   | "business_reserved";
 
-export type PipelineStepId =
+export type WorkflowStepId =
   | "ingestion"
   | "cleaning"
   | "normalization"
@@ -30,7 +30,7 @@ export type RunStatus = "idle" | "running" | "completed" | "failed" | "cancelled
 
 export type ExportFormat = "csv" | "xlsx" | "png" | "html";
 export type WorkflowGraphMode = "dag";
-export type WorkflowSource = "system_default" | "migrated_from_pipeline" | "manual" | "template";
+export type WorkflowSource = "system_default" | "manual" | "template";
 export type BuiltinWorkflowNodeType =
   | "corpus_input"
   | "dictionary_input"
@@ -106,7 +106,6 @@ export interface ProjectPaths {
   root: string;
   corpus_dir: string;
   dictionaries_dir: string;
-  pipelines_dir: string;
   runs_dir: string;
   cache_dir: string;
   exports_dir: string;
@@ -145,6 +144,55 @@ export interface ImportTemplate {
   description?: string;
   field_mappings: FieldMappingRule[];
   text_build: TextBuildConfig;
+}
+
+export interface CorpusResource {
+  id: string;
+  name: string;
+  source_files: string[];
+  fingerprint: string;
+}
+
+export interface CorpusView {
+  id: string;
+  name: string;
+  resource_ids: string[];
+  filter_spec: Record<string, unknown>;
+  doc_ids?: string[];
+}
+
+export interface IngestionSpec {
+  id: string;
+  name: string;
+  source_profile: string;
+  field_mappings: unknown[];
+  text_build: Record<string, unknown>;
+  dedupe_rules: Record<string, unknown>;
+}
+
+export interface ArtifactRecord {
+  artifact_id: string;
+  run_id: string;
+  node_id: string;
+  kind: string;
+  path: string;
+  preview_path?: string;
+  row_count?: number;
+}
+
+export interface ReviewTask {
+  review_id: string;
+  project_id: string;
+  review_type: string;
+  status: "open" | "resolved";
+  target_ref: Record<string, string>;
+}
+
+export interface ExperimentSpec {
+  experiment_id: string;
+  name: string;
+  workflow_id: string;
+  variant_matrix: Record<string, unknown>[];
 }
 
 export interface SourceFileRecord {
@@ -320,14 +368,14 @@ export interface RunScopeDefinition {
   selected_doc_ids: string[];
 }
 
-export type PipelineRecipeId = "standard_analysis" | "keyword_topic" | "trend_scan" | "custom";
+export type WorkflowRecipeId = "standard_analysis" | "keyword_topic" | "trend_scan" | "custom";
 
 export type OutputBundleId = "full_report" | "tables_only" | "charts_and_report" | "audit_archive" | "custom";
 
-export interface PipelineDefinition {
+export interface WorkflowRuntimeProfile {
   id: string;
   name: string;
-  enabled_steps: PipelineStepId[];
+  enabled_steps: WorkflowStepId[];
   cleaning: CleaningParameters;
   normalization: NormalizationParameters;
   tokenization: TokenizationParameters;
@@ -338,9 +386,9 @@ export interface PipelineDefinition {
   nodes: Array<Record<string, unknown>>;
   edges: Array<Record<string, unknown>>;
   node_configs: Record<string, unknown>;
-  execution_order: PipelineStepId[];
+  execution_order: WorkflowStepId[];
   run_scope: RunScopeDefinition;
-  recipe_id: PipelineRecipeId;
+  recipe_id: WorkflowRecipeId;
   output_bundle_id: OutputBundleId;
 }
 
@@ -358,7 +406,7 @@ export interface WorkflowNodeUiState {
 }
 
 export interface WorkflowNodeRuntimeMeta {
-  step_id?: PipelineStepId | "scope" | "resource" | "merge" | "sink" | "utility";
+  step_id?: WorkflowStepId | "scope" | "resource" | "merge" | "sink" | "utility";
   node_impl_version: string;
 }
 
@@ -397,7 +445,7 @@ export interface WorkflowDefinition {
   graph_mode: WorkflowGraphMode;
   source: WorkflowSource;
   meta: {
-    template_id: PipelineRecipeId;
+    template_id: WorkflowRecipeId;
     output_bundle_id: OutputBundleId;
   };
   nodes: WorkflowNodeInstance[];
@@ -440,7 +488,7 @@ export interface RegisteredWorkflowNodeDefinition {
   outputs: WorkflowPort[];
   params: WorkflowNodeParamDefinition[];
   runtime: {
-    step_id: PipelineStepId | "scope" | "resource" | "merge" | "sink" | "utility";
+    step_id: WorkflowStepId | "scope" | "resource" | "merge" | "sink" | "utility";
     executor: string;
     cacheable: boolean;
     previewable: boolean;
@@ -451,12 +499,12 @@ export interface RegisteredWorkflowNodeDefinition {
 export interface RunLogEntry {
   timestamp: string;
   level: "info" | "warning" | "error" | "fatal";
-  step: PipelineStepId | "system";
+  step: WorkflowStepId | "system";
   message: string;
 }
 
 export interface StepArtifactSummary {
-  step: PipelineStepId;
+  step: WorkflowStepId;
   output_files: string[];
   record_count: number;
   cache_hit: boolean;
@@ -525,12 +573,14 @@ export interface WorkflowRunProgressDetail {
   elapsed_ms?: number;
   detail?: string;
   node_states: Record<string, WorkflowNodeRuntimeState>;
+  node_state_delta?: Record<string, WorkflowNodeRuntimeState>;
+  full_node_state_sync?: boolean;
 }
 
 export interface RunRecord {
   run_id: string;
   project_id: string;
-  pipeline_version: string;
+  workflow_version: string;
   workflow_id: string;
   workflow_name: string;
   workflow_hash: string;
@@ -546,7 +596,7 @@ export interface RunRecord {
   params_snapshot_path: string;
   processed_document_count: number;
   run_scope_summary: string;
-  recipe_id: PipelineRecipeId;
+  recipe_id: WorkflowRecipeId;
   output_bundle_id: OutputBundleId;
   output_summary: string;
 }
@@ -668,7 +718,6 @@ export interface ProjectTemplate {
   name: string;
   description: string;
   source_profile: SourceProfile;
-  pipeline: PipelineDefinition;
   workflow_definitions: WorkflowDefinition[];
   active_workflow_id: string;
   dictionary_set: DictionarySet;
@@ -684,11 +733,17 @@ export interface ProjectManifest {
   updated_at: string;
   version: string;
   source_files: SourceFileRecord[];
+  corpus_resources: CorpusResource[];
+  corpus_views: CorpusView[];
+  ingestion_specs: IngestionSpec[];
+  artifact_records: ArtifactRecord[];
+  review_tasks: ReviewTask[];
+  experiment_specs: ExperimentSpec[];
+  shared_resource_refs: RelativePathRef[];
   settings: ProjectSettings;
   paths: ProjectPaths;
   import_template: ImportTemplate;
   dictionary_set: DictionarySet;
-  pipeline: PipelineDefinition;
   workflow_definitions: WorkflowDefinition[];
   active_workflow_id: string;
   run_history: RunRecord[];
@@ -824,7 +879,7 @@ export const pageIds = [
   "home",
   "project",
   "data",
-  "pipeline",
+  "workflow",
   "dictionaries",
   "analysis",
   "results",

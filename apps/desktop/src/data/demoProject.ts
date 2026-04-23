@@ -338,7 +338,7 @@ dictionarySet.sheets = buildDictionarySheetsFromCollections(dictionarySet.collec
 const runRecord: RunRecord = {
   run_id: "run-20260416-1810",
   project_id: "project-demo",
-  pipeline_version: "1.0.0",
+  workflow_version: "1.0.0",
   workflow_id: "wf-default",
   workflow_name: "关键词与主题工作流",
   workflow_hash: "sha256:demo-wf-default",
@@ -565,6 +565,13 @@ const manifest: ProjectManifest = {
     { id: "source-1", name: "literature_sample.xlsx", source_type: "xlsx", relative_path: "corpus/imported/literature_sample.xlsx", imported_at: now, row_count: 2 },
     { id: "source-2", name: "patent_sample.json", source_type: "json", relative_path: "corpus/imported/patent_sample.json", imported_at: now, row_count: 1 }
   ],
+  corpus_resources: [],
+  corpus_views: [],
+  ingestion_specs: [],
+  artifact_records: [],
+  review_tasks: [],
+  experiment_specs: [],
+  shared_resource_refs: [],
   settings: {
     default_language: "mixed",
     preferred_theme: "paper",
@@ -576,7 +583,6 @@ const manifest: ProjectManifest = {
     root: "samples/projects/demo.tfproj",
     corpus_dir: "corpus",
     dictionaries_dir: "dictionaries",
-    pipelines_dir: "pipelines",
     runs_dir: "runs",
     cache_dir: "cache",
     exports_dir: "exports"
@@ -602,103 +608,6 @@ const manifest: ProjectManifest = {
   dictionary_set: dictionarySet,
   workflow_definitions: workflowDefinitions,
   active_workflow_id: "wf-default",
-  pipeline: {
-    id: "pipeline-default",
-    name: "默认 V1 流程",
-    enabled_steps: ["ingestion", "cleaning", "normalization", "tokenization", "dictionary_application", "filtering", "analysis", "export"],
-    cleaning: {
-      strip_html: true,
-      strip_urls: true,
-      strip_email: false,
-      strip_phone: false,
-      normalize_whitespace: true,
-      normalize_punctuation: true,
-      full_half_width_normalize: true,
-      lowercase_english: true,
-      remove_emoji: false,
-      remove_special_chars: false
-    },
-    normalization: {
-      convert_traditional_to_simplified: false,
-      normalize_numbers: false,
-      normalize_time_expr: false,
-      apply_regex_rules: true,
-      regex_rule_priority: "rule_order"
-    },
-    tokenization: {
-      language_mode: "mixed",
-      tokenizer_backend: "default",
-      use_custom_lexicon: true,
-      use_phrase_lexicon: true,
-      preserve_domain_phrases: true,
-      split_hyphenated_terms: true,
-      split_slash_terms: false,
-      normalize_camel_case: true,
-      keep_original_order: true,
-      min_token_length_before_filter: 1
-    },
-    dictionary: {
-      apply_standard_terms: true,
-      apply_synonym_map: true,
-      apply_near_synonym_map: true,
-      apply_stopwords: true,
-      apply_exclusion_terms: true,
-      conflict_resolution: "priority"
-    },
-    filtering: {
-      min_token_length: 2,
-      filter_numeric_tokens: false,
-      min_term_frequency: 1,
-      filter_by_pos: false,
-      keep_single_char_important_terms: true
-    },
-    analysis: {
-      include_frequency_statistics: true,
-      include_term_document_relations: true,
-      include_term_year_relations: true,
-      include_cooccurrence_analysis: true,
-      include_feature_term_selection: true,
-      include_keyword_extraction: true,
-      include_keyword_clustering: true,
-      include_institution_keyword_analysis: true,
-      include_institution_topic_analysis: true,
-      include_document_clustering: true,
-      top_n: 200,
-      cooccurrence_window: 5,
-      min_cooccurrence: 2,
-      feature_term_count: 1000,
-      top_k_per_doc: 10,
-      top_k_project: 100,
-      topic_model_k: 3,
-      keyword_cluster_k: 3,
-      document_cluster_k: 3
-    },
-    export: {
-      export_csv: true,
-      export_xlsx: true,
-      export_png: true,
-      export_html_report: true,
-      include_audit: true,
-      chart_dpi: 320,
-      watermark_enabled: false,
-      watermark_text: "TextFlow Studio"
-    },
-    nodes: [],
-    edges: [],
-    node_configs: {},
-    execution_order: ["ingestion", "cleaning", "normalization", "tokenization", "dictionary_application", "filtering", "analysis", "export"],
-    run_scope: {
-      mode: "filtered_subset",
-      source_values: ["Journal of Digital Humanities", "IncoPat"],
-      institution_values: [],
-      category_values: [],
-      year_from: 2024,
-      year_to: 2025,
-      selected_doc_ids: []
-    },
-    recipe_id: "keyword_topic",
-    output_bundle_id: "full_report"
-  },
   run_history: [runRecord],
   results: {
     frequency_table: frequencyRows,

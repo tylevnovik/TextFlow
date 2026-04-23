@@ -320,9 +320,9 @@ def default_import_template(source_profile: str = "generic") -> dict[str, Any]:
     return {"id": f"template-{source_profile}", "source_profile": source_profile, **template}
 
 
-def default_pipeline() -> dict[str, Any]:
+def default_runtime_profile() -> dict[str, Any]:
     return {
-        "id": "pipeline-default",
+        "id": "runtime-profile-default",
         "name": "默认 V1 流程",
         "enabled_steps": [
             "ingestion",
@@ -439,23 +439,86 @@ def default_pipeline() -> dict[str, Any]:
 
 
 def workflow_payload_hash(workflow_definition: dict[str, Any] | None) -> str:
-    payload = deepcopy(workflow_definition) if isinstance(workflow_definition, dict) else {}
-    if isinstance(payload, dict):
-        payload.pop("created_at", None)
-        payload.pop("updated_at", None)
+    payload = workflow_execution_payload(workflow_definition)
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
+def workflow_execution_payload(workflow_definition: dict[str, Any] | None) -> dict[str, Any]:
+    workflow = workflow_definition if isinstance(workflow_definition, dict) else {}
+    return {
+        "workflow_id": str(workflow.get("workflow_id") or ""),
+        "version": str(workflow.get("version") or ""),
+        "graph_mode": str(workflow.get("graph_mode") or ""),
+        "source": str(workflow.get("source") or ""),
+        "meta": deepcopy(workflow.get("meta") if isinstance(workflow.get("meta"), dict) else {}),
+        "nodes": [
+            workflow_node_execution_payload(node)
+            for node in workflow.get("nodes", [])
+            if isinstance(node, dict)
+        ],
+        "edges": [
+            workflow_edge_execution_payload(edge)
+            for edge in workflow.get("edges", [])
+            if isinstance(edge, dict)
+        ],
+    }
+
+
+def workflow_node_execution_payload(node: dict[str, Any] | None) -> dict[str, Any]:
+    payload = node if isinstance(node, dict) else {}
+    ui_state = payload.get("ui_state") if isinstance(payload.get("ui_state"), dict) else {}
+    return {
+        "node_id": str(payload.get("node_id") or ""),
+        "node_type": str(payload.get("node_type") or ""),
+        "config": deepcopy(payload.get("config") if isinstance(payload.get("config"), dict) else {}),
+        "ui_state": {
+            "bypassed": bool(ui_state.get("bypassed")),
+        },
+        "runtime_meta": deepcopy(payload.get("runtime_meta") if isinstance(payload.get("runtime_meta"), dict) else {}),
+        "inputs": [
+            workflow_port_execution_payload(port)
+            for port in payload.get("inputs", [])
+            if isinstance(port, dict)
+        ],
+        "outputs": [
+            workflow_port_execution_payload(port)
+            for port in payload.get("outputs", [])
+            if isinstance(port, dict)
+        ],
+    }
+
+
+def workflow_port_execution_payload(port: dict[str, Any] | None) -> dict[str, Any]:
+    payload = port if isinstance(port, dict) else {}
+    normalized = {
+        "port_id": str(payload.get("port_id") or ""),
+        "port_type": str(payload.get("port_type") or ""),
+    }
+    if payload.get("allow_multiple"):
+        normalized["allow_multiple"] = True
+    return normalized
+
+
+def workflow_edge_execution_payload(edge: dict[str, Any] | None) -> dict[str, Any]:
+    payload = edge if isinstance(edge, dict) else {}
+    return {
+        "from_node": str(payload.get("from_node") or ""),
+        "from_port": str(payload.get("from_port") or ""),
+        "to_node": str(payload.get("to_node") or ""),
+        "to_port": str(payload.get("to_port") or ""),
+    }
+
+
 def default_workflow_definition(
-    pipeline: dict[str, Any] | None = None,
+    runtime_profile: dict[str, Any] | None = None,
     *,
     workflow_id: str = "wf-default",
     name: str = "默认工作流",
     source: str = "system_default",
 ) -> dict[str, Any]:
-    pipeline_definition = deepcopy(pipeline if isinstance(pipeline, dict) else default_pipeline())
-    enabled_steps = set(pipeline_definition.get("enabled_steps") or [])
+    runtime_profile_definition = deepcopy(runtime_profile if isinstance(runtime_profile, dict) else default_runtime_profile())
+    enabled_steps = set(runtime_profile_definition.get("enabled_steps") or [])
     timestamp = utc_now_iso()
     node_positions = {
         "dictionary_input": {"x": 120, "y": 80},
@@ -542,8 +605,8 @@ def default_workflow_definition(
             "to_port": to_port,
         }
 
-    export_definition = deepcopy(pipeline_definition.get("export") or {})
-    run_scope_definition = deepcopy(pipeline_definition.get("run_scope") or {})
+    export_definition = deepcopy(runtime_profile_definition.get("export") or {})
+    run_scope_definition = deepcopy(runtime_profile_definition.get("run_scope") or {})
 
     filtered_sequence: list[str] = ["corpus_input"]
     if "cleaning" in enabled_steps:
@@ -604,7 +667,7 @@ def default_workflow_definition(
                 "基础清洗",
                 [workflow_port("corpus_in", "CorpusTable", "语料输入")],
                 [workflow_port("clean_corpus", "CleanCorpus", "清洗后语料")],
-                deepcopy(pipeline_definition.get("cleaning") or {}),
+                deepcopy(runtime_profile_definition.get("cleaning") or {}),
                 "cleaning",
             )
         )
@@ -616,7 +679,7 @@ def default_workflow_definition(
                 "统一写法",
                 [workflow_port("corpus_in", "CleanCorpus", "清洗后语料")],
                 [workflow_port("normalized_corpus", "NormalizedCorpus", "标准化语料")],
-                deepcopy(pipeline_definition.get("normalization") or {}),
+                deepcopy(runtime_profile_definition.get("normalization") or {}),
                 "normalization",
             )
         )
@@ -627,7 +690,7 @@ def default_workflow_definition(
             "切词",
             [workflow_port("corpus_in", "NormalizedCorpus", "标准化语料")],
             [workflow_port("token_corpus", "TokenCorpus", "Token 语料")],
-            deepcopy(pipeline_definition.get("tokenization") or {}),
+            deepcopy(runtime_profile_definition.get("tokenization") or {}),
             "tokenization",
         )
     )
@@ -645,7 +708,7 @@ def default_workflow_definition(
                     workflow_port("token_corpus", "TokenCorpus", "规则处理后 Token"),
                     workflow_port("audit_table", "AuditTable", "审计表"),
                 ],
-                deepcopy(pipeline_definition.get("dictionary") or {}),
+                deepcopy(runtime_profile_definition.get("dictionary") or {}),
                 "dictionary_application",
             )
         )
@@ -657,7 +720,7 @@ def default_workflow_definition(
                 "过滤词项",
                 [workflow_port("token_corpus_in", "TokenCorpus", "Token 输入")],
                 [workflow_port("filtered_token_corpus", "FilteredTokenCorpus", "分析词项")],
-                deepcopy(pipeline_definition.get("filtering") or {}),
+                deepcopy(runtime_profile_definition.get("filtering") or {}),
                 "filtering",
             )
         )
@@ -670,7 +733,7 @@ def default_workflow_definition(
                 "词频统计",
                 [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
                 [workflow_port("frequency_table", "FrequencyTable", "词频表")],
-                {"top_n": int((pipeline_definition.get("analysis") or {}).get("top_n", 200))},
+                {"top_n": int((runtime_profile_definition.get("analysis") or {}).get("top_n", 200))},
                 "analysis",
             ),
             workflow_node(
@@ -698,8 +761,8 @@ def default_workflow_definition(
                 [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
                 [workflow_port("cooccurrence_table", "CooccurrenceTable", "共现表")],
                 {
-                    "cooccurrence_window": int((pipeline_definition.get("analysis") or {}).get("cooccurrence_window", 5)),
-                    "min_cooccurrence": int((pipeline_definition.get("analysis") or {}).get("min_cooccurrence", 2)),
+                    "cooccurrence_window": int((runtime_profile_definition.get("analysis") or {}).get("cooccurrence_window", 5)),
+                    "min_cooccurrence": int((runtime_profile_definition.get("analysis") or {}).get("min_cooccurrence", 2)),
                 },
                 "analysis",
             ),
@@ -710,7 +773,7 @@ def default_workflow_definition(
                 [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
                 [workflow_port("feature_term_table", "FeatureTermTable", "特征词表")],
                 {
-                    "feature_term_count": (pipeline_definition.get("analysis") or {}).get("feature_term_count", 1000),
+                    "feature_term_count": (runtime_profile_definition.get("analysis") or {}).get("feature_term_count", 1000),
                 },
                 "analysis",
             ),
@@ -721,8 +784,8 @@ def default_workflow_definition(
                 [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
                 [workflow_port("keyword_table", "KeywordTable", "关键词表")],
                 {
-                    "top_k_per_doc": int((pipeline_definition.get("analysis") or {}).get("top_k_per_doc", 10)),
-                    "top_k_project": int((pipeline_definition.get("analysis") or {}).get("top_k_project", 100)),
+                    "top_k_per_doc": int((runtime_profile_definition.get("analysis") or {}).get("top_k_per_doc", 10)),
+                    "top_k_project": int((runtime_profile_definition.get("analysis") or {}).get("top_k_project", 100)),
                 },
                 "analysis",
             ),
@@ -733,8 +796,8 @@ def default_workflow_definition(
                 [workflow_port("feature_term_table_in", "FeatureTermTable", "特征词输入")],
                 [workflow_port("keyword_cluster_table", "KeywordClusterTable", "关键词聚类表")],
                 {
-                    "keyword_cluster_k": int((pipeline_definition.get("analysis") or {}).get("keyword_cluster_k", 4)),
-                    "topic_model_k": int((pipeline_definition.get("analysis") or {}).get("topic_model_k", 4)),
+                    "keyword_cluster_k": int((runtime_profile_definition.get("analysis") or {}).get("keyword_cluster_k", 4)),
+                    "topic_model_k": int((runtime_profile_definition.get("analysis") or {}).get("topic_model_k", 4)),
                 },
                 "analysis",
             ),
@@ -754,7 +817,7 @@ def default_workflow_definition(
                 [workflow_port("keyword_cluster_table_in", "KeywordClusterTable", "主题输入")],
                 [workflow_port("institution_topic_table", "InstitutionTopicTable", "机构主题表")],
                 {
-                    "topic_model_k": int((pipeline_definition.get("analysis") or {}).get("topic_model_k", 4)),
+                    "topic_model_k": int((runtime_profile_definition.get("analysis") or {}).get("topic_model_k", 4)),
                 },
                 "analysis",
             ),
@@ -765,7 +828,7 @@ def default_workflow_definition(
                 [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
                 [workflow_port("document_cluster_table", "DocumentClusterTable", "文档聚类表")],
                 {
-                    "document_cluster_k": int((pipeline_definition.get("analysis") or {}).get("document_cluster_k", 4)),
+                    "document_cluster_k": int((runtime_profile_definition.get("analysis") or {}).get("document_cluster_k", 4)),
                 },
                 "analysis",
             ),
@@ -1034,8 +1097,8 @@ def default_workflow_definition(
         "graph_mode": "dag",
         "source": source,
         "meta": {
-            "template_id": str(pipeline_definition.get("recipe_id") or "standard_analysis"),
-            "output_bundle_id": str(pipeline_definition.get("output_bundle_id") or "full_report"),
+            "template_id": str(runtime_profile_definition.get("recipe_id") or "standard_analysis"),
+            "output_bundle_id": str(runtime_profile_definition.get("output_bundle_id") or "full_report"),
         },
         "nodes": starter_nodes,
         "edges": edges,
@@ -1262,13 +1325,13 @@ def workflow_active_node_ids_from_sinks(
     return active_ids
 
 
-def compile_pipeline_from_workflow(
+def compile_runtime_profile_from_workflow(
     workflow_definition: dict[str, Any] | None,
-    pipeline: dict[str, Any] | None = None,
+    runtime_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    from .node_compilers import compile_pipeline_from_workflow as compile_pipeline_with_registry
+    from .node_compilers import compile_runtime_profile_from_workflow as compile_runtime_profile_with_registry
 
-    return compile_pipeline_with_registry(workflow_definition, pipeline)
+    return compile_runtime_profile_with_registry(workflow_definition, runtime_profile)
 
 
 def empty_result_bundle() -> dict[str, Any]:
@@ -1288,10 +1351,15 @@ def empty_result_bundle() -> dict[str, Any]:
     }
 
 
-def default_project_manifest(name: str, description: str, root_relative_path: str) -> dict[str, Any]:
+def default_project_manifest(
+    name: str,
+    description: str,
+    root_relative_path: str,
+    *,
+    include_dictionary_set: bool = True,
+) -> dict[str, Any]:
     timestamp = utc_now_iso()
-    pipeline = default_pipeline()
-    workflow = default_workflow_definition(pipeline)
+    workflow = default_workflow_definition(default_runtime_profile())
     return {
         "id": f"project-{uuid4().hex[:12]}",
         "schema_version": "2.0.0",
@@ -1301,6 +1369,13 @@ def default_project_manifest(name: str, description: str, root_relative_path: st
         "updated_at": timestamp,
         "version": "0.2.0",
         "source_files": [],
+        "corpus_resources": [],
+        "corpus_views": [],
+        "ingestion_specs": [],
+        "artifact_records": [],
+        "review_tasks": [],
+        "experiment_specs": [],
+        "shared_resource_refs": [],
         "settings": {
             "default_language": "mixed",
             "preferred_theme": "paper",
@@ -1312,14 +1387,12 @@ def default_project_manifest(name: str, description: str, root_relative_path: st
             "root": root_relative_path,
             "corpus_dir": "corpus",
             "dictionaries_dir": "dictionaries",
-            "pipelines_dir": "pipelines",
             "runs_dir": "runs",
             "cache_dir": "cache",
             "exports_dir": "exports",
         },
         "import_template": default_import_template(),
-        "dictionary_set": default_dictionary_set(),
-        "pipeline": pipeline,
+        "dictionary_set": default_dictionary_set() if include_dictionary_set else {},
         "workflow_definitions": [workflow],
         "active_workflow_id": workflow["workflow_id"],
         "run_history": [],

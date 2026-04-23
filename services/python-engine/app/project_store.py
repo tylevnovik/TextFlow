@@ -13,11 +13,10 @@ from uuid import uuid4
 
 from .defaults import (
     build_dictionary_sheets_from_collections,
-    compile_pipeline_from_workflow,
     default_dictionary_set,
     default_dictionary_set_seed,
     default_import_template,
-    default_pipeline,
+    default_runtime_profile,
     default_project_manifest,
     default_workflow_definition,
     empty_result_bundle,
@@ -25,6 +24,7 @@ from .defaults import (
     workflow_payload_hash,
 )
 from .node_registry import builtin_node_definitions
+from .runtime_support import workflow_runtime_profile
 
 PROJECT_FILENAME = "project.json"
 CORPUS_FILENAME = "metadata/corpus.json"
@@ -190,7 +190,6 @@ def ensure_project_layout(project_dir: Path) -> None:
     for relative in [
         "corpus/imported",
         "dictionaries",
-        "pipelines",
         "metadata",
         "runs",
         "cache",
@@ -199,9 +198,17 @@ def ensure_project_layout(project_dir: Path) -> None:
         (project_dir / relative).mkdir(parents=True, exist_ok=True)
 
 
-def write_json(path: Path, data: Any) -> None:
+def write_json(path: Path, data: Any) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    serialized = json.dumps(data, ensure_ascii=False, indent=2)
+    if path.exists():
+        try:
+            if path.read_text(encoding="utf-8") == serialized:
+                return False
+        except OSError:
+            pass
+    path.write_text(serialized, encoding="utf-8")
+    return True
 
 
 def read_json(path: Path) -> Any:
@@ -252,7 +259,6 @@ def refresh_manifest_paths(manifest: dict[str, Any], project_dir: Path) -> dict[
             "root": project_relative_root(project_dir),
             "corpus_dir": "corpus",
             "dictionaries_dir": "dictionaries",
-            "pipelines_dir": "pipelines",
             "runs_dir": "runs",
             "cache_dir": "cache",
             "exports_dir": "exports",
@@ -280,6 +286,30 @@ def normalize_import_template_record(import_template: dict[str, Any] | None) -> 
 
 
 def normalize_dictionary_set_record(dictionary_set: dict[str, Any] | None) -> dict[str, Any]:
+    def is_hydrated_dictionary_set(
+        payload: dict[str, Any],
+        baseline_payload: dict[str, Any],
+    ) -> bool:
+        collections = payload.get("collections")
+        sheets = payload.get("sheets")
+        if not isinstance(collections, dict) or not isinstance(sheets, dict):
+            return False
+        for kind, baseline_collection in baseline_payload.get("collections", {}).items():
+            collection = collections.get(kind)
+            sheet = sheets.get(kind)
+            if not isinstance(collection, dict) or not isinstance(sheet, dict):
+                return False
+            baseline_tables = baseline_collection.get("tables", [])
+            tables = collection.get("tables")
+            if not isinstance(tables, list) or len(tables) < len(baseline_tables):
+                return False
+            if not isinstance(sheet.get("entries"), list):
+                return False
+            for table in tables:
+                if not isinstance(table, dict) or not isinstance(table.get("entries"), list):
+                    return False
+        return True
+
     def entry_signature(entry: dict[str, Any], fallback_key: str) -> str:
         source = str(entry.get("source") or "").strip()
         target = str(entry.get("target") or "").strip()
@@ -430,6 +460,12 @@ def normalize_dictionary_set_record(dictionary_set: dict[str, Any] | None) -> di
     baseline = default_dictionary_set_seed()
     if not isinstance(dictionary_set, dict):
         return baseline
+    if is_hydrated_dictionary_set(dictionary_set, baseline):
+        dictionary_set["id"] = str(dictionary_set.get("id") or baseline.get("id") or "dict-default")
+        dictionary_set["name"] = str(dictionary_set.get("name") or baseline.get("name") or "默认词表集")
+        dictionary_set["version"] = str(dictionary_set.get("version") or baseline.get("version") or "2.0.0")
+        dictionary_set["bound_to_project"] = bool(dictionary_set.get("bound_to_project", baseline.get("bound_to_project", True)))
+        return dictionary_set
 
     normalized = deepcopy(baseline)
     for key, value in dictionary_set.items():
@@ -635,58 +671,48 @@ def serialize_dictionary_set_for_storage(dictionary_set: dict[str, Any] | None) 
     return serialized
 
 
-def write_project_payload(project_dir: Path, manifest: dict[str, Any], corpus: list[dict[str, Any]]) -> None:
-    storage_manifest = deepcopy(manifest)
-    storage_manifest["dictionary_set"] = serialize_dictionary_set_for_storage(storage_manifest.get("dictionary_set"))
+def write_project_payload(
+    project_dir: Path,
+    manifest: dict[str, Any],
+    corpus: list[dict[str, Any]],
+    *,
+    dirty_sections: set[str] | None = None,
+) -> None:
+    baseline_manifest = default_project_manifest(
+        str(manifest.get("name") or project_dir.stem),
+        str(manifest.get("description") or ""),
+        project_relative_root(project_dir),
+        include_dictionary_set=False,
+    )
+    storage_manifest = {
+        key: deepcopy(manifest[key]) if key in manifest else deepcopy(value)
+        for key, value in baseline_manifest.items()
+        if key != "dictionary_set"
+    }
+    storage_manifest["dictionary_set"] = serialize_dictionary_set_for_storage(manifest.get("dictionary_set"))
     storage_manifest["document_count"] = len(corpus)
     storage_manifest["run_count"] = len(storage_manifest.get("run_history", []))
-    write_json(project_dir / PROJECT_FILENAME, storage_manifest)
-    write_json(project_dir / CORPUS_FILENAME, corpus)
-    write_json(project_dir / "pipelines/default_pipeline.json", manifest["pipeline"])
-    write_json(project_dir / "metadata/import_template.json", manifest["import_template"])
-    for kind, collection in storage_manifest["dictionary_set"].get("collections", {}).items():
-        write_json(project_dir / f"dictionaries/{kind}.json", collection)
+    normalized_dirty = {str(item) for item in dirty_sections} if dirty_sections is not None else None
 
-
-def normalize_pipeline_record(pipeline: dict[str, Any] | None) -> dict[str, Any]:
-    baseline = default_pipeline()
-    if not isinstance(pipeline, dict):
-        return baseline
-
-    normalized = deepcopy(baseline)
-    for key, value in pipeline.items():
-        if key in normalized and isinstance(normalized[key], dict) and isinstance(value, dict):
-            normalized[key].update(value)
-            continue
-        normalized[key] = value
-
-    if not isinstance(normalized.get("enabled_steps"), list):
-        normalized["enabled_steps"] = baseline["enabled_steps"]
-    if not isinstance(normalized.get("execution_order"), list):
-        normalized["execution_order"] = baseline["execution_order"]
-
-    run_scope = normalized.get("run_scope")
-    if not isinstance(run_scope, dict):
-        normalized["run_scope"] = deepcopy(baseline["run_scope"])
-    else:
-        normalized["run_scope"] = {
-            **deepcopy(baseline["run_scope"]),
-            **run_scope,
-        }
-
-    normalized["recipe_id"] = str(normalized.get("recipe_id") or baseline["recipe_id"])
-    normalized["output_bundle_id"] = str(normalized.get("output_bundle_id") or baseline["output_bundle_id"])
-    return normalized
+    if normalized_dirty is None or "manifest" in normalized_dirty:
+        write_json(project_dir / PROJECT_FILENAME, storage_manifest)
+    if normalized_dirty is None or "corpus" in normalized_dirty:
+        write_json(project_dir / CORPUS_FILENAME, corpus)
+    if normalized_dirty is None or "import_template" in normalized_dirty:
+        write_json(project_dir / "metadata/import_template.json", manifest["import_template"])
+    if normalized_dirty is None or "dictionary_set" in normalized_dirty:
+        for kind, collection in storage_manifest["dictionary_set"].get("collections", {}).items():
+            write_json(project_dir / f"dictionaries/{kind}.json", collection)
 
 
 def normalize_workflow_definition_record(
     workflow_definition: dict[str, Any] | None,
-    pipeline: dict[str, Any],
+    runtime_profile: dict[str, Any],
     *,
     source: str = "manual",
 ) -> dict[str, Any]:
     baseline = default_workflow_definition(
-        pipeline,
+        runtime_profile,
         source=source,
     )
     if not isinstance(workflow_definition, dict):
@@ -730,74 +756,26 @@ def normalize_workflow_definition_record(
     normalized["source"] = str(normalized.get("source") or source)
     normalized["created_at"] = str(normalized.get("created_at") or baseline["created_at"])
     normalized["updated_at"] = str(normalized.get("updated_at") or baseline["updated_at"])
-    normalized["meta"]["template_id"] = str(normalized["meta"].get("template_id") or pipeline.get("recipe_id") or "standard_analysis")
+    normalized["meta"]["template_id"] = str(normalized["meta"].get("template_id") or runtime_profile.get("recipe_id") or "standard_analysis")
     normalized["meta"]["output_bundle_id"] = str(
-        normalized["meta"].get("output_bundle_id") or pipeline.get("output_bundle_id") or "full_report"
+        normalized["meta"].get("output_bundle_id") or runtime_profile.get("output_bundle_id") or "full_report"
     )
     return normalized
-
-
-def sync_workflow_definition_from_pipeline(
-    workflow_definition: dict[str, Any] | None,
-    pipeline: dict[str, Any],
-) -> dict[str, Any]:
-    current = workflow_definition if isinstance(workflow_definition, dict) else {}
-    source = str(current.get("source") or "migrated_from_pipeline")
-    baseline = default_workflow_definition(
-        pipeline,
-        workflow_id=str(current.get("workflow_id") or "wf-default"),
-        name=str(current.get("name") or "默认工作流"),
-        source=source,
-    )
-
-    viewport = current.get("viewport")
-    if isinstance(viewport, dict):
-        baseline["viewport"].update(viewport)
-    if isinstance(current.get("groups"), list):
-        baseline["groups"] = deepcopy(current["groups"])
-    baseline["created_at"] = str(current.get("created_at") or baseline["created_at"])
-    baseline["updated_at"] = str(current.get("updated_at") or baseline["updated_at"])
-    baseline["version"] = str(current.get("version") or baseline["version"])
-
-    existing_nodes_by_id = {}
-    for node in current.get("nodes", []) if isinstance(current.get("nodes"), list) else []:
-        if not isinstance(node, dict):
-            continue
-        node_id = str(node.get("node_id") or "")
-        if node_id:
-            existing_nodes_by_id[node_id] = node
-
-    for node in baseline["nodes"]:
-        existing = existing_nodes_by_id.get(str(node.get("node_id") or ""))
-        if not isinstance(existing, dict):
-            continue
-        if existing.get("label"):
-            node["label"] = str(existing["label"])
-        if isinstance(existing.get("position"), dict):
-            node["position"].update(existing["position"])
-        if isinstance(existing.get("size"), dict):
-            node["size"] = deepcopy(existing["size"])
-        if isinstance(existing.get("ui_state"), dict):
-            node["ui_state"]["collapsed"] = bool(existing["ui_state"].get("collapsed", node["ui_state"]["collapsed"]))
-            if "pinned_preview" in existing["ui_state"]:
-                node["ui_state"]["pinned_preview"] = bool(existing["ui_state"]["pinned_preview"])
-
-    return normalize_workflow_definition_record(baseline, pipeline, source=source)
 
 
 def normalize_workflow_definitions(
     workflow_definitions: list[dict[str, Any]] | None,
-    pipeline: dict[str, Any],
+    runtime_profile: dict[str, Any],
 ) -> list[dict[str, Any]]:
     if not isinstance(workflow_definitions, list) or not workflow_definitions:
-        return [default_workflow_definition(pipeline, source="migrated_from_pipeline")]
+        return [default_workflow_definition(runtime_profile)]
 
     normalized: list[dict[str, Any]] = []
     seen_workflow_ids: set[str] = set()
     for item in workflow_definitions:
         if not isinstance(item, dict):
             continue
-        workflow = normalize_workflow_definition_record(item, pipeline)
+        workflow = normalize_workflow_definition_record(item, runtime_profile)
         workflow_id = workflow["workflow_id"]
         if workflow_id in seen_workflow_ids:
             continue
@@ -805,35 +783,7 @@ def normalize_workflow_definitions(
         normalized.append(workflow)
 
     if not normalized:
-        return [default_workflow_definition(pipeline, source="migrated_from_pipeline")]
-    return normalized
-
-
-def sync_workflow_definitions_from_pipeline(
-    workflow_definitions: list[dict[str, Any]] | None,
-    pipeline: dict[str, Any],
-) -> list[dict[str, Any]]:
-    if not isinstance(workflow_definitions, list) or not workflow_definitions:
-        return [default_workflow_definition(pipeline, source="migrated_from_pipeline")]
-
-    normalized: list[dict[str, Any]] = []
-    seen_workflow_ids: set[str] = set()
-    for item in workflow_definitions:
-        if not isinstance(item, dict):
-            continue
-        source = str(item.get("source") or "migrated_from_pipeline")
-        if source == "manual":
-            workflow = normalize_workflow_definition_record(item, pipeline)
-        else:
-            workflow = sync_workflow_definition_from_pipeline(item, pipeline)
-        workflow_id = workflow["workflow_id"]
-        if workflow_id in seen_workflow_ids:
-            continue
-        seen_workflow_ids.add(workflow_id)
-        normalized.append(workflow)
-
-    if not normalized:
-        return [default_workflow_definition(pipeline, source="migrated_from_pipeline")]
+        return [default_workflow_definition(runtime_profile)]
     return normalized
 
 
@@ -862,6 +812,12 @@ def normalize_results_bundle(results: dict[str, Any] | None) -> dict[str, Any]:
     return normalized
 
 
+def normalize_manifest_record_list(records: Any) -> list[Any]:
+    if not isinstance(records, list):
+        return []
+    return [deepcopy(item) for item in records]
+
+
 def default_run_scope_summary(document_count: int) -> str:
     return f"处理对象：项目内全部资料（共 {document_count} 篇）"
 
@@ -882,11 +838,11 @@ def default_output_summary(export_settings: dict[str, Any] | None) -> str:
 
 def normalize_run_record(
     run_record: dict[str, Any] | None,
-    pipeline: dict[str, Any],
-    corpus: list[dict[str, Any]],
     workflow_definition: dict[str, Any],
+    corpus: list[dict[str, Any]],
 ) -> dict[str, Any]:
     normalized = deepcopy(run_record) if isinstance(run_record, dict) else {}
+    runtime_profile = workflow_runtime_profile(workflow_definition)
     processed_document_count = normalized.get("processed_document_count")
     if not isinstance(processed_document_count, int):
         processed_document_count = len(corpus)
@@ -894,12 +850,17 @@ def normalize_run_record(
     normalized["run_scope_summary"] = str(
         normalized.get("run_scope_summary") or default_run_scope_summary(processed_document_count)
     )
-    normalized["recipe_id"] = str(normalized.get("recipe_id") or pipeline.get("recipe_id") or "standard_analysis")
+    normalized["recipe_id"] = str(normalized.get("recipe_id") or runtime_profile.get("recipe_id") or "standard_analysis")
     normalized["output_bundle_id"] = str(
-        normalized.get("output_bundle_id") or pipeline.get("output_bundle_id") or "full_report"
+        normalized.get("output_bundle_id") or runtime_profile.get("output_bundle_id") or "full_report"
     )
     normalized["output_summary"] = str(
-        normalized.get("output_summary") or default_output_summary(pipeline.get("export"))
+        normalized.get("output_summary") or default_output_summary(runtime_profile.get("export"))
+    )
+    normalized["workflow_version"] = str(
+        normalized.get("workflow_version")
+        or workflow_definition.get("version")
+        or "1.0.0"
     )
     normalized["workflow_id"] = str(
         normalized.get("workflow_id") or workflow_definition.get("workflow_id") or "wf-default"
@@ -910,9 +871,38 @@ def normalize_run_record(
     normalized["workflow_hash"] = str(
         normalized.get("workflow_hash") or workflow_payload_hash(workflow_definition)
     )
+    normalized.setdefault("warnings", [])
+    normalized.setdefault("errors", [])
     normalized.setdefault("logs", [])
     normalized.setdefault("artifacts", [])
-    return normalized
+    allowed_keys = [
+        "run_id",
+        "project_id",
+        "workflow_version",
+        "workflow_id",
+        "workflow_name",
+        "workflow_hash",
+        "dictionary_version",
+        "started_at",
+        "ended_at",
+        "status",
+        "warnings",
+        "errors",
+        "logs",
+        "artifacts",
+        "node_runs",
+        "params_snapshot_path",
+        "processed_document_count",
+        "run_scope_summary",
+        "recipe_id",
+        "output_bundle_id",
+        "output_summary",
+    ]
+    return {
+        key: normalized[key]
+        for key in allowed_keys
+        if key in normalized
+    }
 
 
 def normalize_project_manifest(
@@ -923,59 +913,61 @@ def normalize_project_manifest(
     payload = manifest if isinstance(manifest, dict) else {}
     name = str(payload.get("name") or project_dir.stem)
     description = str(payload.get("description") or "")
-    baseline = default_project_manifest(name, description, project_relative_root(project_dir))
+    baseline = default_project_manifest(
+        name,
+        description,
+        project_relative_root(project_dir),
+        include_dictionary_set=False,
+    )
     normalized = deepcopy(baseline)
-
-    for key, value in payload.items():
-        if key in {
+    passthrough_keys = {
+        key
+        for key in baseline.keys()
+        if key not in {
             "settings",
             "paths",
-            "pipeline",
             "import_template",
             "dictionary_set",
             "workflow_definitions",
             "active_workflow_id",
             "results",
             "run_history",
-        }:
-            continue
-        normalized[key] = value
+        }
+    }
+    for key in passthrough_keys:
+        if key in payload:
+            normalized[key] = payload[key]
 
     normalized["settings"].update(payload.get("settings", {}) if isinstance(payload.get("settings"), dict) else {})
-    normalized["paths"].update(payload.get("paths", {}) if isinstance(payload.get("paths"), dict) else {})
+    path_payload = payload.get("paths") if isinstance(payload.get("paths"), dict) else {}
+    for key in baseline["paths"].keys():
+        if key in path_payload:
+            normalized["paths"][key] = path_payload[key]
     normalized["import_template"] = normalize_import_template_record(payload.get("import_template"))
     normalized["dictionary_set"] = normalize_dictionary_set_record(payload.get("dictionary_set"))
-    pipeline_seed = normalize_pipeline_record(payload.get("pipeline"))
-    workflow_definitions = normalize_workflow_definitions(payload.get("workflow_definitions"), pipeline_seed)
+    workflow_definitions = normalize_workflow_definitions(payload.get("workflow_definitions"), default_runtime_profile())
     active_workflow_id, active_workflow = resolve_active_workflow(
         workflow_definitions,
         str(payload.get("active_workflow_id")) if payload.get("active_workflow_id") else None,
     )
-    active_workflow_source = str(active_workflow.get("source") or "migrated_from_pipeline")
-    if active_workflow_source == "manual":
-        normalized["pipeline"] = normalize_pipeline_record(
-            compile_pipeline_from_workflow(active_workflow, pipeline_seed)
-        )
-        normalized["workflow_definitions"] = normalize_workflow_definitions(
-            workflow_definitions,
-            normalized["pipeline"],
-        )
-    else:
-        normalized["pipeline"] = pipeline_seed
-        normalized["workflow_definitions"] = sync_workflow_definitions_from_pipeline(
-            workflow_definitions,
-            normalized["pipeline"],
-        )
+    normalized["workflow_definitions"] = workflow_definitions
     normalized["active_workflow_id"], active_workflow = resolve_active_workflow(
         normalized["workflow_definitions"],
         active_workflow_id,
     )
     normalized["results"] = normalize_results_bundle(payload.get("results"))
     normalized["run_history"] = [
-        normalize_run_record(run_record, normalized["pipeline"], corpus, active_workflow)
+        normalize_run_record(run_record, active_workflow, corpus)
         for run_record in payload.get("run_history", [])
         if isinstance(run_record, dict)
     ]
+    normalized["corpus_resources"] = normalize_manifest_record_list(payload.get("corpus_resources"))
+    normalized["corpus_views"] = normalize_manifest_record_list(payload.get("corpus_views"))
+    normalized["ingestion_specs"] = normalize_manifest_record_list(payload.get("ingestion_specs"))
+    normalized["artifact_records"] = normalize_manifest_record_list(payload.get("artifact_records"))
+    normalized["review_tasks"] = normalize_manifest_record_list(payload.get("review_tasks"))
+    normalized["experiment_specs"] = normalize_manifest_record_list(payload.get("experiment_specs"))
+    normalized["shared_resource_refs"] = normalize_manifest_record_list(payload.get("shared_resource_refs"))
     refresh_manifest_paths(normalized, project_dir)
     return normalized
 
@@ -1001,7 +993,6 @@ def build_project_template(
         "description": description or manifest.get("description", ""),
         "source_profile": manifest["import_template"].get("source_profile", "generic"),
         "settings": deepcopy(manifest.get("settings", {})),
-        "pipeline": deepcopy(manifest["pipeline"]),
         "workflow_definitions": deepcopy(manifest.get("workflow_definitions", [])),
         "active_workflow_id": manifest.get("active_workflow_id"),
         "dictionary_set": serialize_dictionary_set_for_storage(manifest.get("dictionary_set")),
@@ -1019,7 +1010,6 @@ def create_project_from_template(
     project_dir, manifest = create_project(name, description or template_payload.get("description", ""))
     if template_payload.get("settings"):
         manifest["settings"] = deepcopy(template_payload["settings"])
-    manifest["pipeline"] = deepcopy(template_payload["pipeline"])
     if template_payload.get("workflow_definitions"):
         manifest["workflow_definitions"] = deepcopy(template_payload["workflow_definitions"])
     if template_payload.get("active_workflow_id"):
@@ -1071,11 +1061,22 @@ def load_import_template(template_id: str) -> dict[str, Any]:
     return load_template(import_templates_root(), template_id)
 
 
-def save_project(project_dir: Path, manifest: dict[str, Any], corpus: list[dict[str, Any]]) -> None:
+def save_project(
+    project_dir: Path,
+    manifest: dict[str, Any],
+    corpus: list[dict[str, Any]],
+    *,
+    already_normalized: bool = False,
+    dirty_sections: set[str] | None = None,
+) -> None:
     ensure_project_layout(project_dir)
-    manifest = normalize_project_manifest(manifest, corpus, project_dir)
+    if not already_normalized:
+        manifest = normalize_project_manifest(manifest, corpus, project_dir)
     manifest["updated_at"] = utc_now_iso()
-    write_project_payload(project_dir, manifest, corpus)
+    resolved_dirty_sections = {str(section) for section in dirty_sections} if dirty_sections is not None else None
+    if resolved_dirty_sections is not None:
+        resolved_dirty_sections.add("manifest")
+    write_project_payload(project_dir, manifest, corpus, dirty_sections=resolved_dirty_sections)
 
 
 def load_project(project_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1206,7 +1207,7 @@ def import_project_package(package_path: Path) -> tuple[Path, dict[str, Any], li
             for run in manifest.get("run_history", []):
                 run["project_id"] = manifest["id"]
 
-        save_project(target_dir, manifest, corpus)
+        save_project(target_dir, manifest, corpus, already_normalized=True)
         return target_dir, manifest, corpus
     finally:
         if temp_root.exists():
@@ -1281,7 +1282,7 @@ def duplicate_project(project_id: str, duplicated_name: str | None = None) -> tu
     for run in manifest.get("run_history", []):
         run["project_id"] = manifest["id"]
 
-    save_project(target_dir, manifest, corpus)
+    save_project(target_dir, manifest, corpus, already_normalized=True)
     return target_dir, manifest, corpus
 
 
