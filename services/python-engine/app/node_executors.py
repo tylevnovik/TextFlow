@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from copy import deepcopy
+import math
 import random
 from typing import Any
 
@@ -71,6 +72,29 @@ def _analysis_params(context: Any, patch: dict[str, Any] | None = None) -> dict[
 
 def _clone_corpus_rows(corpus: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [dict(item) if isinstance(item, dict) else item for item in corpus]
+
+
+def _shared_get(context: Any, key: str, default: Any = None) -> Any:
+    if hasattr(context, "get_shared_value"):
+        return context.get_shared_value(key, default)
+    shared = getattr(context, "shared", {})
+    return shared.get(key, default) if isinstance(shared, dict) else default
+
+
+def _shared_set(context: Any, key: str, value: Any) -> Any:
+    if hasattr(context, "set_shared_value"):
+        return context.set_shared_value(key, value)
+    if not isinstance(getattr(context, "shared", None), dict):
+        context.shared = {}
+    context.shared[key] = value
+    return value
+
+
+def _shared_pop(context: Any, key: str) -> Any:
+    shared = getattr(context, "shared", {})
+    if isinstance(shared, dict):
+        return shared.pop(key, None)
+    return None
 
 
 def _report_corpus_progress(context: Any, node: dict[str, Any], completed: int, total: int, stage: str) -> None:
@@ -194,7 +218,9 @@ def execute_filter_corpus(context: Any, node: dict[str, Any], inputs: dict[str, 
 
 
 def execute_dictionary_input(context: Any, _node: dict[str, Any], _inputs: dict[str, Any]) -> dict[str, Any]:
-    return {"dictionary_set": deepcopy(context.manifest["dictionary_set"])}
+    dictionary_set = deepcopy(context.manifest["dictionary_set"])
+    active_dictionary_set = _set_active_dictionary_set(context, dictionary_set)
+    return {"dictionary_set": active_dictionary_set}
 
 
 def execute_merge_corpora(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
@@ -218,6 +244,151 @@ def execute_merge_corpora(context: Any, node: dict[str, Any], inputs: dict[str, 
                 seen_doc_ids.add(doc_id)
     context.shared["scoped_corpus"] = merged
     return {"corpus": merged}
+
+
+def _is_dictionary_set(value: Any) -> bool:
+    return isinstance(value, dict) and isinstance(value.get("collections"), dict) and isinstance(value.get("sheets"), dict)
+
+
+def _active_dictionary_set(context: Any, inputs: dict[str, Any]) -> dict[str, Any]:
+    for value in inputs.values():
+        if _is_dictionary_set(value):
+            return value
+    shared_dictionary_set = _shared_get(context, "active_dictionary_set")
+    if _is_dictionary_set(shared_dictionary_set):
+        return shared_dictionary_set
+    manifest = getattr(context, "manifest", {}) if isinstance(getattr(context, "manifest", {}), dict) else {}
+    dictionary_set = manifest.get("dictionary_set")
+    return dictionary_set if _is_dictionary_set(dictionary_set) else {"collections": {}, "sheets": {}}
+
+
+def _set_active_dictionary_set(context: Any, dictionary_set: dict[str, Any]) -> dict[str, Any]:
+    _shared_set(context, "active_dictionary_set", dictionary_set)
+    _shared_set(context, "dictionary_runtime_state_source_id", id(dictionary_set))
+    _shared_pop(context, "dictionary_runtime_state")
+    return dictionary_set
+
+
+def _selected_table_ids(config: dict[str, Any]) -> list[str]:
+    raw_ids = config.get("selected_table_ids")
+    if isinstance(raw_ids, list):
+        selected = [str(item).strip() for item in raw_ids if str(item).strip()]
+        if selected:
+            return selected
+    return [item.strip() for item in str(config.get("selected_table_ids_text") or "").split(",") if item.strip()]
+
+
+def _overlay_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
+    if isinstance(config.get("overlay_rows"), list):
+        rows = [item for item in config.get("overlay_rows", []) if isinstance(item, dict)]
+        if rows:
+            return rows
+    rows: list[dict[str, Any]] = []
+    for line in str(config.get("overlay_rows_text") or "").splitlines():
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) < 3 or not parts[0] or not parts[1]:
+            continue
+        rows.append(
+            {
+                "kind": parts[0],
+                "source": parts[1],
+                "target": parts[2] or None,
+                "enabled": parts[3].lower() != "false" if len(parts) > 3 else True,
+            }
+        )
+    return rows
+
+
+def _rebuild_dictionary_sheets(dictionary_set: dict[str, Any]) -> dict[str, Any]:
+    collections = dictionary_set.get("collections") if isinstance(dictionary_set.get("collections"), dict) else {}
+    sheets = dictionary_set.get("sheets") if isinstance(dictionary_set.get("sheets"), dict) else {}
+    for kind, collection in collections.items():
+        tables = collection.get("tables") if isinstance(collection, dict) and isinstance(collection.get("tables"), list) else []
+        merged_entries: list[dict[str, Any]] = []
+        for table in tables:
+            if not isinstance(table, dict) or not bool(table.get("enabled", True)):
+                continue
+            merged_entries.extend(deepcopy(table.get("entries") or []))
+        existing_sheet = sheets.get(kind) if isinstance(sheets.get(kind), dict) else {}
+        sheets[kind] = {
+            "kind": str(existing_sheet.get("kind") or kind),
+            "name": str(existing_sheet.get("name") or kind),
+            "version": str(existing_sheet.get("version") or "2.0.0"),
+            "entries": merged_entries,
+        }
+    dictionary_set["sheets"] = sheets
+    return dictionary_set
+
+
+def execute_select_dictionary_tables(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    dictionary_set = deepcopy(_active_dictionary_set(context, inputs))
+    selected_ids = set(_selected_table_ids(node.get("config") if isinstance(node.get("config"), dict) else {}))
+    if not selected_ids:
+        active_dictionary_set = _set_active_dictionary_set(context, dictionary_set)
+        return {"dictionary_set": active_dictionary_set}
+    collections = dictionary_set.get("collections") if isinstance(dictionary_set.get("collections"), dict) else {}
+    for kind, collection in collections.items():
+        if not isinstance(collection, dict):
+            continue
+        tables = collection.get("tables")
+        if isinstance(tables, list):
+            collection["tables"] = [
+                deepcopy(table)
+                for table in tables
+                if isinstance(table, dict) and str(table.get("id") or "").strip() in selected_ids
+            ]
+    active_dictionary_set = _set_active_dictionary_set(context, _rebuild_dictionary_sheets(dictionary_set))
+    return {"dictionary_set": active_dictionary_set}
+
+
+def execute_overlay_dictionary_rules(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    dictionary_set = deepcopy(_active_dictionary_set(context, inputs))
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    rows = _overlay_rows(config)
+    if not rows:
+        active_dictionary_set = _set_active_dictionary_set(context, dictionary_set)
+        return {"dictionary_set": active_dictionary_set}
+    collections = dictionary_set.get("collections") if isinstance(dictionary_set.get("collections"), dict) else {}
+    grouped_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for index, row in enumerate(rows, start=1):
+        kind = str(row.get("kind") or "").strip()
+        source = str(row.get("source") or "").strip()
+        if not kind or not source or kind not in collections:
+            continue
+        grouped_rows[kind].append(
+            {
+                "id": f"runtime-{kind}-{index}",
+                "source": source,
+                "target": row.get("target"),
+                "enabled": bool(row.get("enabled", True)),
+                "hits": 0,
+                "tags": ["runtime-overlay"],
+                "notes": "Runtime overlay node",
+            }
+        )
+    for kind, entries in grouped_rows.items():
+        collection = collections.get(kind)
+        if not isinstance(collection, dict):
+            continue
+        tables = collection.get("tables") if isinstance(collection.get("tables"), list) else []
+        tables.append(
+            {
+                "id": f"runtime-overlay-{kind}",
+                "kind": kind,
+                "name": "运行时叠加",
+                "version": "2.0.0",
+                "description": "Runtime-only dictionary overlay",
+                "source_url": None,
+                "built_in": False,
+                "editable": False,
+                "enabled": True,
+                "tags": ["runtime-overlay"],
+                "entries": entries,
+            }
+        )
+        collection["tables"] = tables
+    active_dictionary_set = _set_active_dictionary_set(context, _rebuild_dictionary_sheets(dictionary_set))
+    return {"dictionary_set": active_dictionary_set}
 
 
 def _metadata_filter_conditions(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -479,18 +650,20 @@ def execute_tokenize(context: Any, node: dict[str, Any], inputs: dict[str, Any])
 def execute_apply_dictionary_rules(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     text_ops = _text_ops()
     corpus = _clone_corpus_rows(_scoped_corpus_from_inputs(context, inputs))
+    dictionary_set = _active_dictionary_set(context, inputs)
     params = node.get("config") if isinstance(node.get("config"), dict) else {}
     node_audits: list[dict[str, Any]] = []
-    runtime_state = context.shared.get("dictionary_runtime_state")
-    if runtime_state is None:
-        runtime_state = text_ops.build_dictionary_runtime_state(context.manifest["dictionary_set"])
-        context.shared["dictionary_runtime_state"] = runtime_state
+    runtime_state = _shared_get(context, "dictionary_runtime_state")
+    if runtime_state is None or _shared_get(context, "dictionary_runtime_state_source_id") != id(dictionary_set):
+        runtime_state = text_ops.build_dictionary_runtime_state(dictionary_set)
+        _shared_set(context, "dictionary_runtime_state", runtime_state)
+        _shared_set(context, "dictionary_runtime_state_source_id", id(dictionary_set))
     total = len(corpus)
     for index, item in enumerate(corpus, start=1):
         mapped_tokens, audits = text_ops.apply_dictionary(
             item["doc_id"],
             list(item.get("tokens") or []),
-            context.manifest["dictionary_set"],
+            dictionary_set,
             params,
             runtime_state=runtime_state,
         )
@@ -547,6 +720,167 @@ def execute_cooccurrence_analysis(context: Any, node: dict[str, Any], inputs: di
             progress_callback=lambda current, total: context.node_progress(node, current / max(total, 1), f"共现分析 {current}/{total}"),
         )
     }
+
+
+def _comparison_groups(config: dict[str, Any], baseline_group: str, available_groups: set[str]) -> list[str]:
+    raw_groups = config.get("comparison_groups")
+    if isinstance(raw_groups, list):
+        groups = [str(item).strip() for item in raw_groups if str(item).strip()]
+        if groups:
+            return groups
+    groups_text = [item.strip() for item in str(config.get("comparison_groups_text") or "").split(",") if item.strip()]
+    if groups_text:
+        return groups_text
+    return sorted(group for group in available_groups if group and group != baseline_group)
+
+
+def _group_term_statistics(
+    corpus: list[dict[str, Any]],
+    group_field: str,
+) -> tuple[dict[str, int], dict[tuple[str, str], int], dict[tuple[str, str], set[str]], set[str]]:
+    group_totals: dict[str, int] = defaultdict(int)
+    term_counts: dict[tuple[str, str], int] = defaultdict(int)
+    doc_sets: dict[tuple[str, str], set[str]] = defaultdict(set)
+    terms: set[str] = set()
+    for item in corpus:
+        group_value = str(_document_field_value(item, group_field) or "").strip()
+        if not group_value:
+            continue
+        doc_id = str(item.get("doc_id") or item.get("id") or "")
+        for token in item.get("filtered_tokens") or []:
+            term = str(token or "").strip()
+            if not term:
+                continue
+            group_totals[group_value] += 1
+            term_counts[(group_value, term)] += 1
+            if doc_id:
+                doc_sets[(group_value, term)].add(doc_id)
+            terms.add(term)
+    return group_totals, term_counts, doc_sets, terms
+
+
+def execute_group_compare(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    corpus = _clone_corpus_rows(_scoped_corpus_from_inputs(context, inputs))
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    group_field = str(config.get("group_field") or "institution").strip()
+    baseline_group = str(config.get("baseline_group") or "").strip()
+    min_frequency = int(config.get("min_frequency", 1) or 1)
+    group_totals, term_counts, doc_sets, terms = _group_term_statistics(corpus, group_field)
+    if not group_totals:
+        return {"group_metric_table": []}
+    comparison_groups = _comparison_groups(config, baseline_group, set(group_totals))
+    selected_groups = [group for group in [baseline_group, *comparison_groups] if group and group in group_totals]
+    if not selected_groups:
+        selected_groups = sorted(group_totals)
+    rows: list[dict[str, Any]] = []
+    for group_value in selected_groups:
+        total_terms = group_totals.get(group_value, 0)
+        if not total_terms:
+            continue
+        for term in sorted(terms):
+            term_count = term_counts.get((group_value, term), 0)
+            baseline_term_count = term_counts.get((baseline_group, term), 0)
+            if term_count + baseline_term_count < min_frequency:
+                continue
+            baseline_total = group_totals.get(baseline_group, 0)
+            normalized_frequency = term_count / total_terms if total_terms else 0.0
+            baseline_normalized_frequency = baseline_term_count / baseline_total if baseline_total else 0.0
+            rows.append(
+                {
+                    "group_field": group_field,
+                    "group_value": group_value,
+                    "baseline_group": baseline_group,
+                    "term": term,
+                    "term_count": term_count,
+                    "document_count": len(doc_sets.get((group_value, term), set())),
+                    "total_terms": total_terms,
+                    "normalized_frequency": round(normalized_frequency, 6),
+                    "baseline_term_count": baseline_term_count,
+                    "baseline_document_count": len(doc_sets.get((baseline_group, term), set())),
+                    "baseline_total_terms": baseline_total,
+                    "baseline_normalized_frequency": round(baseline_normalized_frequency, 6),
+                    "ratio_vs_baseline": round((normalized_frequency + 1e-9) / (baseline_normalized_frequency + 1e-9), 6),
+                }
+            )
+    rows.sort(key=lambda item: (str(item["group_value"]), -int(item["term_count"]), str(item["term"])))
+    return {"group_metric_table": rows}
+
+
+def _xlogx(value: float) -> float:
+    return 0.0 if value <= 0 else value * math.log(value)
+
+
+def _log_likelihood_ratio(comparison_term_count: int, comparison_total: int, baseline_term_count: int, baseline_total: int) -> float:
+    k11 = float(comparison_term_count)
+    k12 = float(baseline_term_count)
+    k21 = float(max(comparison_total - comparison_term_count, 0))
+    k22 = float(max(baseline_total - baseline_term_count, 0))
+    row_sum_1 = k11 + k12
+    row_sum_2 = k21 + k22
+    total = float(comparison_total + baseline_total)
+    return max(
+        0.0,
+        2.0
+        * (
+            _xlogx(k11)
+            + _xlogx(k12)
+            + _xlogx(k21)
+            + _xlogx(k22)
+            + _xlogx(total)
+            - _xlogx(float(comparison_total))
+            - _xlogx(float(baseline_total))
+            - _xlogx(row_sum_1)
+            - _xlogx(row_sum_2)
+        ),
+    )
+
+
+def execute_keyness_analysis(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    corpus = _clone_corpus_rows(_scoped_corpus_from_inputs(context, inputs))
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    group_field = str(config.get("group_field") or "institution").strip()
+    baseline_group = str(config.get("baseline_group") or "").strip()
+    comparison_group = str(config.get("comparison_group") or "").strip()
+    min_frequency = int(config.get("min_frequency", 2) or 2)
+    group_totals, term_counts, doc_sets, terms = _group_term_statistics(corpus, group_field)
+    comparison_total = group_totals.get(comparison_group, 0)
+    baseline_total = group_totals.get(baseline_group, 0)
+    if not comparison_total or not baseline_total:
+        return {"keyness_table": []}
+    rows: list[dict[str, Any]] = []
+    for term in sorted(terms):
+        comparison_term_count = term_counts.get((comparison_group, term), 0)
+        baseline_term_count = term_counts.get((baseline_group, term), 0)
+        if comparison_term_count + baseline_term_count < min_frequency:
+            continue
+        comparison_ratio = comparison_term_count / comparison_total if comparison_total else 0.0
+        baseline_ratio = baseline_term_count / baseline_total if baseline_total else 0.0
+        rows.append(
+            {
+                "group_field": group_field,
+                "comparison_group": comparison_group,
+                "baseline_group": baseline_group,
+                "term": term,
+                "comparison_term_count": comparison_term_count,
+                "baseline_term_count": baseline_term_count,
+                "comparison_document_count": len(doc_sets.get((comparison_group, term), set())),
+                "baseline_document_count": len(doc_sets.get((baseline_group, term), set())),
+                "comparison_normalized_frequency": round(comparison_ratio, 6),
+                "baseline_normalized_frequency": round(baseline_ratio, 6),
+                "relative_ratio": round((comparison_ratio + 1e-9) / (baseline_ratio + 1e-9), 6),
+                "llr": round(
+                    _log_likelihood_ratio(
+                        comparison_term_count,
+                        comparison_total,
+                        baseline_term_count,
+                        baseline_total,
+                    ),
+                    6,
+                ),
+            }
+        )
+    rows.sort(key=lambda item: (-float(item["llr"]), -float(item["relative_ratio"]), str(item["term"])))
+    return {"keyness_table": rows}
 
 
 def execute_feature_term_selection(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
@@ -832,6 +1166,8 @@ EXECUTORS_BY_TYPE = {
     "corpus_input": execute_corpus_input,
     "load_project_corpus": execute_corpus_input,
     "filter_corpus": execute_filter_corpus,
+    "select_dictionary_tables": execute_select_dictionary_tables,
+    "overlay_dictionary_rules": execute_overlay_dictionary_rules,
     "filter_by_metadata": execute_filter_by_metadata,
     "deduplicate_documents": execute_deduplicate_documents,
     "sample_corpus": execute_sample_corpus,
@@ -849,6 +1185,8 @@ EXECUTORS_BY_TYPE = {
     "term_document_analysis": execute_term_document_analysis,
     "term_year_analysis": execute_term_year_analysis,
     "cooccurrence_analysis": execute_cooccurrence_analysis,
+    "group_compare": execute_group_compare,
+    "keyness_analysis": execute_keyness_analysis,
     "feature_term_selection": execute_feature_term_selection,
     "keyword_extraction": execute_keyword_extraction,
     "keyword_clustering": execute_keyword_clustering,

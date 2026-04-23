@@ -161,6 +161,8 @@ const workflowNodeCompilers: Record<string, WorkflowNodeCompiler> = {
   filter_by_metadata: () => {},
   deduplicate_documents: () => {},
   sample_corpus: () => {},
+  select_dictionary_tables: () => {},
+  overlay_dictionary_rules: () => {},
   split_corpus: (context) => {
     context.enabledSteps.add("analysis");
   },
@@ -215,6 +217,12 @@ const workflowNodeCompilers: Record<string, WorkflowNodeCompiler> = {
       cooccurrence_window: Number(node.config.cooccurrence_window ?? context.compiled.analysis.cooccurrence_window),
       min_cooccurrence: Number(node.config.min_cooccurrence ?? context.compiled.analysis.min_cooccurrence)
     });
+  },
+  group_compare: (context) => {
+    context.enabledSteps.add("analysis");
+  },
+  keyness_analysis: (context) => {
+    context.enabledSteps.add("analysis");
   },
   feature_term_selection: (context, node) => {
     const rawValue = node.config.feature_term_count;

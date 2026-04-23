@@ -251,6 +251,8 @@ def _compile_export_results(context: NodeCompileContext, node: dict[str, Any]) -
 BUILTIN_NODE_COMPILERS = {
     "corpus_input": _compile_scope,
     "filter_corpus": _compile_scope,
+    "select_dictionary_tables": _compile_passthrough_node,
+    "overlay_dictionary_rules": _compile_passthrough_node,
     "filter_by_metadata": _compile_passthrough_node,
     "deduplicate_documents": _compile_passthrough_node,
     "sample_corpus": _compile_passthrough_node,
@@ -267,6 +269,8 @@ BUILTIN_NODE_COMPILERS = {
     "term_document_analysis": _compile_term_document_analysis,
     "term_year_analysis": _compile_term_year_analysis,
     "cooccurrence_analysis": _compile_cooccurrence_analysis,
+    "group_compare": _compile_analysis_passthrough_node,
+    "keyness_analysis": _compile_analysis_passthrough_node,
     "feature_term_selection": _compile_feature_term_selection,
     "keyword_extraction": _compile_keyword_extraction,
     "keyword_clustering": _compile_keyword_clustering,

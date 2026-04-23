@@ -201,6 +201,42 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
             "runtime": _runtime("merge", "graph.merge_corpora", cacheable=False, previewable=True),
         },
         {
+            "type": "select_dictionary_tables",
+            "title": "选择词表分表",
+            "category": "process",
+            "description": "只激活当前运行所需的词表分表，不改动项目默认词表。",
+            "inputs": [_port("dictionary_set_in", "DictionarySet", "词表输入")],
+            "outputs": [_port("dictionary_set", "DictionarySet", "已筛选词表")],
+            "params": [
+                _string_param("selected_table_ids_text", "启用分表 ID", "standard-project,synonym-project"),
+            ],
+            "runtime": _runtime(
+                "resource",
+                "resource.select_dictionary_tables",
+                cacheable=True,
+                previewable=True,
+                parallel_safe=True,
+            ),
+        },
+        {
+            "type": "overlay_dictionary_rules",
+            "title": "叠加临时词表规则",
+            "category": "process",
+            "description": "按本次运行临时追加词表规则，不写回项目默认词表。",
+            "inputs": [_port("dictionary_set_in", "DictionarySet", "词表输入")],
+            "outputs": [_port("dictionary_set", "DictionarySet", "叠加后词表")],
+            "params": [
+                _string_param("overlay_rows_text", "临时规则", "standard_terms|llm|large language model|true"),
+            ],
+            "runtime": _runtime(
+                "resource",
+                "resource.overlay_dictionary_rules",
+                cacheable=True,
+                previewable=True,
+                parallel_safe=True,
+            ),
+        },
+        {
             "type": "filter_by_metadata",
             "title": "按元数据筛选",
             "category": "process",
@@ -591,6 +627,48 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
                 _number_param("min_cooccurrence", "最小共现次数", int(analysis.get("min_cooccurrence", 2))),
             ],
             executor="analysis.cooccurrence",
+        ),
+        _analysis_node(
+            "group_compare",
+            "分组比较",
+            "按指定分组字段比较词项在不同群组中的频次、文档覆盖和归一化占比。",
+            inputs=[_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
+            outputs=[
+                _port(
+                    "group_metric_table",
+                    "AnyTable",
+                    "分组比较表",
+                    result_bundle_key="group_compare_table",
+                )
+            ],
+            params=[
+                _string_param("group_field", "分组字段", "institution"),
+                _string_param("baseline_group", "基准分组", "OpenAI"),
+                _string_param("comparison_groups_text", "对比分组", "Anthropic,Google"),
+                _number_param("min_frequency", "最小词频", 1),
+            ],
+            executor="analysis.group_compare",
+        ),
+        _analysis_node(
+            "keyness_analysis",
+            "关键性分析",
+            "计算目标分组相对基准分组的 LLR 和相对比率，识别区分性词项。",
+            inputs=[_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
+            outputs=[
+                _port(
+                    "keyness_table",
+                    "AnyTable",
+                    "关键性结果表",
+                    result_bundle_key="keyness_table",
+                )
+            ],
+            params=[
+                _string_param("group_field", "分组字段", "institution"),
+                _string_param("baseline_group", "基准分组", "OpenAI"),
+                _string_param("comparison_group", "目标分组", "Anthropic"),
+                _number_param("min_frequency", "最小词频", 2),
+            ],
+            executor="analysis.keyness",
         ),
         _analysis_node(
             "feature_term_selection",

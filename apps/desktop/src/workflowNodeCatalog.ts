@@ -47,6 +47,8 @@ export const corpusPortOrder: WorkflowPortType[] = [
 
 export const defaultNodePositions: Partial<Record<WorkflowNodeType, { x: number; y: number }>> = {
   dictionary_input: { x: 120, y: 80 },
+  select_dictionary_tables: { x: 520, y: 80 },
+  overlay_dictionary_rules: { x: 900, y: 80 },
   corpus_input: { x: 120, y: 330 },
   merge_corpora: { x: 520, y: 330 },
   filter_by_metadata: { x: 760, y: 120 },
@@ -63,12 +65,14 @@ export const defaultNodePositions: Partial<Record<WorkflowNodeType, { x: number;
   term_document_analysis: { x: 2860, y: 340 },
   term_year_analysis: { x: 2860, y: 600 },
   cooccurrence_analysis: { x: 2860, y: 860 },
+  group_compare: { x: 2860, y: 1380 },
   feature_term_selection: { x: 2860, y: 1120 },
   keyword_extraction: { x: 3240, y: 80 },
   keyword_clustering: { x: 3240, y: 340 },
   institution_keyword_analysis: { x: 3240, y: 600 },
   institution_topic_analysis: { x: 3240, y: 860 },
   document_clustering: { x: 3240, y: 1120 },
+  keyness_analysis: { x: 3240, y: 1380 },
   save_csv: { x: 3620, y: 80 },
   save_xlsx: { x: 3620, y: 340 },
   save_png: { x: 3620, y: 600 },
@@ -138,6 +142,27 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
       apply_near_synonym_map: true,
       apply_stopwords: true,
       apply_exclusion_terms: true
+    })
+  },
+  select_dictionary_tables: {
+    size: { w: 360, h: 320 },
+    defaultConfig: () => ({
+      selected_table_ids: [],
+      selected_table_ids_text: ""
+    })
+  },
+  overlay_dictionary_rules: {
+    size: { w: 380, h: 320 },
+    defaultConfig: () => ({
+      overlay_rows: [
+        {
+          kind: "standard_terms",
+          source: "llm",
+          target: "large language model",
+          enabled: true
+        }
+      ],
+      overlay_rows_text: "standard_terms|llm|large language model|true"
     })
   },
   merge_corpora: {
@@ -221,6 +246,25 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
     defaultConfig: (runtimeProfile) => ({
       cooccurrence_window: runtimeProfile.analysis.cooccurrence_window,
       min_cooccurrence: runtimeProfile.analysis.min_cooccurrence
+    })
+  },
+  group_compare: {
+    size: { w: 360, h: 280 },
+    defaultConfig: () => ({
+      group_field: "institution",
+      baseline_group: "OpenAI",
+      comparison_groups: ["Anthropic", "Google"],
+      comparison_groups_text: "Anthropic,Google",
+      min_frequency: 1
+    })
+  },
+  keyness_analysis: {
+    size: { w: 360, h: 260 },
+    defaultConfig: () => ({
+      group_field: "institution",
+      baseline_group: "OpenAI",
+      comparison_group: "Anthropic",
+      min_frequency: 2
     })
   },
   feature_term_selection: {

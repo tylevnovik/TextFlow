@@ -63,6 +63,13 @@ const dictionaryBindingGroups = [
   }
 ] as const;
 
+interface OverlayRuleRow {
+  kind: string;
+  source: string;
+  target: string;
+  enabled: boolean;
+}
+
 function numericValue(value: unknown): string {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
     return "";
@@ -355,6 +362,100 @@ function parseSplitText(value: string) {
     .filter((item) => item.name);
 }
 
+function normalizeOverlayRows(value: unknown): OverlayRuleRow[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is Partial<OverlayRuleRow> => typeof item === "object" && item !== null)
+      .map((item) => ({
+        kind: String(item.kind ?? "").trim(),
+        source: String(item.source ?? "").trim(),
+        target: String(item.target ?? "").trim(),
+        enabled: item.enabled !== false
+      }))
+      .filter((item) => item.kind && item.source);
+  }
+
+  return String(value ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [kind = "", source = "", target = "", enabledText = "true"] = line.split("|");
+      return {
+        kind: kind.trim(),
+        source: source.trim(),
+        target: target.trim(),
+        enabled: enabledText.trim().toLowerCase() !== "false"
+      };
+    })
+    .filter((item) => item.kind && item.source);
+}
+
+function serializeOverlayRows(rows: OverlayRuleRow[]): string {
+  return rows
+    .map((row) => `${row.kind}|${row.source}|${row.target}|${row.enabled ? "true" : "false"}`)
+    .join("\n");
+}
+
+function corpusFieldValue(item: CorpusItem, field: string): string {
+  if (field === "institution") {
+    return String(item.institution ?? "").trim();
+  }
+  if (field === "source") {
+    return String(item.source ?? "").trim();
+  }
+  if (field === "year") {
+    return item.year === null || item.year === undefined ? "" : String(item.year);
+  }
+  if (field === "category_or_tag") {
+    return String(item.category_or_tag ?? "").trim();
+  }
+  const extraValue = item.extra_metadata?.[field];
+  return extraValue === null || extraValue === undefined ? "" : String(extraValue).trim();
+}
+
+function availableGroupFields(corpus: CorpusItem[]): string[] {
+  const fields = new Set<string>(["institution", "source", "year", "category_or_tag"]);
+  for (const item of corpus) {
+    for (const key of Object.keys(item.extra_metadata ?? {})) {
+      if (key.trim()) {
+        fields.add(key.trim());
+      }
+    }
+  }
+  return [...fields];
+}
+
+function availableGroupValues(corpus: CorpusItem[], field: string): string[] {
+  const values = new Set<string>();
+  for (const item of corpus) {
+    const value = corpusFieldValue(item, field);
+    if (value) {
+      values.add(value);
+    }
+  }
+  return [...values].sort((left, right) => left.localeCompare(right, "zh-CN"));
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  return parseCsvList(String(value ?? ""));
+}
+
+function persistStringList(
+  context: WorkflowNodeEditorContext,
+  patchKey: string,
+  textKey: string,
+  values: string[]
+) {
+  context.updateNodeConfig(context.node.node_id, {
+    [patchKey]: values,
+    [textKey]: values.join(",")
+  });
+}
+
 function renderFilterByMetadataEditor(context: WorkflowNodeEditorContext) {
   return (
     <div className="workflow-node-inline-editor-grid">
@@ -509,16 +610,327 @@ function renderBucketByTimeEditor(context: WorkflowNodeEditorContext) {
   );
 }
 
+function renderSelectDictionaryTablesEditor(context: WorkflowNodeEditorContext) {
+  const collections = Object.values(context.project.dictionary_set.collections ?? {});
+  const allTableIds = collections.flatMap((collection) =>
+    (collection?.tables ?? [])
+      .map((table) => String(table.id ?? "").trim())
+      .filter(Boolean)
+  );
+  const explicitSelection = normalizeStringList(
+    Array.isArray(context.node.config.selected_table_ids) ? context.node.config.selected_table_ids : context.node.config.selected_table_ids_text
+  );
+  const useAllTables = explicitSelection.length === 0;
+  const selectedTableIds = new Set(useAllTables ? allTableIds : explicitSelection);
+
+  const persistSelection = (values: string[]) => {
+    persistStringList(context, "selected_table_ids", "selected_table_ids_text", values);
+  };
+
+  const toggleTable = (tableId: string) => {
+    const next = new Set(useAllTables ? allTableIds : [...selectedTableIds]);
+    if (next.has(tableId)) {
+      next.delete(tableId);
+    } else {
+      next.add(tableId);
+    }
+    persistSelection(allTableIds.filter((item) => next.has(item)));
+  };
+
+  return (
+    <>
+      <div className="workflow-node-inline-pill-block">
+        <strong>分表选择</strong>
+        <small>{useAllTables ? `未指定时默认启用全部 ${allTableIds.length} 个分表` : `当前显式启用 ${selectedTableIds.size}/${allTableIds.length} 个分表`}</small>
+      </div>
+      {collections.map((collection) => (
+        <div key={collection.kind} className="workflow-node-inline-pill-block">
+          <strong>{collection.name}</strong>
+          <div className="workflow-node-inline-editor-grid">
+            {collection.tables.map((table) => (
+              <label key={table.id} className="switch-row compact">
+                <input
+                  type="checkbox"
+                  checked={selectedTableIds.has(table.id)}
+                  onChange={() => toggleTable(table.id)}
+                  disabled={context.loading}
+                />
+                <span>{table.name} · {table.entries.length}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="toolbar-button ghost compact"
+        onClick={() => context.updateNodeConfig(context.node.node_id, { selected_table_ids: [], selected_table_ids_text: "" })}
+        disabled={context.loading}
+      >
+        恢复为全部分表
+      </button>
+    </>
+  );
+}
+
+function renderOverlayDictionaryRulesEditor(context: WorkflowNodeEditorContext) {
+  const collections = Object.values(context.project.dictionary_set.collections ?? {});
+  const kinds = collections.map((collection) => collection.kind);
+  const overlayRows = normalizeOverlayRows(
+    Array.isArray(context.node.config.overlay_rows) ? context.node.config.overlay_rows : context.node.config.overlay_rows_text
+  );
+  const rows = overlayRows.length
+    ? overlayRows
+    : [{ kind: kinds[0] ?? "standard_terms", source: "", target: "", enabled: true }];
+
+  const persistRows = (nextRows: OverlayRuleRow[]) => {
+    const cleanRows = nextRows.filter((row) => row.kind && row.source);
+    context.updateNodeConfig(context.node.node_id, {
+      overlay_rows: cleanRows,
+      overlay_rows_text: serializeOverlayRows(cleanRows)
+    });
+  };
+
+  return (
+    <>
+      <div className="workflow-node-inline-pill-block">
+        <strong>运行时叠加规则</strong>
+        <small>只对本次运行生效，不会写回项目词表。</small>
+      </div>
+      {rows.map((row, index) => (
+        <div key={`${row.kind}-${index}`} className="workflow-node-inline-editor-grid">
+          <label className="field compact">
+            <span>规则类型</span>
+            <select
+              value={row.kind}
+              onChange={(event) => {
+                const nextRows = rows.map((item, itemIndex) => itemIndex === index ? { ...item, kind: event.target.value } : item);
+                persistRows(nextRows);
+              }}
+              disabled={context.loading}
+            >
+              {kinds.map((kind) => (
+                <option key={kind} value={kind}>{kind}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field compact">
+            <span>源词项</span>
+            <input
+              value={row.source}
+              onChange={(event) => {
+                const nextRows = rows.map((item, itemIndex) => itemIndex === index ? { ...item, source: event.target.value } : item);
+                persistRows(nextRows);
+              }}
+              placeholder="llm"
+              disabled={context.loading}
+            />
+          </label>
+          <label className="field compact">
+            <span>目标词项</span>
+            <input
+              value={row.target}
+              onChange={(event) => {
+                const nextRows = rows.map((item, itemIndex) => itemIndex === index ? { ...item, target: event.target.value } : item);
+                persistRows(nextRows);
+              }}
+              placeholder="large language model"
+              disabled={context.loading}
+            />
+          </label>
+          <label className="switch-row compact">
+            <input
+              type="checkbox"
+              checked={row.enabled}
+              onChange={(event) => {
+                const nextRows = rows.map((item, itemIndex) => itemIndex === index ? { ...item, enabled: event.target.checked } : item);
+                persistRows(nextRows);
+              }}
+              disabled={context.loading}
+            />
+            <span>启用</span>
+          </label>
+          <button
+            type="button"
+            className="toolbar-button ghost compact"
+            onClick={() => persistRows(rows.filter((_, itemIndex) => itemIndex !== index))}
+            disabled={context.loading || rows.length <= 1}
+          >
+            删除
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="toolbar-button ghost compact"
+        onClick={() => persistRows([...rows, { kind: kinds[0] ?? "standard_terms", source: "", target: "", enabled: true }])}
+        disabled={context.loading}
+      >
+        添加规则
+      </button>
+    </>
+  );
+}
+
+function renderGroupCompareEditor(context: WorkflowNodeEditorContext) {
+  const fieldOptions = availableGroupFields(context.snapshot.corpus);
+  const groupField = String(context.node.config.group_field ?? "institution");
+  const availableValues = availableGroupValues(context.snapshot.corpus, groupField);
+  const baselineGroup = String(context.node.config.baseline_group ?? availableValues[0] ?? "");
+  const comparisonGroups = normalizeStringList(
+    Array.isArray(context.node.config.comparison_groups) ? context.node.config.comparison_groups : context.node.config.comparison_groups_text
+  );
+  const selectedComparisonGroups = new Set(comparisonGroups);
+
+  return (
+    <>
+      <div className="workflow-node-inline-editor-grid">
+        <label className="field compact">
+          <span>分组字段</span>
+          <select
+            value={groupField}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { group_field: event.target.value })}
+            disabled={context.loading}
+          >
+            {fieldOptions.map((field) => (
+              <option key={field} value={field}>{field}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>基准分组</span>
+          <select
+            value={baselineGroup}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { baseline_group: event.target.value })}
+            disabled={context.loading}
+          >
+            {[baselineGroup, ...availableValues].filter((value, index, values) => value && values.indexOf(value) === index).map((value) => (
+              <option key={value} value={value}>{value}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>最小词频</span>
+          <input
+            type="number"
+            min="1"
+            value={numericValue(context.node.config.min_frequency ?? 1)}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, {
+              min_frequency: event.target.value ? Number(event.target.value) : 1
+            })}
+            disabled={context.loading}
+          />
+        </label>
+      </div>
+      <div className="workflow-node-inline-pill-block">
+        <strong>对比分组</strong>
+        <div className="pill-cloud compact">
+          {availableValues.filter((value) => value !== baselineGroup).map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={`intent-pill ${selectedComparisonGroups.has(value) ? "is-active" : ""}`}
+              onClick={() => {
+                const next = new Set(selectedComparisonGroups);
+                if (next.has(value)) {
+                  next.delete(value);
+                } else {
+                  next.add(value);
+                }
+                persistStringList(context, "comparison_groups", "comparison_groups_text", availableValues.filter((item) => next.has(item)));
+              }}
+              disabled={context.loading}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function renderKeynessAnalysisEditor(context: WorkflowNodeEditorContext) {
+  const fieldOptions = availableGroupFields(context.snapshot.corpus);
+  const groupField = String(context.node.config.group_field ?? "institution");
+  const availableValues = availableGroupValues(context.snapshot.corpus, groupField);
+  const baselineGroup = String(context.node.config.baseline_group ?? availableValues[0] ?? "");
+  const comparisonGroup = String(
+    context.node.config.comparison_group
+    ?? availableValues.find((value) => value !== baselineGroup)
+    ?? ""
+  );
+
+  return (
+    <div className="workflow-node-inline-editor-grid">
+      <label className="field compact">
+        <span>分组字段</span>
+        <select
+          value={groupField}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { group_field: event.target.value })}
+          disabled={context.loading}
+        >
+          {fieldOptions.map((field) => (
+            <option key={field} value={field}>{field}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field compact">
+        <span>基准分组</span>
+        <select
+          value={baselineGroup}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { baseline_group: event.target.value })}
+          disabled={context.loading}
+        >
+          {[baselineGroup, ...availableValues].filter((value, index, values) => value && values.indexOf(value) === index).map((value) => (
+            <option key={value} value={value}>{value}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field compact">
+        <span>目标分组</span>
+        <select
+          value={comparisonGroup}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, { comparison_group: event.target.value })}
+          disabled={context.loading}
+        >
+          {[comparisonGroup, ...availableValues.filter((value) => value !== baselineGroup)]
+            .filter((value, index, values) => value && values.indexOf(value) === index)
+            .map((value) => (
+              <option key={value} value={value}>{value}</option>
+            ))}
+        </select>
+      </label>
+      <label className="field compact">
+        <span>最小词频</span>
+        <input
+          type="number"
+          min="1"
+          value={numericValue(context.node.config.min_frequency ?? 2)}
+          onChange={(event) => context.updateNodeConfig(context.node.node_id, {
+            min_frequency: event.target.value ? Number(event.target.value) : 2
+          })}
+          disabled={context.loading}
+        />
+      </label>
+    </div>
+  );
+}
+
 type WorkflowNodeInlineRenderer = (context: WorkflowNodeEditorContext) => ReactNode;
 
 const workflowNodeInlineRenderers: Partial<Record<WorkflowNodeInstance["node_type"], WorkflowNodeInlineRenderer>> = {
   corpus_input: renderCorpusInputEditor,
   dictionary_input: renderDictionaryInputEditor,
+  select_dictionary_tables: renderSelectDictionaryTablesEditor,
+  overlay_dictionary_rules: renderOverlayDictionaryRulesEditor,
   filter_by_metadata: renderFilterByMetadataEditor,
   deduplicate_documents: renderDeduplicateDocumentsEditor,
   sample_corpus: renderSampleCorpusEditor,
   split_corpus: renderSplitCorpusEditor,
-  bucket_by_time: renderBucketByTimeEditor
+  bucket_by_time: renderBucketByTimeEditor,
+  group_compare: renderGroupCompareEditor,
+  keyness_analysis: renderKeynessAnalysisEditor
 };
 
 export function renderWorkflowNodeInlineEditor(context: WorkflowNodeEditorContext) {

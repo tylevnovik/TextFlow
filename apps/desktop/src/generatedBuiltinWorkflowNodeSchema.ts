@@ -43,6 +43,22 @@ export const builtinWorkflowNodeSchema: Record<WorkflowNodeType, GeneratedWorkfl
     outputs: [{ port_id: "corpus", port_type: "CorpusTable", label: "合并后语料" }],
     stepId: "merge"
   },
+  select_dictionary_tables: {
+    label: "选择词表分表",
+    description: "只激活当前运行所需的词表分表，不改动项目默认词表。",
+    category: "process",
+    inputs: [{ port_id: "dictionary_set_in", port_type: "DictionarySet", label: "词表输入" }],
+    outputs: [{ port_id: "dictionary_set", port_type: "DictionarySet", label: "已筛选词表" }],
+    stepId: "resource"
+  },
+  overlay_dictionary_rules: {
+    label: "叠加临时词表规则",
+    description: "按本次运行临时追加词表规则，不写回项目默认词表。",
+    category: "process",
+    inputs: [{ port_id: "dictionary_set_in", port_type: "DictionarySet", label: "词表输入" }],
+    outputs: [{ port_id: "dictionary_set", port_type: "DictionarySet", label: "叠加后词表" }],
+    stepId: "resource"
+  },
   filter_by_metadata: {
     label: "按元数据筛选",
     description: "按机构、来源、年份或扩展元数据字段筛选当前语料。",
@@ -192,6 +208,36 @@ export const builtinWorkflowNodeSchema: Record<WorkflowNodeType, GeneratedWorkfl
         port_type: "CooccurrenceTable",
         label: "共现表",
         result_bundle_key: "cooccurrence_table"
+      }
+    ],
+    stepId: "analysis"
+  },
+  group_compare: {
+    label: "分组比较",
+    description: "按指定分组字段比较词项在不同群组中的频次、文档覆盖和归一化占比。",
+    category: "analysis",
+    inputs: [{ port_id: "token_corpus_in", port_type: "FilteredTokenCorpus", label: "分析词项" }],
+    outputs: [
+      {
+        port_id: "group_metric_table",
+        port_type: "AnyTable",
+        label: "分组比较表",
+        result_bundle_key: "group_compare_table"
+      }
+    ],
+    stepId: "analysis"
+  },
+  keyness_analysis: {
+    label: "关键性分析",
+    description: "计算目标分组相对基准分组的 LLR 和相对比率，识别区分性词项。",
+    category: "analysis",
+    inputs: [{ port_id: "token_corpus_in", port_type: "FilteredTokenCorpus", label: "分析词项" }],
+    outputs: [
+      {
+        port_id: "keyness_table",
+        port_type: "AnyTable",
+        label: "关键性结果表",
+        result_bundle_key: "keyness_table"
       }
     ],
     stepId: "analysis"
