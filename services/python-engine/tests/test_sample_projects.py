@@ -119,3 +119,28 @@ def test_sample_workflow_nodes_match_declared_coverage(monkeypatch, isolated_wor
         workflow_nodes = {node["node_type"] for node in manifest["workflow_definitions"][0]["nodes"]}
         declared = set(manifest["settings"]["sample_project"]["covered_nodes"])
         assert declared <= workflow_nodes | {"artifact_preview", "review_task", "experiment_matrix", "run_diff", "incremental_run"}
+
+
+def test_created_sample_projects_persist_guidance_metadata(monkeypatch, isolated_workspace, tmp_path):
+    _populate_public_sample_cache(monkeypatch, tmp_path)
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
+    created = create_builtin_sample_projects()
+    for _project_dir, manifest in created:
+        sample = manifest["settings"]["sample_project"]
+        assert sample["order"] >= 1
+        assert sample["difficulty"]
+        assert sample["goal"]
+        assert sample["guided_steps"]
+        assert sample["default_row_count"] >= 10_000
+        assert sample["public_row_count"] == 120
+        assert sample["language_balance"] == {"en": 0.5, "zh": 0.5}
+        assert sample["language_counts"] == {"en": 60, "zh": 60}
+
+
+def test_review_and_experiment_sample_contains_product_surfaces(monkeypatch, isolated_workspace, tmp_path):
+    _populate_public_sample_cache(monkeypatch, tmp_path)
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
+    created = create_builtin_sample_projects()
+    review_sample = next(manifest for _project_dir, manifest in created if manifest["name"] == "示例 05 - 复核实验与增量运行")
+    assert review_sample["review_tasks"]
+    assert review_sample["experiment_specs"]

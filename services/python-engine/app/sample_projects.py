@@ -11,8 +11,10 @@ from typing import Any
 import pandas as pd
 
 from .defaults import default_import_template, make_dictionary_entry, utc_now_iso
+from .experiment_store import save_experiment_spec
 from .node_definitions import build_builtin_node_definitions
 from .project_store import create_project, save_project
+from .review_store import create_review_task
 from .sample_dataset_cache import ensure_public_sample_cache_available, read_normalized_sample_cache, sample_data_cache_root
 
 FIRST_BUILTIN_SAMPLE_PROJECT_NAME = "示例 01 - 基础文本预处理"
@@ -876,6 +878,82 @@ def _configure_workflow_for_spec(manifest: dict[str, Any], spec: dict[str, Any])
             node["config"] = {**dict(node.get("config") or {}), **patch}
 
 
+def _seed_review_and_experiment_surfaces(manifest: dict[str, Any], spec: dict[str, Any], corpus: list[dict[str, Any]]) -> None:
+    slug = str(spec["slug"])
+
+    if slug == "sample-05-review-experiment-incremental":
+        if not manifest.get("review_tasks"):
+            create_review_task(
+                manifest,
+                review_type="keyword_merge",
+                target_ref={"source_term": "llm", "target_term": "large language model"},
+                title="合并关键词 llm",
+                description="把缩写 llm 统一到标准术语 large language model。",
+                payload={
+                    "dictionary_kind": "standard_terms",
+                    "source_term": "llm",
+                    "target_term": "large language model",
+                },
+            )
+            target_doc = str(corpus[0].get("doc_id") or "sample-doc-1") if corpus else "sample-doc-1"
+            create_review_task(
+                manifest,
+                review_type="document_patch",
+                target_ref={"doc_id": target_doc},
+                title=f"修订文档 {target_doc}",
+                description="补充机构字段并确认摘要内容是否需要人工修订。",
+                payload={
+                    "doc_id": target_doc,
+                    "patch": {"institution": "示例复核机构"},
+                },
+            )
+        if not manifest.get("experiment_specs"):
+            save_experiment_spec(
+                manifest,
+                {
+                    "name": "关键词提取阈值对比",
+                    "variant_matrix": [
+                        {
+                            "label": "baseline keyword extraction",
+                            "node_overrides": {
+                                "node-keyword-extraction": {"top_k_per_doc": 6, "top_k_project": 60},
+                                "node-keyword-clustering": {"keyword_cluster_k": 4},
+                            },
+                        },
+                        {
+                            "label": "stricter keyword extraction",
+                            "node_overrides": {
+                                "node-keyword-extraction": {"top_k_per_doc": 4, "top_k_project": 40},
+                                "node-keyword-clustering": {"keyword_cluster_k": 6},
+                            },
+                        },
+                    ],
+                },
+            )
+        return
+
+    if slug == "sample-09-conditional-routing":
+        existing_tasks = manifest.get("review_tasks") if isinstance(manifest.get("review_tasks"), list) else []
+        review_task = existing_tasks[0] if existing_tasks else None
+        if review_task is None:
+            target_doc = str(corpus[0].get("doc_id") or "sample-doc-1") if corpus else "sample-doc-1"
+            review_task = create_review_task(
+                manifest,
+                review_type="document_patch",
+                target_ref={"doc_id": target_doc},
+                title="人工门禁复核任务",
+                description="确认条件路由放行的文档是否满足人工复核标准。",
+                payload={"doc_id": target_doc},
+            )
+        gate_node = _node_by_type(manifest["workflow_definitions"][0], "manual_review_gate")
+        gate_node["config"] = {
+            **dict(gate_node.get("config") or {}),
+            "review_id": str(review_task.get("review_id") or ""),
+            "required_status": "resolved",
+            "on_missing": "block",
+        }
+
+
 def _sample_row_count(spec: dict[str, Any]) -> int:
     override = os.getenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT")
     if override:
@@ -1055,14 +1133,19 @@ def create_builtin_sample_projects() -> list[tuple[Path, dict[str, Any]]]:
         manifest["settings"]["sample_project"] = {
             "order": spec["order"],
             "slug": spec["slug"],
-            "goal": spec["goal"],
             "difficulty": spec["difficulty"],
+            "goal": spec["goal"],
             "workflow_name": spec["workflow_name"],
             "guided_steps": deepcopy(spec["guided_steps"]),
             "covered_nodes": deepcopy(spec["covered_nodes"]),
             "covered_settings": deepcopy(spec["covered_settings"]),
+            "default_row_count": spec["default_row_count"],
+            "public_row_count": row_count,
             "public_data_only": True,
             "language_balance": deepcopy(spec["language_balance"]),
+            "language_counts": {"en": row_count // 2, "zh": row_count // 2},
+            "estimated_runtime": str(spec.get("estimated_runtime") or ""),
+            "dataset": deepcopy(spec.get("dataset") or {"source_datasets": deepcopy(spec["source_datasets"])}),
             "source_datasets": deepcopy(spec["source_datasets"]),
         }
         manifest["review_tasks"] = deepcopy(spec.get("review_tasks") or [])
@@ -1072,6 +1155,7 @@ def create_builtin_sample_projects() -> list[tuple[Path, dict[str, Any]]]:
 
         _written_paths, corpus, source_files = _materialize_sample_sources(project_dir, spec, row_count)
         manifest["source_files"] = source_files
+        _seed_review_and_experiment_surfaces(manifest, spec, corpus)
         save_project(project_dir, manifest, corpus)
         created.append((project_dir, manifest))
 
