@@ -11,10 +11,14 @@ from typing import Any
 import pandas as pd
 
 from .defaults import default_import_template, make_dictionary_entry, utc_now_iso
+from .node_definitions import build_builtin_node_definitions
 from .project_store import create_project, save_project
 from .sample_dataset_cache import ensure_public_sample_cache_available, read_normalized_sample_cache, sample_data_cache_root
 
 FIRST_BUILTIN_SAMPLE_PROJECT_NAME = "示例 01 - 基础文本预处理"
+NODE_DEFINITION_BY_TYPE = {
+    definition["type"]: definition for definition in build_builtin_node_definitions()
+}
 
 
 def _source_spec(
@@ -289,11 +293,584 @@ def _append_dictionary_terms(manifest: dict[str, Any], dictionary_terms: dict[st
             sheet["entries"].append(make_dictionary_entry(source, target, 0))
 
 
-def _configure_workflow_basics(manifest: dict[str, Any], spec: dict[str, Any]) -> None:
-    workflow = manifest["workflow_definitions"][0]
+def _node_by_type(workflow: dict[str, Any], node_type: str) -> dict[str, Any]:
+    for node in workflow.get("nodes", []):
+        if isinstance(node, dict) and str(node.get("node_type") or "") == node_type:
+            return node
+    raise KeyError(f"Workflow node not found for type: {node_type}")
+
+
+def _default_node_config(node_type: str) -> dict[str, Any]:
+    definition = NODE_DEFINITION_BY_TYPE[node_type]
+    return {
+        str(param.get("param_id")): deepcopy(param.get("default_value"))
+        for param in definition.get("params", [])
+        if isinstance(param, dict) and str(param.get("param_id") or "").strip()
+    }
+
+
+def _new_registry_node(node_type: str, node_id: str, config: dict[str, Any], *, x: int, y: int) -> dict[str, Any]:
+    definition = NODE_DEFINITION_BY_TYPE[node_type]
+    return {
+        "node_id": node_id,
+        "node_type": node_type,
+        "label": str(definition.get("title") or node_type),
+        "position": {"x": x, "y": y},
+        "size": {"w": 230, "h": 190},
+        "inputs": deepcopy(definition.get("inputs") or []),
+        "outputs": deepcopy(definition.get("outputs") or []),
+        "config": {**_default_node_config(node_type), **deepcopy(config)},
+        "ui_state": {"collapsed": False, "bypassed": False},
+        "runtime_meta": {
+            "step_id": str(definition.get("category") or "manual"),
+            "node_impl_version": "2.0.0",
+        },
+    }
+
+
+def _input_allows_multiple(node: dict[str, Any], port_id: str) -> bool:
+    for port in node.get("inputs", []):
+        if isinstance(port, dict) and str(port.get("port_id") or "") == port_id:
+            return bool(port.get("allow_multiple"))
+    return False
+
+
+def _connect(workflow: dict[str, Any], from_node: str, from_port: str, to_node: str, to_port: str) -> None:
+    node_lookup = {str(node.get("node_id") or ""): node for node in workflow.get("nodes", []) if isinstance(node, dict)}
+    target = node_lookup[to_node]
+    next_edges = [
+        edge
+        for edge in workflow.get("edges", [])
+        if not (
+            str(edge.get("from_node") or "") == from_node
+            and str(edge.get("from_port") or "") == from_port
+            and str(edge.get("to_node") or "") == to_node
+            and str(edge.get("to_port") or "") == to_port
+        )
+    ]
+    if not _input_allows_multiple(target, to_port):
+        next_edges = [
+            edge
+            for edge in next_edges
+            if not (
+                str(edge.get("to_node") or "") == to_node
+                and str(edge.get("to_port") or "") == to_port
+            )
+        ]
+    next_edges.append(
+        {
+            "edge_id": f"edge-{from_node}-{from_port}-to-{to_node}-{to_port}",
+            "from_node": from_node,
+            "from_port": from_port,
+            "to_node": to_node,
+            "to_port": to_port,
+        }
+    )
+    workflow["edges"] = next_edges
+
+
+def _bypass_node_types(workflow: dict[str, Any], node_types: set[str]) -> None:
+    for node in workflow.get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("node_type") or "") in node_types:
+            node.setdefault("ui_state", {})
+            node["ui_state"]["bypassed"] = True
+
+
+def _keep_only_nodes(workflow: dict[str, Any], node_types: set[str]) -> None:
+    workflow["nodes"] = [
+        node
+        for node in workflow.get("nodes", [])
+        if isinstance(node, dict) and str(node.get("node_type") or "") in node_types
+    ]
+    kept_ids = {str(node.get("node_id") or "") for node in workflow["nodes"]}
+    workflow["edges"] = [
+        edge
+        for edge in workflow.get("edges", [])
+        if str(edge.get("from_node") or "") in kept_ids and str(edge.get("to_node") or "") in kept_ids
+    ]
+
+
+def _apply_node_config(workflow: dict[str, Any], node_type: str, config: dict[str, Any]) -> None:
+    node = _node_by_type(workflow, node_type)
+    node["config"] = {**dict(node.get("config") or {}), **deepcopy(config)}
+
+
+def _add_note_and_group(workflow: dict[str, Any], *, group_title: str, note_text: str, x: int = 40, y: int = 40) -> None:
+    workflow["nodes"].append(_new_registry_node("group", f"group-{group_title}", {"title": group_title}, x=x, y=y))
+    workflow["nodes"].append(_new_registry_node("note", f"note-{group_title}", {"text": note_text}, x=x + 24, y=y + 28))
+
+
+def _configure_basic_preprocessing_workflow(workflow: dict[str, Any]) -> None:
     workflow["source"] = "manual"
-    workflow["name"] = str(spec["workflow_name"])
-    for node in workflow["nodes"]:
+    workflow["name"] = "基础文本预处理工作流"
+    _keep_only_nodes(
+        workflow,
+        {
+            "corpus_input",
+            "dictionary_input",
+            "clean_text",
+            "normalize_text",
+            "tokenize",
+            "apply_dictionary_rules",
+            "filter_terms",
+            "frequency_statistics",
+            "save_csv",
+            "save_html_report",
+        },
+    )
+    workflow["edges"] = []
+    _add_note_and_group(workflow, group_title="示例 01", note_text="从项目语料进入清洗、标准化、切词和词频导出。")
+    _apply_node_config(workflow, "clean_text", {"strip_html": True, "strip_urls": True, "normalize_whitespace": True})
+    _apply_node_config(workflow, "normalize_text", {"case_mode": "lower", "normalize_numbers": True})
+    _apply_node_config(workflow, "tokenize", {"language_mode": "mixed"})
+    _connect(workflow, "node-corpus-input", "corpus", "node-clean-text", "corpus_in")
+    _connect(workflow, "node-clean-text", "clean_corpus", "node-normalize-text", "corpus_in")
+    _connect(workflow, "node-normalize-text", "normalized_corpus", "node-tokenize", "corpus_in")
+    _connect(workflow, "node-tokenize", "token_corpus", "node-apply-dictionary-rules", "token_corpus_in")
+    _connect(workflow, "node-dictionary-input", "dictionary_set", "node-apply-dictionary-rules", "dictionary_set_in")
+    _connect(workflow, "node-apply-dictionary-rules", "token_corpus", "node-filter-terms", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-frequency-statistics", "token_corpus_in")
+    _connect(workflow, "node-frequency-statistics", "frequency_table", "node-save-csv", "table_in")
+    _connect(workflow, "node-frequency-statistics", "frequency_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-apply-dictionary-rules", "audit_table", "node-save-html-report", "report_in")
+
+
+def _configure_dictionary_frequency_workflow(workflow: dict[str, Any]) -> None:
+    workflow["source"] = "manual"
+    workflow["name"] = "词表治理与词频统计工作流"
+    _keep_only_nodes(
+        workflow,
+        {
+            "corpus_input",
+            "dictionary_input",
+            "clean_text",
+            "normalize_text",
+            "tokenize",
+            "apply_dictionary_rules",
+            "filter_terms",
+            "frequency_statistics",
+            "term_document_analysis",
+            "cooccurrence_analysis",
+            "save_xlsx",
+            "save_html_report",
+        },
+    )
+    workflow["nodes"].extend(
+        [
+            _new_registry_node("select_dictionary_tables", "node-select-dictionary-tables", {"selected_table_ids_text": "phrase_lexicon\nsynonym_map\nstopwords\nstandard_terms"}, x=420, y=80),
+            _new_registry_node("overlay_dictionary_rules", "node-overlay-dictionary-rules", {"overlay_rows_text": "standard_terms|llm|large language model|true\nstandard_terms|人工智能|人工智能|true"}, x=760, y=80),
+        ]
+    )
+    workflow["edges"] = []
+    _add_note_and_group(workflow, group_title="示例 02", note_text="先挑词表，再叠加临时规则，最后看词频、词项-文档和共现。")
+    _apply_node_config(workflow, "cooccurrence_analysis", {"cooccurrence_window": 4, "min_cooccurrence": 2})
+    _connect(workflow, "node-corpus-input", "corpus", "node-clean-text", "corpus_in")
+    _connect(workflow, "node-clean-text", "clean_corpus", "node-normalize-text", "corpus_in")
+    _connect(workflow, "node-normalize-text", "normalized_corpus", "node-tokenize", "corpus_in")
+    _connect(workflow, "node-tokenize", "token_corpus", "node-apply-dictionary-rules", "token_corpus_in")
+    _connect(workflow, "node-dictionary-input", "dictionary_set", "node-select-dictionary-tables", "dictionary_set_in")
+    _connect(workflow, "node-select-dictionary-tables", "dictionary_set", "node-overlay-dictionary-rules", "dictionary_set_in")
+    _connect(workflow, "node-overlay-dictionary-rules", "dictionary_set", "node-apply-dictionary-rules", "dictionary_set_in")
+    _connect(workflow, "node-apply-dictionary-rules", "token_corpus", "node-filter-terms", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-frequency-statistics", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-term-document-analysis", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-cooccurrence-analysis", "token_corpus_in")
+    _connect(workflow, "node-frequency-statistics", "frequency_table", "node-save-xlsx", "table_in")
+    _connect(workflow, "node-term-document-analysis", "term_document_table", "node-save-xlsx", "table_in")
+    _connect(workflow, "node-cooccurrence-analysis", "cooccurrence_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-frequency-statistics", "frequency_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-term-document-analysis", "term_document_table", "node-save-html-report", "report_in")
+
+
+def _configure_academic_keyword_topic_workflow(workflow: dict[str, Any]) -> None:
+    workflow["source"] = "manual"
+    workflow["name"] = "学术关键词与主题工作流"
+    _keep_only_nodes(
+        workflow,
+        {
+            "corpus_input",
+            "dictionary_input",
+            "clean_text",
+            "normalize_text",
+            "tokenize",
+            "apply_dictionary_rules",
+            "filter_terms",
+            "term_document_analysis",
+            "term_year_analysis",
+            "feature_term_selection",
+            "keyword_extraction",
+            "keyword_clustering",
+            "topic_modeling",
+            "document_clustering",
+            "save_xlsx",
+            "save_png",
+            "save_html_report",
+        },
+    )
+    workflow["nodes"].append(_new_registry_node("topic_modeling", "node-topic-modeling", {"topic_model_k": 6, "top_terms_per_topic": 8}, x=3240, y=860))
+    workflow["edges"] = []
+    _add_note_and_group(workflow, group_title="示例 03", note_text="围绕学术摘要同时跑关键词、主题、文档聚类和年份趋势。")
+    _apply_node_config(workflow, "feature_term_selection", {"feature_term_count": 120})
+    _apply_node_config(workflow, "keyword_extraction", {"top_k_per_doc": 8, "top_k_project": 80})
+    _apply_node_config(workflow, "keyword_clustering", {"keyword_cluster_k": 6})
+    _apply_node_config(workflow, "document_clustering", {"document_cluster_k": 6})
+    _connect(workflow, "node-corpus-input", "corpus", "node-clean-text", "corpus_in")
+    _connect(workflow, "node-clean-text", "clean_corpus", "node-normalize-text", "corpus_in")
+    _connect(workflow, "node-normalize-text", "normalized_corpus", "node-tokenize", "corpus_in")
+    _connect(workflow, "node-tokenize", "token_corpus", "node-apply-dictionary-rules", "token_corpus_in")
+    _connect(workflow, "node-dictionary-input", "dictionary_set", "node-apply-dictionary-rules", "dictionary_set_in")
+    _connect(workflow, "node-apply-dictionary-rules", "token_corpus", "node-filter-terms", "token_corpus_in")
+    for target in ["node-term-document-analysis", "node-term-year-analysis", "node-feature-term-selection", "node-keyword-extraction", "node-topic-modeling", "node-document-clustering"]:
+        _connect(workflow, "node-filter-terms", "filtered_token_corpus", target, "token_corpus_in")
+    _connect(workflow, "node-feature-term-selection", "feature_term_table", "node-keyword-clustering", "feature_term_table_in")
+    _connect(workflow, "node-keyword-extraction", "keyword_table", "node-save-xlsx", "table_in")
+    _connect(workflow, "node-term-document-analysis", "term_document_table", "node-save-xlsx", "table_in")
+    _connect(workflow, "node-topic-modeling", "document_topic_table", "node-save-xlsx", "table_in")
+    _connect(workflow, "node-term-year-analysis", "term_year_table", "node-save-png", "render_in")
+    _connect(workflow, "node-keyword-clustering", "keyword_cluster_table", "node-save-png", "render_in")
+    _connect(workflow, "node-document-clustering", "document_cluster_table", "node-save-png", "render_in")
+    _connect(workflow, "node-topic-modeling", "topic_summary_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-keyword-extraction", "keyword_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-keyword-clustering", "keyword_cluster_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-term-year-analysis", "term_year_table", "node-save-html-report", "report_in")
+
+
+def _configure_institution_topic_workflow(workflow: dict[str, Any]) -> None:
+    workflow["source"] = "manual"
+    workflow["name"] = "机构主题与技术方向工作流"
+    _keep_only_nodes(
+        workflow,
+        {
+            "corpus_input",
+            "dictionary_input",
+            "clean_text",
+            "normalize_text",
+            "tokenize",
+            "apply_dictionary_rules",
+            "filter_terms",
+            "term_year_analysis",
+            "feature_term_selection",
+            "keyword_extraction",
+            "institution_keyword_analysis",
+            "institution_topic_analysis",
+            "save_xlsx",
+            "save_png",
+            "save_html_report",
+        },
+    )
+    workflow["nodes"].extend(
+        [
+            _new_registry_node("filter_by_metadata", "node-filter-by-metadata", {"field": "language", "operator": "in", "values_text": "en\nzh"}, x=420, y=330),
+            _new_registry_node("bucket_by_time", "node-bucket-by-time", {"field": "year", "granularity": "year"}, x=420, y=620),
+            _new_registry_node("keyword_clustering", "node-keyword-clustering-extra", {"keyword_cluster_k": 5}, x=3000, y=860),
+        ]
+    )
+    workflow["edges"] = []
+    _add_note_and_group(workflow, group_title="示例 04", note_text="先过滤元数据和时间桶，再分析机构关键词与机构主题。")
+    _apply_node_config(workflow, "feature_term_selection", {"feature_term_count": 100})
+    _apply_node_config(workflow, "keyword_extraction", {"top_k_per_doc": 8, "top_k_project": 60})
+    _apply_node_config(workflow, "institution_topic_analysis", {"topic_model_k": 5})
+    _connect(workflow, "node-corpus-input", "corpus", "node-filter-by-metadata", "corpus_in")
+    _connect(workflow, "node-filter-by-metadata", "filtered_corpus", "node-bucket-by-time", "corpus_in")
+    _connect(workflow, "node-filter-by-metadata", "filtered_corpus", "node-clean-text", "corpus_in")
+    _connect(workflow, "node-clean-text", "clean_corpus", "node-normalize-text", "corpus_in")
+    _connect(workflow, "node-normalize-text", "normalized_corpus", "node-tokenize", "corpus_in")
+    _connect(workflow, "node-tokenize", "token_corpus", "node-apply-dictionary-rules", "token_corpus_in")
+    _connect(workflow, "node-dictionary-input", "dictionary_set", "node-apply-dictionary-rules", "dictionary_set_in")
+    _connect(workflow, "node-apply-dictionary-rules", "token_corpus", "node-filter-terms", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-term-year-analysis", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-feature-term-selection", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-keyword-extraction", "token_corpus_in")
+    _connect(workflow, "node-feature-term-selection", "feature_term_table", "node-keyword-clustering-extra", "feature_term_table_in")
+    _connect(workflow, "node-keyword-extraction", "keyword_table", "node-institution-keyword-analysis", "keyword_table_in")
+    _connect(workflow, "node-keyword-clustering-extra", "keyword_cluster_table", "node-institution-topic-analysis", "keyword_cluster_table_in")
+    _connect(workflow, "node-institution-keyword-analysis", "institution_keyword_table", "node-save-xlsx", "table_in")
+    _connect(workflow, "node-institution-topic-analysis", "institution_topic_table", "node-save-xlsx", "table_in")
+    _connect(workflow, "node-term-year-analysis", "term_year_table", "node-save-png", "render_in")
+    _connect(workflow, "node-institution-topic-analysis", "institution_topic_table", "node-save-png", "render_in")
+    _connect(workflow, "node-bucket-by-time", "time_bucket_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-institution-keyword-analysis", "institution_keyword_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-institution-topic-analysis", "institution_topic_table", "node-save-html-report", "report_in")
+
+
+def _configure_review_experiment_incremental_workflow(workflow: dict[str, Any]) -> None:
+    workflow["source"] = "manual"
+    workflow["name"] = "复核实验与增量运行工作流"
+    _keep_only_nodes(
+        workflow,
+        {
+            "corpus_input",
+            "dictionary_input",
+            "clean_text",
+            "normalize_text",
+            "tokenize",
+            "apply_dictionary_rules",
+            "filter_terms",
+            "keyword_extraction",
+            "keyword_clustering",
+            "save_html_report",
+        },
+    )
+    workflow["nodes"].extend(
+        [
+            _new_registry_node("overlay_dictionary_rules", "node-overlay-dictionary-rules", {"overlay_rows_text": "standard_terms|复核|复核|true"}, x=760, y=80),
+            _new_registry_node("feature_term_selection", "node-feature-term-selection-extra", {"feature_term_count": 80}, x=2860, y=80),
+        ]
+    )
+    workflow["edges"] = []
+    _add_note_and_group(workflow, group_title="示例 05", note_text="这个流程把规则叠加、关键词聚类和后续复核/实验入口放在一起。")
+    _apply_node_config(workflow, "keyword_extraction", {"top_k_per_doc": 6, "top_k_project": 60})
+    _connect(workflow, "node-corpus-input", "corpus", "node-clean-text", "corpus_in")
+    _connect(workflow, "node-clean-text", "clean_corpus", "node-normalize-text", "corpus_in")
+    _connect(workflow, "node-normalize-text", "normalized_corpus", "node-tokenize", "corpus_in")
+    _connect(workflow, "node-tokenize", "token_corpus", "node-apply-dictionary-rules", "token_corpus_in")
+    _connect(workflow, "node-dictionary-input", "dictionary_set", "node-overlay-dictionary-rules", "dictionary_set_in")
+    _connect(workflow, "node-overlay-dictionary-rules", "dictionary_set", "node-apply-dictionary-rules", "dictionary_set_in")
+    _connect(workflow, "node-apply-dictionary-rules", "token_corpus", "node-filter-terms", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-feature-term-selection-extra", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-keyword-extraction", "token_corpus_in")
+    _connect(workflow, "node-feature-term-selection-extra", "feature_term_table", "node-keyword-clustering", "feature_term_table_in")
+    _connect(workflow, "node-keyword-extraction", "keyword_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-keyword-clustering", "keyword_cluster_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-apply-dictionary-rules", "audit_table", "node-save-html-report", "report_in")
+
+
+def _configure_multisource_merge_sampling_workflow(workflow: dict[str, Any], spec: dict[str, Any]) -> None:
+    workflow["source"] = "manual"
+    workflow["name"] = "多来源合并与抽样工作流"
+    _keep_only_nodes(
+        workflow,
+        {
+            "corpus_input",
+            "dictionary_input",
+            "clean_text",
+            "normalize_text",
+            "tokenize",
+            "apply_dictionary_rules",
+            "filter_terms",
+            "frequency_statistics",
+            "cooccurrence_analysis",
+            "save_csv",
+            "save_png",
+            "save_html_report",
+        },
+    )
+    filter_nodes = []
+    positions = [(420, 120), (420, 340), (420, 560), (420, 780)]
+    for index, (source, (x, y)) in enumerate(zip(spec["sources"], positions, strict=True), start=1):
+        filter_nodes.append(
+            _new_registry_node(
+                "filter_by_metadata",
+                f"node-filter-source-{index}",
+                {"field": "_source_file_name", "operator": "in", "values_text": str(source["filename"])},
+                x=x,
+                y=y,
+            )
+        )
+    workflow["nodes"].extend(
+        filter_nodes
+        + [
+            _new_registry_node("merge_corpora", "node-merge-corpora", {"strategy": "append"}, x=820, y=420),
+            _new_registry_node("deduplicate_documents", "node-deduplicate-documents", {"dedupe_keys_text": "title,language", "strategy": "first"}, x=1160, y=420),
+            _new_registry_node("sample_corpus", "node-sample-corpus", {"sample_mode": "sample_ratio", "sample_ratio": 0.8, "sample_size": 100, "seed": 42}, x=1520, y=420),
+        ]
+    )
+    workflow["edges"] = []
+    _add_note_and_group(workflow, group_title="示例 06", note_text="从多个 seed 文件筛出子集后合并、去重、抽样，再做统计和导出。")
+    _apply_node_config(workflow, "cooccurrence_analysis", {"cooccurrence_window": 5, "min_cooccurrence": 2})
+    for index in range(1, len(spec["sources"]) + 1):
+        _connect(workflow, "node-corpus-input", "corpus", f"node-filter-source-{index}", "corpus_in")
+        _connect(workflow, f"node-filter-source-{index}", "filtered_corpus", "node-merge-corpora", "corpus_in")
+    _connect(workflow, "node-merge-corpora", "corpus", "node-deduplicate-documents", "corpus_in")
+    _connect(workflow, "node-deduplicate-documents", "deduped_corpus", "node-sample-corpus", "corpus_in")
+    _connect(workflow, "node-sample-corpus", "sampled_corpus", "node-clean-text", "corpus_in")
+    _connect(workflow, "node-clean-text", "clean_corpus", "node-normalize-text", "corpus_in")
+    _connect(workflow, "node-normalize-text", "normalized_corpus", "node-tokenize", "corpus_in")
+    _connect(workflow, "node-tokenize", "token_corpus", "node-apply-dictionary-rules", "token_corpus_in")
+    _connect(workflow, "node-dictionary-input", "dictionary_set", "node-apply-dictionary-rules", "dictionary_set_in")
+    _connect(workflow, "node-apply-dictionary-rules", "token_corpus", "node-filter-terms", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-frequency-statistics", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-cooccurrence-analysis", "token_corpus_in")
+    _connect(workflow, "node-frequency-statistics", "frequency_table", "node-save-csv", "table_in")
+    _connect(workflow, "node-cooccurrence-analysis", "cooccurrence_table", "node-save-csv", "table_in")
+    _connect(workflow, "node-cooccurrence-analysis", "cooccurrence_table", "node-save-png", "render_in")
+    _connect(workflow, "node-frequency-statistics", "frequency_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-cooccurrence-analysis", "cooccurrence_table", "node-save-html-report", "report_in")
+
+
+def _configure_group_compare_keyness_workflow(workflow: dict[str, Any]) -> None:
+    workflow["source"] = "manual"
+    workflow["name"] = "分组比较与关键性分析工作流"
+    _keep_only_nodes(
+        workflow,
+        {
+            "corpus_input",
+            "dictionary_input",
+            "clean_text",
+            "normalize_text",
+            "tokenize",
+            "apply_dictionary_rules",
+            "filter_terms",
+            "frequency_statistics",
+            "term_year_analysis",
+            "save_csv",
+            "save_png",
+            "save_html_report",
+        },
+    )
+    workflow["nodes"].extend(
+        [
+            _new_registry_node("filter_by_metadata", "node-filter-by-metadata", {"field": "language", "operator": "in", "values_text": "en\nzh"}, x=420, y=330),
+            _new_registry_node("bucket_by_time", "node-bucket-by-time", {"field": "year", "granularity": "year"}, x=420, y=620),
+            _new_registry_node("group_compare", "node-group-compare", {"group_field": "language", "baseline_group": "en", "comparison_groups_text": "zh", "min_frequency": 2}, x=2860, y=600),
+            _new_registry_node("keyness_analysis", "node-keyness-analysis", {"group_field": "language", "baseline_group": "en", "comparison_group": "zh", "min_frequency": 2}, x=3240, y=600),
+        ]
+    )
+    workflow["edges"] = []
+    _add_note_and_group(workflow, group_title="示例 07", note_text="先固定分组条件，再比较不同组的高频词、时间趋势和关键性。")
+    _connect(workflow, "node-corpus-input", "corpus", "node-filter-by-metadata", "corpus_in")
+    _connect(workflow, "node-filter-by-metadata", "filtered_corpus", "node-bucket-by-time", "corpus_in")
+    _connect(workflow, "node-filter-by-metadata", "filtered_corpus", "node-clean-text", "corpus_in")
+    _connect(workflow, "node-clean-text", "clean_corpus", "node-normalize-text", "corpus_in")
+    _connect(workflow, "node-normalize-text", "normalized_corpus", "node-tokenize", "corpus_in")
+    _connect(workflow, "node-tokenize", "token_corpus", "node-apply-dictionary-rules", "token_corpus_in")
+    _connect(workflow, "node-dictionary-input", "dictionary_set", "node-apply-dictionary-rules", "dictionary_set_in")
+    _connect(workflow, "node-apply-dictionary-rules", "token_corpus", "node-filter-terms", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-frequency-statistics", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-term-year-analysis", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-group-compare", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-keyness-analysis", "token_corpus_in")
+    _connect(workflow, "node-group-compare", "group_metric_table", "node-save-csv", "table_in")
+    _connect(workflow, "node-keyness-analysis", "keyness_table", "node-save-csv", "table_in")
+    _connect(workflow, "node-term-year-analysis", "term_year_table", "node-save-png", "render_in")
+    _connect(workflow, "node-keyness-analysis", "keyness_table", "node-save-png", "render_in")
+    _connect(workflow, "node-bucket-by-time", "time_bucket_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-frequency-statistics", "frequency_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-group-compare", "group_metric_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-keyness-analysis", "keyness_table", "node-save-html-report", "report_in")
+
+
+def _configure_split_evaluate_join_workflow(workflow: dict[str, Any]) -> None:
+    workflow["source"] = "manual"
+    workflow["name"] = "切分评估与结果拼接工作流"
+    _keep_only_nodes(
+        workflow,
+        {
+            "corpus_input",
+            "dictionary_input",
+            "clean_text",
+            "normalize_text",
+            "tokenize",
+            "apply_dictionary_rules",
+            "filter_terms",
+            "document_clustering",
+            "save_csv",
+            "save_xlsx",
+            "save_png",
+            "save_html_report",
+        },
+    )
+    workflow["nodes"].extend(
+        [
+            _new_registry_node("split_corpus", "node-split-corpus", {"split_strategy": "ratio", "splits_text": "train:0.7\ntest:0.3", "seed": 42}, x=420, y=620),
+            _new_registry_node("topic_modeling", "node-topic-modeling", {"topic_model_k": 5, "top_terms_per_topic": 6}, x=2860, y=80),
+            _new_registry_node("cluster_evaluation", "node-cluster-evaluation", {}, x=3240, y=340),
+            _new_registry_node("join_results", "node-join-results", {"join_keys_text": "doc_id", "join_type": "left"}, x=3240, y=620),
+        ]
+    )
+    workflow["edges"] = []
+    _add_note_and_group(workflow, group_title="示例 08", note_text="切分语料后，同时看主题结果、聚类评估，再把表格拼回一起导出。")
+    _apply_node_config(workflow, "document_clustering", {"document_cluster_k": 5})
+    _connect(workflow, "node-corpus-input", "corpus", "node-split-corpus", "corpus_in")
+    _connect(workflow, "node-corpus-input", "corpus", "node-clean-text", "corpus_in")
+    _connect(workflow, "node-clean-text", "clean_corpus", "node-normalize-text", "corpus_in")
+    _connect(workflow, "node-normalize-text", "normalized_corpus", "node-tokenize", "corpus_in")
+    _connect(workflow, "node-tokenize", "token_corpus", "node-apply-dictionary-rules", "token_corpus_in")
+    _connect(workflow, "node-dictionary-input", "dictionary_set", "node-apply-dictionary-rules", "dictionary_set_in")
+    _connect(workflow, "node-apply-dictionary-rules", "token_corpus", "node-filter-terms", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-topic-modeling", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-document-clustering", "token_corpus_in")
+    _connect(workflow, "node-document-clustering", "document_cluster_table", "node-cluster-evaluation", "document_cluster_table_in")
+    _connect(workflow, "node-topic-modeling", "document_topic_table", "node-join-results", "left_table_in")
+    _connect(workflow, "node-document-clustering", "document_cluster_table", "node-join-results", "right_table_in")
+    _connect(workflow, "node-join-results", "joined_table", "node-save-csv", "table_in")
+    _connect(workflow, "node-cluster-evaluation", "cluster_evaluation_table", "node-save-xlsx", "table_in")
+    _connect(workflow, "node-join-results", "joined_table", "node-save-xlsx", "table_in")
+    _connect(workflow, "node-topic-modeling", "topic_summary_table", "node-save-png", "render_in")
+    _connect(workflow, "node-split-corpus", "split_assignment_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-cluster-evaluation", "cluster_evaluation_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-join-results", "joined_table", "node-save-html-report", "report_in")
+
+
+def _configure_control_gate_workflow(workflow: dict[str, Any]) -> None:
+    workflow["source"] = "manual"
+    workflow["name"] = "条件路由与人工门禁工作流"
+    _keep_only_nodes(
+        workflow,
+        {
+            "corpus_input",
+            "dictionary_input",
+            "clean_text",
+            "normalize_text",
+            "tokenize",
+            "apply_dictionary_rules",
+            "filter_terms",
+            "frequency_statistics",
+            "save_html_report",
+        },
+    )
+    workflow["nodes"].extend(
+        [
+            _new_registry_node("conditional_router", "node-conditional-router", {"source_kind": "table_field", "field": "document_count", "operator": "gte", "values_text": "1"}, x=3240, y=80),
+            _new_registry_node("result_gate", "node-result-gate", {"metric_field": "matched_count", "metric_name": "matched_count", "operator": "gte", "threshold": 1}, x=3620, y=80),
+            _new_registry_node("manual_review_gate", "node-manual-review-gate", {"review_id": "sample-09-review", "required_status": "resolved", "on_missing": "pass"}, x=4000, y=80),
+        ]
+    )
+    workflow["edges"] = []
+    _add_note_and_group(workflow, group_title="示例 09", note_text="先路由，再按指标门禁，最后把结果交给人工复核门禁。")
+    _connect(workflow, "node-corpus-input", "corpus", "node-clean-text", "corpus_in")
+    _connect(workflow, "node-clean-text", "clean_corpus", "node-normalize-text", "corpus_in")
+    _connect(workflow, "node-normalize-text", "normalized_corpus", "node-tokenize", "corpus_in")
+    _connect(workflow, "node-tokenize", "token_corpus", "node-apply-dictionary-rules", "token_corpus_in")
+    _connect(workflow, "node-dictionary-input", "dictionary_set", "node-apply-dictionary-rules", "dictionary_set_in")
+    _connect(workflow, "node-apply-dictionary-rules", "token_corpus", "node-filter-terms", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-frequency-statistics", "token_corpus_in")
+    _connect(workflow, "node-frequency-statistics", "frequency_table", "node-conditional-router", "table_in")
+    _connect(workflow, "node-conditional-router", "route_summary", "node-result-gate", "metric_table_in")
+    _connect(workflow, "node-conditional-router", "matched_table", "node-result-gate", "payload_in")
+    _connect(workflow, "node-result-gate", "passed_table", "node-manual-review-gate", "payload_in")
+    _connect(workflow, "node-conditional-router", "route_summary", "node-save-html-report", "report_in")
+    _connect(workflow, "node-result-gate", "gate_summary", "node-save-html-report", "report_in")
+    _connect(workflow, "node-manual-review-gate", "review_gate_summary", "node-save-html-report", "report_in")
+
+
+def _configure_workflow_for_spec(manifest: dict[str, Any], spec: dict[str, Any]) -> None:
+    workflow = manifest["workflow_definitions"][0]
+    slug = str(spec["slug"])
+    if slug == "sample-01-basic-preprocessing":
+        _configure_basic_preprocessing_workflow(workflow)
+    elif slug == "sample-02-dictionary-frequency":
+        _configure_dictionary_frequency_workflow(workflow)
+    elif slug == "sample-03-academic-keywords-topics":
+        _configure_academic_keyword_topic_workflow(workflow)
+    elif slug == "sample-04-institution-topics":
+        _configure_institution_topic_workflow(workflow)
+    elif slug == "sample-05-review-experiment-incremental":
+        _configure_review_experiment_incremental_workflow(workflow)
+    elif slug == "sample-06-multisource-merge-sampling":
+        _configure_multisource_merge_sampling_workflow(workflow, spec)
+    elif slug == "sample-07-group-compare-keyness":
+        _configure_group_compare_keyness_workflow(workflow)
+    elif slug == "sample-08-split-evaluate-join":
+        _configure_split_evaluate_join_workflow(workflow)
+    elif slug == "sample-09-conditional-routing":
+        _configure_control_gate_workflow(workflow)
+    else:
+        raise ValueError(f"Unknown sample project workflow slug: {slug}")
+
+    for node in workflow.get("nodes", []):
         patch = dict(spec.get("node_config_overrides") or {}).get(str(node.get("node_type")))
         if patch:
             node["config"] = {**dict(node.get("config") or {}), **patch}
@@ -481,6 +1058,9 @@ def create_builtin_sample_projects() -> list[tuple[Path, dict[str, Any]]]:
             "goal": spec["goal"],
             "difficulty": spec["difficulty"],
             "workflow_name": spec["workflow_name"],
+            "guided_steps": deepcopy(spec["guided_steps"]),
+            "covered_nodes": deepcopy(spec["covered_nodes"]),
+            "covered_settings": deepcopy(spec["covered_settings"]),
             "public_data_only": True,
             "language_balance": deepcopy(spec["language_balance"]),
             "source_datasets": deepcopy(spec["source_datasets"]),
@@ -488,7 +1068,7 @@ def create_builtin_sample_projects() -> list[tuple[Path, dict[str, Any]]]:
         manifest["review_tasks"] = deepcopy(spec.get("review_tasks") or [])
         manifest["experiment_specs"] = deepcopy(spec.get("experiment_specs") or [])
         _append_dictionary_terms(manifest, deepcopy(spec.get("dictionary_terms") or {}))
-        _configure_workflow_basics(manifest, spec)
+        _configure_workflow_for_spec(manifest, spec)
 
         _written_paths, corpus, source_files = _materialize_sample_sources(project_dir, spec, row_count)
         manifest["source_files"] = source_files
