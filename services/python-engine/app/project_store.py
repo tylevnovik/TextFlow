@@ -703,6 +703,9 @@ def write_project_payload(
         if key != "dictionary_set"
     }
     storage_manifest["dictionary_set"] = serialize_dictionary_set_for_storage(manifest.get("dictionary_set"))
+    storage_manifest["incremental_state"] = deepcopy(
+        manifest.get("incremental_state") if isinstance(manifest.get("incremental_state"), dict) else {}
+    )
     storage_manifest["document_count"] = len(corpus)
     storage_manifest["run_count"] = len(storage_manifest.get("run_history", []))
     normalized_dirty = {str(item) for item in dirty_sections} if dirty_sections is not None else None
@@ -919,6 +922,10 @@ def normalize_run_record(
         "variant_label",
         "variant_index",
         "variant_overrides",
+        "run_mode",
+        "incremental_scope",
+        "dirty_node_ids",
+        "invalidated_artifact_count",
     ]
     return {
         key: normalized[key]
@@ -990,6 +997,9 @@ def normalize_project_manifest(
     normalized["review_tasks"] = normalize_manifest_record_list(payload.get("review_tasks"))
     normalized["experiment_specs"] = normalize_manifest_record_list(payload.get("experiment_specs"))
     normalized["shared_resource_refs"] = normalize_manifest_record_list(payload.get("shared_resource_refs"))
+    normalized["incremental_state"] = deepcopy(
+        payload.get("incremental_state") if isinstance(payload.get("incremental_state"), dict) else {}
+    )
     refresh_manifest_paths(normalized, project_dir)
     return normalized
 

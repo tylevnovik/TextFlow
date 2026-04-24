@@ -25,6 +25,14 @@ from .defaults import (
     workflow_reachable_node_ids,
     workflow_payload_hash,
 )
+from .incremental_runtime import (
+    build_dependency_index,
+    compute_dirty_node_ids,
+    detect_changed_doc_ids,
+    invalidate_artifacts_for_dirty_nodes,
+    select_incremental_scope,
+    update_incremental_state,
+)
 from .node_registry import NodeRegistry, build_node_registry
 from .reporting import result_bundle_table_entries, write_run_outputs
 from .runtime_support import (
@@ -889,6 +897,7 @@ def _prepare_node_execution(
     incoming_by_port: dict[tuple[str, str], list[dict[str, Any]]],
     definition_map: dict[str, dict[str, Any]],
     registry: NodeRegistry,
+    dirty_node_ids: set[str] | None = None,
 ) -> PreparedNodeExecution:
     node_id = str(node.get("node_id") or "")
     node_type = str(node.get("node_type") or "")
@@ -924,7 +933,7 @@ def _prepare_node_execution(
 
     cacheable = bool(runtime.get("cacheable", False))
     cache_key = _node_cache_key(manifest, workflow_definition, node, executor_id, input_hashes) if cacheable else None
-    cached = _read_cache_payload(project_dir, node_id, cache_key) if cache_key else None
+    cached = None if node_id in (dirty_node_ids or set()) else (_read_cache_payload(project_dir, node_id, cache_key) if cache_key else None)
     return PreparedNodeExecution(
         node=node,
         node_index=node_index,
@@ -1083,8 +1092,21 @@ def run_project_workflow_native(
     manifest: dict[str, Any],
     corpus: list[dict[str, Any]],
     progress_callback: Any = None,
+    run_options: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    full_corpus = _copy_corpus_rows(corpus)
+    project_corpus = _copy_corpus_rows(corpus)
+    run_options_payload = dict(run_options or {})
+    if str(run_options_payload.get("run_mode") or "").lower() == "incremental" and not run_options_payload.get("changed_doc_ids"):
+        detected_doc_ids = detect_changed_doc_ids(manifest, project_corpus)
+        if detected_doc_ids:
+            run_options_payload["changed_doc_ids"] = detected_doc_ids
+    incremental_scope = select_incremental_scope(manifest, run_options_payload)
+    scope_doc_ids = set(incremental_scope.get("scope_doc_ids", []))
+    full_corpus = [
+        item
+        for item in project_corpus
+        if not scope_doc_ids or str(item.get("doc_id") or item.get("id") or "") in scope_doc_ids
+    ]
     logs: list[dict[str, Any]] = []
     warnings: list[str] = []
     errors: list[str] = []
@@ -1119,6 +1141,12 @@ def run_project_workflow_native(
         if node.get("node_id")
     }
     export_selection = _export_selection_from_active_graph(selected_node_lookup, active_edges, definition_map)
+    dependency_index = build_dependency_index(active_workflow)
+    dirty_node_ids = (
+        compute_dirty_node_ids(active_workflow, incremental_scope, dependency_index)
+        if incremental_scope.get("run_mode") == "incremental"
+        else set()
+    )
 
     preliminary_scope = describe_run_scope(runtime_profile["run_scope"], len(full_corpus), len(full_corpus))
     run_record = build_run_record(
@@ -1133,6 +1161,9 @@ def run_project_workflow_native(
         describe_output_bundle(runtime_profile.get("export") or {}),
         active_workflow,
     )
+    run_record["run_mode"] = incremental_scope["run_mode"]
+    run_record["incremental_scope"] = incremental_scope
+    run_record["dirty_node_ids"] = sorted(dirty_node_ids)
     total_nodes = max(len(execution_order), 1)
     context = WorkflowExecutionContext(
         project_dir=project_dir,
@@ -1180,6 +1211,7 @@ def run_project_workflow_native(
                     incoming_by_port=incoming_by_port,
                     definition_map=definition_map,
                     registry=registry,
+                    dirty_node_ids=dirty_node_ids,
                 )
                 for node in batch
             ]
@@ -1308,6 +1340,11 @@ def run_project_workflow_native(
             )
         )
     run_record["artifacts"] = [build_artifact_handle(record) for record in run_artifact_records]
+    run_record["invalidated_artifact_count"] = invalidate_artifacts_for_dirty_nodes(
+        manifest,
+        dirty_node_ids,
+        current_run_id=run_record["run_id"],
+    )
     existing_artifacts = [
         deepcopy(item)
         for item in manifest.get("artifact_records", [])
@@ -1317,6 +1354,7 @@ def run_project_workflow_native(
 
     manifest["results"] = context.result_bundle
     manifest["updated_at"] = utc_now_iso()
+    update_incremental_state(manifest, project_corpus, run_record, dirty_node_ids, incremental_scope)
     manifest.setdefault("run_history", []).append(run_record)
     context.current_node_id = None
     context.emit_runtime_progress(
@@ -1328,4 +1366,4 @@ def run_project_workflow_native(
         full_node_state_sync=True,
     )
     notify_progress(progress_callback, 1.0, "本次原生 DAG 运行已完成")
-    return manifest, full_corpus, run_record
+    return manifest, project_corpus, run_record

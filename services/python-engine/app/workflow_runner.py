@@ -58,8 +58,9 @@ def run_project_workflow_bridge(
     manifest: dict[str, Any],
     corpus: list[dict[str, Any]],
     progress_callback: Any = None,
+    run_options: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    return run_project_workflow_native(project_dir, manifest, corpus, progress_callback)
+    return run_project_workflow_native(project_dir, manifest, corpus, progress_callback, run_options=run_options)
 
 
 def run_project_workflow(
@@ -67,8 +68,9 @@ def run_project_workflow(
     manifest: dict[str, Any],
     corpus: list[dict[str, Any]],
     progress_callback: Any = None,
+    run_options: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    return run_project_workflow_native(project_dir, manifest, corpus, progress_callback)
+    return run_project_workflow_native(project_dir, manifest, corpus, progress_callback, run_options=run_options)
 
 
 def load_workflow_artifact_preview(project_dir: Path, artifact_id: str, limit: int = 50) -> dict[str, Any]:

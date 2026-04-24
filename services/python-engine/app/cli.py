@@ -334,11 +334,25 @@ def action_run_workflow(payload: dict[str, Any], progress_callback: ProgressCall
         notify(progress_callback, 0.12, "当前项目为空，正在载入示例语料")
         corpus, source_files, _issues = import_files(ensure_sample_files(), manifest["import_template"], project_dir=project_dir)
         manifest["source_files"] = source_files
+    run_options = {
+        key: payload[key]
+        for key in (
+            "run_mode",
+            "changed_doc_ids",
+            "changed_dictionary_tables",
+            "process_changed_only",
+            "changed_docs_only",
+            "incremental_scope",
+            "source_node_ids",
+        )
+        if key in payload
+    }
     manifest, corpus, run_record = run_project_workflow(
         project_dir,
         manifest,
         corpus,
         progress_callback=progress_callback,
+        run_options=run_options,
     )
     notify(
         progress_callback,

@@ -19,6 +19,7 @@ from app.artifact_store import load_artifact_preview
 from app.builtin_dictionary_data import builtin_dictionary_table_specs
 from app.dag_runtime import _export_selection_from_active_graph, dag_parallel_worker_count
 from app.defaults import default_workflow_definition, empty_result_bundle, workflow_payload_hash
+from app.incremental_runtime import select_incremental_scope
 from app.node_registry import build_node_registry
 from app.project_store import create_project, load_project, normalize_dictionary_set_record, save_project
 from app.reporting import build_html_report
@@ -1448,3 +1449,36 @@ def test_artifact_preview_loads_without_materializing_full_payload(isolated_work
 
     assert "rows" in preview
     assert preview["rows"]
+
+
+def test_incremental_scope_can_limit_workflow_to_changed_documents(isolated_workspace):
+    project_name = f"pytest-{uuid4().hex[:8]}"
+    project_dir, manifest, corpus = _create_test_project(project_name, "incremental scope test")
+    workflow = manifest["workflow_definitions"][0]
+    _bypass_analysis_except(workflow, "term_document_analysis")
+    _set_export_nodes(workflow, csv_enabled=False, xlsx_enabled=False, png_enabled=False, html_enabled=False)
+    new_doc = _fixture_document(
+        "DOC-004",
+        title="新增文档",
+        raw_text="新增文档只用于增量处理验证。",
+        year=2026,
+        source="manual",
+        institution="测试机构",
+        source_profile="generic",
+    )
+    corpus.append(new_doc)
+    scope = select_incremental_scope(
+        manifest,
+        {"run_mode": "incremental", "changed_doc_ids": ["DOC-004"], "process_changed_only": True},
+    )
+
+    manifest, _processed_corpus, run_record = run_project_workflow(
+        project_dir,
+        manifest,
+        corpus,
+        run_options=scope,
+    )
+
+    assert run_record["run_mode"] == "incremental"
+    assert run_record["processed_document_count"] == 1
+    assert {row["doc_id"] for row in manifest["results"]["term_document_table"]} == {"DOC-004"}
