@@ -44,83 +44,22 @@ foreach ($item in $Language) {
   $languageList += ($item -split "," | Where-Object { $_ } | ForEach-Object { $_.Trim() })
 }
 
-$payload = @{
-  datasets = $datasetList
-  languages = $languageList
-  limit_per_language = $LimitPerLanguage
-} | ConvertTo-Json -Compress
+$args = @(
+  "-m",
+  "app.public_sample_data_builder",
+  "--limit-per-language",
+  "$LimitPerLanguage"
+)
 
-$script = @'
-from __future__ import annotations
-
-import gzip
-import hashlib
-import json
-import os
-import sys
-from collections import Counter
-from datetime import datetime, timezone
-
-from app.sample_dataset_cache import normalized_cache_path, sample_data_cache_root
-from app.sample_dataset_sources import PUBLIC_SAMPLE_DATA_SOURCE_BY_ID
-
-payload = json.loads(os.environ["TEXTFLOW_PUBLIC_SAMPLE_PAYLOAD"])
-datasets = payload["datasets"]
-languages = set(payload["languages"])
-limit_per_language = int(payload["limit_per_language"])
-
-cache_root = sample_data_cache_root()
-manifest = {
-    "created_at": datetime.now(timezone.utc).isoformat(),
-    "limit_per_language": limit_per_language,
-    "datasets": [],
+foreach ($datasetId in $datasetList) {
+  $args += @("--dataset", $datasetId)
 }
 
-for dataset_id in datasets:
-    source = PUBLIC_SAMPLE_DATA_SOURCE_BY_ID.get(dataset_id)
-    if source is None:
-        raise ValueError(f"Unknown public dataset id: {dataset_id}")
+foreach ($languageId in $languageList) {
+  $args += @("--language", $languageId)
+}
 
-    cache_path = normalized_cache_path(cache_root, dataset_id)
-    if not cache_path.exists():
-        raise FileNotFoundError(
-            f"Normalized cache not found for {dataset_id}: {cache_path}. "
-            "Create the real public-data subset before packaging."
-        )
-
-    counts = Counter()
-    with gzip.open(cache_path, "rt", encoding="utf-8") as handle:
-        for line in handle:
-            row = json.loads(line)
-            language = str(row.get("language") or "")
-            if not languages or language in languages:
-                counts[language] += 1
-
-    digest = hashlib.sha256(cache_path.read_bytes()).hexdigest()
-    manifest["datasets"].append(
-        {
-            "dataset_id": dataset_id,
-            "name": source.name,
-            "homepage_url": source.homepage_url,
-            "download_url": source.download_url,
-            "license_name": source.license_name,
-            "public_access_note": source.public_access_note,
-            "redistribution_note": source.redistribution_note,
-            "row_count_by_language": {language: counts.get(language, 0) for language in sorted(counts)},
-            "sha256": digest,
-            "cache_file": cache_path.name,
-        }
-    )
-
-manifest_path = cache_root / "manifest.json"
-manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-print(manifest_path)
-'@
-
-$env:TEXTFLOW_PUBLIC_SAMPLE_PAYLOAD = $payload
-$script | & $venvPython -
-$exitCode = $LASTEXITCODE
-Remove-Item Env:TEXTFLOW_PUBLIC_SAMPLE_PAYLOAD -ErrorAction SilentlyContinue
-if ($exitCode -ne 0) {
-  throw "Failed to prepare public sample data manifest."
+& $venvPython @args
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to prepare real public sample data cache."
 }

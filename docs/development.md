@@ -74,6 +74,19 @@ $env:TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT = "120"
 
 ## 构建
 
+### 刷新官方样例公开数据缓存
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\fetch-public-sample-data.ps1 -All
+```
+
+说明：
+
+- 脚本会优先复用 `services/python-engine/app/public_sample_cache/` 中已经满足条件的真实公开数据缓存。
+- 如果 `services/python-engine/.cache/public-source-raw/` 下已经放好了官方原始文件，builder 会优先从这些本地文件生成缓存，避免重复联网下载。
+- 如果缓存缺失、版本过旧，或不满足每种语言至少 `10,000` 行的要求，脚本会从官方 Wikimedia、UN 和 OpenAlex 源重新抓取并规范化数据。
+- 产出的 `manifest.json` 会记录缓存版本、数据来源、每种语言的行数和打包用校验摘要。
+
 ### 仅重建 Python sidecar
 
 ```powershell

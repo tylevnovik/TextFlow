@@ -14,7 +14,7 @@ TextFlow 在首次打开空工作区时，会由 Python sidecar 自动创建 9 �
 1. `services/python-engine/app/sample_dataset_sources.py` 维护公开数据源注册表，记录每个数据集的主页、下载入口、许可证、公开使用说明和再分发备注。
 2. 官方样例使用归一化后的公开数据缓存：默认位于 `services/python-engine/app/public_sample_cache/`，也可以通过 `TEXTFLOW_PUBLIC_SAMPLE_CACHE_ROOT` 指向外部缓存目录。
 3. `services/python-engine/app/sample_dataset_cache.py` 从缓存中读取归一化行，按样例里声明的来源比例分配英中配额，再交错写入项目语料，确保总量和语言平衡都符合要求。
-4. `scripts/fetch-public-sample-data.ps1 -All` 会校验打包时使用的缓存并生成 `manifest.json`；`scripts/build-python-sidecar.ps1` 会把这份缓存一并打进 sidecar。
+4. `scripts/fetch-public-sample-data.ps1 -All` 会在缓存缺失或版本过旧时，从官方 Wikimedia / UN / OpenAlex 入口抓取真实公开行并重建 `manifest.json`；`scripts/build-python-sidecar.ps1` 会把这份离线缓存一并打进 sidecar。
 5. `normalize_public_sample_row(...)` 会把 `language`、`source_dataset_id`、`source_url`、`source_license` 和可用的 `source_record_id` 写进规范化语料，样例项目再把这些归因信息保留下来。
 
 ## `language` 字段从哪里来
