@@ -276,6 +276,7 @@ export const desktopBridge: DesktopBridge = {
       return result;
     }
     await delay(180);
+    // Browser-only fallback: normal desktop builds use the Tauri/Python sidecar.
     return demoWorkspace;
   },
 

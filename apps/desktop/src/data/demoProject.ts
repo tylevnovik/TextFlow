@@ -1,3 +1,7 @@
+// This file is a lightweight non-Tauri fallback and component-test fixture.
+// Official built-in sample projects are created by the Python sidecar in
+// services/python-engine/app/sample_projects.py.
+// Do not mirror large public sample corpora here.
 import type {
   CorpusItem,
   DictionaryCollection,
