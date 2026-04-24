@@ -564,7 +564,7 @@ def _configure_institution_topic_workflow(workflow: dict[str, Any]) -> None:
     )
     workflow["nodes"].extend(
         [
-            _new_registry_node("filter_by_metadata", "node-filter-by-metadata", {"field": "language", "operator": "in", "values_text": "en\nzh"}, x=420, y=330),
+            _new_registry_node("filter_by_metadata", "node-filter-by-metadata", {"field": "language", "operator": "in", "values": ["en", "zh"]}, x=420, y=330),
             _new_registry_node("bucket_by_time", "node-bucket-by-time", {"field": "year", "granularity": "year"}, x=420, y=620),
             _new_registry_node("keyword_clustering", "node-keyword-clustering-extra", {"keyword_cluster_k": 5}, x=3000, y=860),
         ]
@@ -724,7 +724,7 @@ def _configure_group_compare_keyness_workflow(workflow: dict[str, Any]) -> None:
     )
     workflow["nodes"].extend(
         [
-            _new_registry_node("filter_by_metadata", "node-filter-by-metadata", {"field": "language", "operator": "in", "values_text": "en\nzh"}, x=420, y=330),
+            _new_registry_node("filter_by_metadata", "node-filter-by-metadata", {"field": "language", "operator": "in", "values": ["en", "zh"]}, x=420, y=330),
             _new_registry_node("bucket_by_time", "node-bucket-by-time", {"field": "year", "granularity": "year"}, x=420, y=620),
             _new_registry_node("group_compare", "node-group-compare", {"group_field": "language", "baseline_group": "en", "comparison_groups_text": "zh", "min_frequency": 2}, x=2860, y=600),
             _new_registry_node("keyness_analysis", "node-keyness-analysis", {"group_field": "language", "baseline_group": "en", "comparison_group": "zh", "min_frequency": 2}, x=3240, y=600),
@@ -752,6 +752,7 @@ def _configure_group_compare_keyness_workflow(workflow: dict[str, Any]) -> None:
     _connect(workflow, "node-frequency-statistics", "frequency_table", "node-save-html-report", "report_in")
     _connect(workflow, "node-group-compare", "group_metric_table", "node-save-html-report", "report_in")
     _connect(workflow, "node-keyness-analysis", "keyness_table", "node-save-html-report", "report_in")
+    _connect(workflow, "node-apply-dictionary-rules", "audit_table", "node-save-html-report", "report_in")
 
 
 def _configure_split_evaluate_join_workflow(workflow: dict[str, Any]) -> None:
