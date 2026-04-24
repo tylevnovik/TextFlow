@@ -90,6 +90,37 @@ const resultTableOptions = [
   { value: "joined_table", label: "连接结果表" }
 ] as const;
 
+const controlSourceKindOptions = [
+  { value: "corpus_metadata", label: "语料元数据" },
+  { value: "table_field", label: "表格字段" },
+  { value: "comparison_result", label: "比较结果字段" }
+] as const;
+
+const controlOperatorOptions = [
+  { value: "in", label: "属于" },
+  { value: "not_in", label: "不属于" },
+  { value: "contains", label: "包含文本" },
+  { value: "eq", label: "等于" },
+  { value: "neq", label: "不等于" },
+  { value: "gt", label: "大于" },
+  { value: "gte", label: "大于等于" },
+  { value: "lt", label: "小于" },
+  { value: "lte", label: "小于等于" }
+] as const;
+
+const metricNameOptions = [
+  "silhouette_score",
+  "davies_bouldin_score",
+  "frequency",
+  "doc_count",
+  "score",
+  "p_value",
+  "log_likelihood"
+] as const;
+
+const metricNameFieldOptions = ["metric", "row_type", "name", "label", "term", "cluster_id"] as const;
+const metricValueFieldOptions = ["value", "silhouette_score", "davies_bouldin_score", "frequency", "doc_count", "score", "p_value", "log_likelihood"] as const;
+
 function numericValue(value: unknown): string {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
     return "";
@@ -455,6 +486,12 @@ function availableGroupValues(corpus: CorpusItem[], field: string): string[] {
     }
   }
   return [...values].sort((left, right) => left.localeCompare(right, "zh-CN"));
+}
+
+function withCurrentOption(options: string[], currentValue: string): string[] {
+  return [currentValue, ...options]
+    .map((item) => item.trim())
+    .filter((item, index, values) => item && values.indexOf(item) === index);
 }
 
 function normalizeStringList(value: unknown): string[] {
@@ -1037,6 +1074,241 @@ function renderJoinResultsEditor(context: WorkflowNodeEditorContext) {
   );
 }
 
+function renderConditionalRouterEditor(context: WorkflowNodeEditorContext) {
+  const sourceKind = String(context.node.config.source_kind ?? "corpus_metadata");
+  const field = String(context.node.config.field ?? "institution");
+  const fieldOptions = sourceKind === "corpus_metadata"
+    ? availableGroupFields(context.snapshot.corpus)
+    : ["metric", "value", "row_type", "term", "frequency", "score", "p_value", "cluster_id", "silhouette_score"];
+  const selectedValues = normalizeStringList(
+    Array.isArray(context.node.config.values) ? context.node.config.values : context.node.config.values_text
+  );
+  const availableValues = sourceKind === "corpus_metadata" ? availableGroupValues(context.snapshot.corpus, field) : [];
+
+  const persistValues = (values: string[]) => {
+    persistStringList(context, "values", "values_text", values);
+  };
+
+  return (
+    <>
+      <div className="workflow-node-inline-editor-grid">
+        <label className="field compact">
+          <span>条件来源</span>
+          <select
+            value={sourceKind}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { source_kind: event.target.value })}
+            disabled={context.loading}
+          >
+            {controlSourceKindOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>字段</span>
+          <select
+            value={field}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { field: event.target.value })}
+            disabled={context.loading}
+          >
+            {withCurrentOption(fieldOptions, field).map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>运算符</span>
+          <select
+            value={String(context.node.config.operator ?? "in")}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { operator: event.target.value })}
+            disabled={context.loading}
+          >
+            {controlOperatorOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>条件值</span>
+          <input
+            value={selectedValues.join(", ")}
+            onChange={(event) => persistValues(parseCsvList(event.target.value))}
+            placeholder="OpenAI, Anthropic"
+            disabled={context.loading}
+          />
+        </label>
+      </div>
+      {availableValues.length > 0 && (
+        <div className="workflow-node-inline-pill-block">
+          <strong>可选值</strong>
+          <div className="pill-cloud compact">
+            {availableValues.slice(0, 16).map((value) => (
+              <button
+                key={value}
+                type="button"
+                className={`intent-pill ${selectedValues.includes(value) ? "is-active" : ""}`}
+                onClick={() => {
+                  const next = new Set(selectedValues);
+                  if (next.has(value)) {
+                    next.delete(value);
+                  } else {
+                    next.add(value);
+                  }
+                  persistValues(availableValues.filter((item) => next.has(item)));
+                }}
+                disabled={context.loading}
+              >
+                {value}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <small>条件只由字段、运算符和值组成，不支持循环或脚本。</small>
+    </>
+  );
+}
+
+function renderResultGateEditor(context: WorkflowNodeEditorContext) {
+  const metricArtifact = String(context.node.config.metric_artifact ?? "cluster_evaluation_table");
+  const metricName = String(context.node.config.metric_name ?? "silhouette_score");
+  const metricNameField = String(context.node.config.metric_name_field ?? "metric");
+  const metricField = String(context.node.config.metric_field ?? "value");
+
+  return (
+    <>
+      <div className="workflow-node-inline-editor-grid">
+        <label className="field compact">
+          <span>指标产物</span>
+          <select
+            value={metricArtifact}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { metric_artifact: event.target.value })}
+            disabled={context.loading}
+          >
+            {withCurrentOption(resultTableOptions.map((option) => option.value), metricArtifact).map((value) => (
+              <option key={value} value={value}>{resultTableOptions.find((option) => option.value === value)?.label ?? value}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>指标名</span>
+          <select
+            value={metricName}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { metric_name: event.target.value })}
+            disabled={context.loading}
+          >
+            {withCurrentOption([...metricNameOptions], metricName).map((value) => (
+              <option key={value} value={value}>{value}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>指标名字段</span>
+          <select
+            value={metricNameField}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { metric_name_field: event.target.value })}
+            disabled={context.loading}
+          >
+            {withCurrentOption([...metricNameFieldOptions], metricNameField).map((value) => (
+              <option key={value} value={value}>{value}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>指标值字段</span>
+          <select
+            value={metricField}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { metric_field: event.target.value })}
+            disabled={context.loading}
+          >
+            {withCurrentOption([...metricValueFieldOptions], metricField).map((value) => (
+              <option key={value} value={value}>{value}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>判断条件</span>
+          <select
+            value={String(context.node.config.operator ?? "gte")}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { operator: event.target.value })}
+            disabled={context.loading}
+          >
+            {controlOperatorOptions.filter((option) => ["gt", "gte", "lt", "lte", "eq", "neq"].includes(option.value)).map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>阈值</span>
+          <input
+            type="number"
+            step="0.01"
+            value={numericValue(context.node.config.threshold ?? 0.5)}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, {
+              threshold: event.target.value ? Number(event.target.value) : null
+            })}
+            disabled={context.loading}
+          />
+        </label>
+      </div>
+      <small>可连接指标表；未连接时会按“指标产物”读取上一轮结果。</small>
+    </>
+  );
+}
+
+function renderManualReviewGateEditor(context: WorkflowNodeEditorContext) {
+  const reviewTasks = context.project.review_tasks ?? [];
+  const reviewId = String(context.node.config.review_id ?? "");
+  const selectedTask = reviewTasks.find((task) => task.review_id === reviewId);
+  const taskLabel = (task: (typeof reviewTasks)[number]) => {
+    const title = String((task as { title?: unknown }).title ?? "").trim();
+    return `${title || task.review_type || task.review_id} · ${task.status}`;
+  };
+
+  return (
+    <>
+      <div className="workflow-node-inline-editor-grid">
+        <label className="field compact">
+          <span>复核任务</span>
+          <select
+            value={reviewId}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { review_id: event.target.value })}
+            disabled={context.loading}
+          >
+            <option value="">选择复核任务</option>
+            {reviewTasks.map((task) => (
+              <option key={task.review_id} value={task.review_id}>{taskLabel(task)}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field compact">
+          <span>放行状态</span>
+          <select
+            value={String(context.node.config.required_status ?? "resolved")}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { required_status: event.target.value })}
+            disabled={context.loading}
+          >
+            <option value="resolved">已解决</option>
+            <option value="open">打开</option>
+          </select>
+        </label>
+        <label className="field compact">
+          <span>找不到任务时</span>
+          <select
+            value={String(context.node.config.on_missing ?? "block")}
+            onChange={(event) => context.updateNodeConfig(context.node.node_id, { on_missing: event.target.value })}
+            disabled={context.loading}
+          >
+            <option value="block">拦截</option>
+            <option value="pass">放行</option>
+          </select>
+        </label>
+      </div>
+      <small>{selectedTask ? `当前任务状态：${selectedTask.status}` : "请选择一个复核任务；默认找不到任务时拦截。"}</small>
+    </>
+  );
+}
+
 type WorkflowNodeInlineRenderer = (context: WorkflowNodeEditorContext) => ReactNode;
 
 const workflowNodeInlineRenderers: Partial<Record<WorkflowNodeInstance["node_type"], WorkflowNodeInlineRenderer>> = {
@@ -1053,7 +1325,10 @@ const workflowNodeInlineRenderers: Partial<Record<WorkflowNodeInstance["node_typ
   keyness_analysis: renderKeynessAnalysisEditor,
   topic_modeling: renderTopicModelingEditor,
   cluster_evaluation: renderClusterEvaluationEditor,
-  join_results: renderJoinResultsEditor
+  join_results: renderJoinResultsEditor,
+  conditional_router: renderConditionalRouterEditor,
+  result_gate: renderResultGateEditor,
+  manual_review_gate: renderManualReviewGateEditor
 };
 
 export function renderWorkflowNodeInlineEditor(context: WorkflowNodeEditorContext) {
@@ -1125,6 +1400,24 @@ export function renderWorkflowNodePreview(context: WorkflowNodeEditorContext) {
   if (context.node.node_type === "join_results") {
     const rows = Array.isArray(dynamicResults.joined_table) ? dynamicResults.joined_table : [];
     return <small>连接结果: {rows.length ? `${rows.length} 行` : "暂无结果"}</small>;
+  }
+
+  if (context.node.node_type === "conditional_router") {
+    const rows = Array.isArray(dynamicResults.conditional_route_summary) ? dynamicResults.conditional_route_summary : [];
+    const summary = rows[0];
+    return <small>路由: {summary ? `${String(summary.matched_count ?? 0)} 匹配 / ${String(summary.unmatched_count ?? 0)} 未匹配` : "暂无结果"}</small>;
+  }
+
+  if (context.node.node_type === "result_gate") {
+    const rows = Array.isArray(dynamicResults.result_gate_summary) ? dynamicResults.result_gate_summary : [];
+    const summary = rows[0];
+    return <small>门禁: {summary ? `${summary.passed ? "已放行" : "已拦截"} · ${String(summary.observed_value ?? "无值")}` : "暂无结果"}</small>;
+  }
+
+  if (context.node.node_type === "manual_review_gate") {
+    const rows = Array.isArray(dynamicResults.review_gate_summary) ? dynamicResults.review_gate_summary : [];
+    const summary = rows[0];
+    return <small>复核: {summary ? `${summary.waiting ? "等待复核" : "已放行"} · ${String(summary.status ?? "unknown")}` : "暂无结果"}</small>;
   }
 
   if (context.node.node_type === "save_html_report" || context.node.node_type === "save_png" || context.node.node_type === "save_csv" || context.node.node_type === "save_xlsx") {

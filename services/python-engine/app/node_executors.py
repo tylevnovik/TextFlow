@@ -473,6 +473,246 @@ def _document_matches_condition(document: dict[str, Any], condition: dict[str, A
     return value_text in set(values)
 
 
+def _control_values(config: dict[str, Any]) -> list[Any]:
+    raw_values = config.get("values")
+    if isinstance(raw_values, list):
+        values = [item for item in raw_values if str(item).strip()]
+        if values:
+            return values
+    raw_value = config.get("value")
+    if raw_value not in (None, ""):
+        return [raw_value]
+    values_text = str(config.get("values_text") or "")
+    return [item.strip() for item in values_text.replace("\n", ",").split(",") if item.strip()]
+
+
+def _control_rows_from_value(value: Any) -> list[dict[str, Any]]:
+    if _is_table_rows(value):
+        return deepcopy(value)
+    if isinstance(value, dict):
+        return [deepcopy(value)]
+    return []
+
+
+def _control_rows_from_inputs(inputs: dict[str, Any], *input_keys: str) -> list[dict[str, Any]]:
+    for input_key in input_keys:
+        rows = _control_rows_from_value(inputs.get(input_key))
+        if rows:
+            return rows
+    return []
+
+
+def _record_field_value(record: dict[str, Any], field: str) -> Any:
+    normalized_field = str(field or "").strip()
+    if not normalized_field:
+        return None
+    if normalized_field in record:
+        return record.get(normalized_field)
+    current: Any = record
+    for part in normalized_field.split("."):
+        if not isinstance(current, dict) or part not in current:
+            current = None
+            break
+        current = current.get(part)
+    if current is not None:
+        return current
+    extra_metadata = record.get("extra_metadata") if isinstance(record.get("extra_metadata"), dict) else {}
+    return extra_metadata.get(normalized_field)
+
+
+def _as_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _compare_control_value(value: Any, operator: str, expected_values: list[Any]) -> bool:
+    normalized_operator = str(operator or "in").strip().lower()
+    value_text = str(value if value is not None else "")
+    expected_texts = [str(item) for item in expected_values if str(item).strip()]
+    expected_set = set(expected_texts)
+
+    if normalized_operator == "not_in":
+        return value_text not in expected_set
+    if normalized_operator == "contains":
+        return any(expected in value_text for expected in expected_texts)
+    if normalized_operator == "eq":
+        return value_text == (expected_texts[0] if expected_texts else "")
+    if normalized_operator == "neq":
+        return value_text != (expected_texts[0] if expected_texts else "")
+    if normalized_operator in {"gt", "gte", "lt", "lte"}:
+        left = _as_number(value)
+        right = _as_number(expected_values[0] if expected_values else None)
+        if left is None or right is None:
+            return False
+        if normalized_operator == "gt":
+            return left > right
+        if normalized_operator == "gte":
+            return left >= right
+        if normalized_operator == "lt":
+            return left < right
+        return left <= right
+    return value_text in expected_set
+
+
+def _record_matches_control_condition(record: dict[str, Any], config: dict[str, Any]) -> bool:
+    field = str(config.get("field") or "").strip()
+    return _compare_control_value(
+        _record_field_value(record, field),
+        str(config.get("operator") or "in"),
+        _control_values(config),
+    )
+
+
+def execute_conditional_router(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    corpus_input = inputs.get("corpus_in")
+    corpus = _clone_corpus_rows(corpus_input) if _is_table_rows(corpus_input) else _clone_corpus_rows(_scoped_corpus_from_inputs(context, inputs))
+    table_rows = _control_rows_from_inputs(inputs, "table_in", "record_table_in", "comparison_table_in")
+
+    matched_corpus = [item for item in corpus if _record_matches_control_condition(item, config)] if corpus else []
+    unmatched_corpus = [item for item in corpus if not _record_matches_control_condition(item, config)] if corpus else []
+    matched_table = [item for item in table_rows if _record_matches_control_condition(item, config)] if table_rows else []
+    unmatched_table = [item for item in table_rows if not _record_matches_control_condition(item, config)] if table_rows else []
+
+    if matched_corpus:
+        context.shared["scoped_corpus"] = matched_corpus
+
+    matched_count = len(matched_corpus) if corpus else len(matched_table)
+    unmatched_count = len(unmatched_corpus) if corpus else len(unmatched_table)
+    route_summary = [
+        {
+            "source_kind": str(config.get("source_kind") or "corpus_metadata"),
+            "field": str(config.get("field") or ""),
+            "operator": str(config.get("operator") or "in"),
+            "values": [str(item) for item in _control_values(config)],
+            "matched_count": matched_count,
+            "unmatched_count": unmatched_count,
+            "corpus_input_count": len(corpus),
+            "table_input_count": len(table_rows),
+        }
+    ]
+    return {
+        "matched_corpus": matched_corpus,
+        "unmatched_corpus": unmatched_corpus,
+        "matched_table": matched_table,
+        "unmatched_table": unmatched_table,
+        "route_summary": route_summary,
+    }
+
+
+def _metric_rows_from_context(context: Any, config: dict[str, Any]) -> list[dict[str, Any]]:
+    artifact_key = str(config.get("metric_artifact") or "").strip()
+    if not artifact_key:
+        return []
+    bundle = getattr(context, "result_bundle", {})
+    if isinstance(bundle, dict):
+        rows = _control_rows_from_value(bundle.get(artifact_key))
+        if rows:
+            return rows
+    return _control_rows_from_value(_shared_get(context, artifact_key))
+
+
+def _select_metric_row(rows: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
+    metric_name = str(config.get("metric_name") or "").strip()
+    metric_name_field = str(config.get("metric_name_field") or "metric").strip()
+    if metric_name:
+        for row in rows:
+            if str(_record_field_value(row, metric_name_field) or "") == metric_name:
+                return row
+        for row in rows:
+            if metric_name in row:
+                return row
+    for row in rows:
+        if str(row.get("row_type") or "").lower() == "overall":
+            return row
+    return rows[0] if rows else {}
+
+
+def _metric_observed_value(row: dict[str, Any], config: dict[str, Any]) -> Any:
+    metric_field = str(config.get("metric_field") or "value").strip()
+    metric_name = str(config.get("metric_name") or "").strip()
+    value = _record_field_value(row, metric_field)
+    if value is None and metric_name:
+        value = _record_field_value(row, metric_name)
+    return value
+
+
+def execute_result_gate(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    metric_rows = _control_rows_from_inputs(inputs, "metric_table_in", "table_in") or _metric_rows_from_context(context, config)
+    payload_rows = _control_rows_from_inputs(inputs, "payload_in") or metric_rows
+    metric_row = _select_metric_row(metric_rows, config)
+    observed_value = _metric_observed_value(metric_row, config)
+    threshold = config.get("threshold")
+    passed = _compare_control_value(observed_value, str(config.get("operator") or "gte"), [threshold])
+    metric_name = str(config.get("metric_name") or config.get("metric_field") or "metric")
+    gate_summary = [
+        {
+            "metric": metric_name,
+            "metric_field": str(config.get("metric_field") or "value"),
+            "operator": str(config.get("operator") or "gte"),
+            "threshold": threshold,
+            "observed_value": observed_value,
+            "passed": passed,
+            "input_count": len(payload_rows),
+        }
+    ]
+    return {
+        "passed": passed,
+        "passed_table": payload_rows if passed else [],
+        "blocked_table": [] if passed else payload_rows,
+        "gate_summary": gate_summary,
+    }
+
+
+def _find_review_task(manifest: dict[str, Any], review_id: str) -> dict[str, Any] | None:
+    tasks = manifest.get("review_tasks")
+    if not isinstance(tasks, list):
+        return None
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        task_review_id = str(task.get("review_id") or task.get("id") or "").strip()
+        if task_review_id == review_id:
+            return task
+    return None
+
+
+def execute_manual_review_gate(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    payload_rows = _control_rows_from_inputs(inputs, "payload_in", "table_in", "corpus_in")
+    review_id = str(config.get("review_id") or config.get("task_id") or "").strip()
+    required_status = str(config.get("required_status") or "resolved").strip().lower()
+    on_missing = str(config.get("on_missing") or "block").strip().lower()
+    manifest = getattr(context, "manifest", {})
+    task = _find_review_task(manifest, review_id) if isinstance(manifest, dict) and review_id else None
+    current_status = str(task.get("status") or "missing").strip().lower() if isinstance(task, dict) else "missing"
+    approved = current_status == required_status or (task is None and on_missing == "pass")
+    waiting = not approved
+    review_gate_summary = [
+        {
+            "review_id": review_id,
+            "required_status": required_status,
+            "status": current_status,
+            "waiting": waiting,
+            "input_count": len(payload_rows),
+        }
+    ]
+    return {
+        "waiting": waiting,
+        "approved_payload": payload_rows if approved else [],
+        "blocked_payload": [] if approved else payload_rows,
+        "review_gate_summary": review_gate_summary,
+    }
+
+
 def execute_filter_by_metadata(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     corpus = _clone_corpus_rows(_scoped_corpus_from_inputs(context, inputs))
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
@@ -1263,6 +1503,9 @@ EXECUTORS_BY_TYPE = {
     "sample_corpus": execute_sample_corpus,
     "split_corpus": execute_split_corpus,
     "bucket_by_time": execute_bucket_by_time,
+    "conditional_router": execute_conditional_router,
+    "result_gate": execute_result_gate,
+    "manual_review_gate": execute_manual_review_gate,
     "dictionary_input": execute_dictionary_input,
     "project_dictionary_set": execute_dictionary_input,
     "merge_corpora": execute_merge_corpora,

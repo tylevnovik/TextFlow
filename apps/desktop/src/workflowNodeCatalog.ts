@@ -11,6 +11,68 @@ import { builtinWorkflowNodeSchema, type GeneratedWorkflowNodeSchema } from "./g
 
 export type WorkflowStepRole = WorkflowStepId | "scope" | "resource" | "merge" | "sink" | "utility";
 
+const controlFlowWorkflowNodeSchema = {
+  conditional_router: {
+    label: "条件路由",
+    description: "用受控字段条件把语料或结果表拆成匹配与未匹配两路，不执行任意脚本。",
+    category: "process",
+    inputs: [
+      { port_id: "corpus_in", port_type: "CorpusTable", label: "语料输入" },
+      { port_id: "table_in", port_type: "AnyTable", label: "表格输入" }
+    ],
+    outputs: [
+      { port_id: "matched_corpus", port_type: "CorpusTable", label: "匹配语料" },
+      { port_id: "unmatched_corpus", port_type: "CorpusTable", label: "未匹配语料" },
+      { port_id: "matched_table", port_type: "AnyTable", label: "匹配表格" },
+      { port_id: "unmatched_table", port_type: "AnyTable", label: "未匹配表格" },
+      {
+        port_id: "route_summary",
+        port_type: "AnyTable",
+        label: "路由摘要",
+        result_bundle_key: "conditional_route_summary"
+      }
+    ],
+    stepId: "scope"
+  },
+  result_gate: {
+    label: "结果门禁",
+    description: "根据上游结果表中的摘要指标决定是否放行下游表格。",
+    category: "analysis",
+    inputs: [
+      { port_id: "metric_table_in", port_type: "AnyTable", label: "指标表" },
+      { port_id: "payload_in", port_type: "AnyTable", label: "待放行表格" }
+    ],
+    outputs: [
+      { port_id: "passed_table", port_type: "AnyTable", label: "放行表格" },
+      { port_id: "blocked_table", port_type: "AnyTable", label: "拦截表格" },
+      { port_id: "gate_summary", port_type: "AnyTable", label: "门禁摘要", result_bundle_key: "result_gate_summary" }
+    ],
+    stepId: "analysis"
+  },
+  manual_review_gate: {
+    label: "人工复核门禁",
+    description: "等待指定复核任务达到目标状态后再放行下游表格。",
+    category: "process",
+    inputs: [{ port_id: "payload_in", port_type: "AnyTable", label: "待复核表格" }],
+    outputs: [
+      { port_id: "approved_payload", port_type: "AnyTable", label: "已放行表格" },
+      { port_id: "blocked_payload", port_type: "AnyTable", label: "待复核表格" },
+      {
+        port_id: "review_gate_summary",
+        port_type: "AnyTable",
+        label: "复核门禁摘要",
+        result_bundle_key: "review_gate_summary"
+      }
+    ],
+    stepId: "resource"
+  }
+} satisfies Partial<Record<WorkflowNodeType, GeneratedWorkflowNodeSchema>>;
+
+const workflowNodeSchema = {
+  ...builtinWorkflowNodeSchema,
+  ...controlFlowWorkflowNodeSchema
+} as Record<WorkflowNodeType, GeneratedWorkflowNodeSchema>;
+
 export interface WorkflowCatalogPort extends WorkflowPort {
   result_bundle_key?: string;
   png_chart_ids?: string[];
@@ -56,6 +118,9 @@ export const defaultNodePositions: Partial<Record<WorkflowNodeType, { x: number;
   sample_corpus: { x: 760, y: 540 },
   split_corpus: { x: 900, y: 860 },
   bucket_by_time: { x: 1260, y: 860 },
+  conditional_router: { x: 1260, y: 1120 },
+  result_gate: { x: 3620, y: 1120 },
+  manual_review_gate: { x: 4000, y: 860 },
   clean_text: { x: 900, y: 330 },
   normalize_text: { x: 1280, y: 330 },
   tokenize: { x: 1680, y: 330 },
@@ -210,6 +275,35 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
     defaultConfig: () => ({
       field: "year",
       granularity: "year"
+    })
+  },
+  conditional_router: {
+    size: { w: 360, h: 280 },
+    defaultConfig: () => ({
+      source_kind: "corpus_metadata",
+      field: "institution",
+      operator: "in",
+      values: ["OpenAI"],
+      values_text: "OpenAI"
+    })
+  },
+  result_gate: {
+    size: { w: 360, h: 280 },
+    defaultConfig: () => ({
+      metric_artifact: "cluster_evaluation_table",
+      metric_name: "silhouette_score",
+      metric_name_field: "metric",
+      metric_field: "value",
+      operator: "gte",
+      threshold: 0.5
+    })
+  },
+  manual_review_gate: {
+    size: { w: 360, h: 260 },
+    defaultConfig: () => ({
+      review_id: "",
+      required_status: "resolved",
+      on_missing: "block"
     })
   },
   clean_text: {
@@ -372,7 +466,7 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
 
 function buildBuiltinWorkflowNodeDefinitions(): Record<WorkflowNodeType, WorkflowNodeDefinition> {
   return Object.fromEntries(
-    (Object.entries(builtinWorkflowNodeSchema) as Array<[WorkflowNodeType, GeneratedWorkflowNodeSchema]>).map(
+    (Object.entries(workflowNodeSchema) as Array<[WorkflowNodeType, GeneratedWorkflowNodeSchema]>).map(
       ([nodeType, schema]) => {
         const uiDefinition = builtinWorkflowNodeUiDefinitions[nodeType];
         return [
