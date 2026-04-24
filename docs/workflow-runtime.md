@@ -1,32 +1,43 @@
 # 工作流与运行时
 
-本文档只描述当前仓库已经实现的 workflow 和运行时关系，不再把历史迁移草图当作当前规格。
+本文档只描述当前仓库已经实现并被代码验证的 workflow 运行模型。
+
+## 当前结论
+
+TextFlow 现在采用的是：
+
+> workflow graph 是唯一真相、唯一执行入口、唯一项目持久化模型。
+
+当前不再保留任何独立流程快照作为项目文件中的中心结构，也不再保留 bridge / native DAG 双轨执行。
 
 ## 当前模型
 
-TextFlow 现在不是“只有线性 pipeline”，也不是“完全图原生执行”，而是混合模型：
+- 项目持久化保存 `workflow_definitions` 与 `active_workflow_id`
+- 运行时始终从 active workflow 直接进入 native DAG
+- 运行过程中会生成只读的 `runtime_profile`，用于导出、日志和运行快照
+- 当前代码不会再从历史快照字段恢复项目真相；任何残留字段都只会被忽略
 
-- workflow 负责编辑和组织
-- pipeline 负责兼容快照和 legacy 执行
-- native DAG 负责一部分 modern workflow 的真实执行
+## 项目中的 workflow
 
-## workflow 在项目中的位置
-
-当前项目里同时保留：
+当前项目真相层关键字段是：
 
 - `workflow_definitions`
 - `active_workflow_id`
-- `pipeline`
+- `run_history`
+- `results`
 
-实际含义是：
+其中：
 
-- 用户在前端编辑的是 `active_workflow`
-- sidecar 会根据 workflow 生成兼容 `pipeline`
-- 结果中心、run history 和部分执行链仍消费这份 pipeline 快照
+- `workflow_definitions` 负责保存画布节点、边、节点配置和 meta
+- `active_workflow_id` 指向当前工作流
+- `run_history` 保存实际运行记录
+- `results` 保存最近一次项目级结果快照
+
+新保存的项目不再写独立默认流程配置文件，`project.json` 里只保留 workflow 真相层字段。
 
 ## 节点体系
 
-当前内置节点大致分为五类：
+当前内置节点分为五类：
 
 - 输入节点：`corpus_input`、`dictionary_input`
 - 处理节点：`merge_corpora`、`clean_text`、`normalize_text`、`tokenize`、`apply_dictionary_rules`、`filter_terms`
@@ -34,60 +45,41 @@ TextFlow 现在不是“只有线性 pipeline”，也不是“完全图原生�
 - 输出节点：`save_csv`、`save_xlsx`、`save_png`、`save_html_report`
 - 辅助节点：`note`、`group`
 
-旧的聚合节点 `analyze_corpus`、`export_results` 已不再是默认 starter graph 的中心，但仍作为 legacy 兼容节点保留。
+旧的聚合节点 `analyze_corpus`、`export_results` 仍可被读取并在 native DAG 中执行，但它们只是 legacy workflow 兼容节点，不再是默认 starter graph 的一部分。
 
-## 当前 workflow 画布能力
+## 执行方式
 
-前端当前已经支持：
+当前只有一条执行路径：
 
-- 节点工具箱
-- 节点拖入与删除
-- 端口级连线
-- 连线删除
-- 自动整理
-- 视口缩放、平移、恢复
-- mini-map 导航
-- 节点内参数编辑
-- workflow 草稿与视口持久化
+1. 读取 active workflow
+2. 归一化节点和边
+3. 从输出节点回溯活跃子图
+4. 按拓扑层分批执行节点；同层就绪且 `parallel-safe` 的节点可并行运行
+5. 写回结果 bundle、run history、导出产物和运行快照
 
-这意味着 workflow 已经是主流程入口，而不是单纯的展示壳层。
+当前 native DAG 已支持：
 
-## 两种执行路径
-
-### 1. 兼容 bridge 路径
-
-以下情况会回退到兼容路径：
-
-- `workflow.source` 属于 `system_default` 或 `migrated_from_pipeline`
-- workflow 中仍含 legacy 聚合节点
-- 图里有节点没有 executor，无法满足原生执行条件
-
-这条路径的过程是：
-
-1. `workflow -> pipeline`
-2. 使用既有线性执行器
-3. 生成 run 目录、结果 bundle 和 run history
-
-### 2. native DAG 路径
-
-当 workflow 满足以下条件时，会走原生 DAG：
-
-- `workflow.source` 为 `manual` 或 `template`
-- 图中不含 legacy 聚合节点
-- 所有活跃节点都能在 executor registry 中找到实现
-
-这条路径已经支持：
-
-- 从输出节点回溯活跃子图
-- 边归一化和拓扑排序
-- 节点级执行
-- 节点级运行摘要 `node_runs`
+- 活跃子图裁剪
+- 同层就绪节点的保守并行调度
 - 节点级缓存
+- 节点级运行摘要 `node_runs`
 - 中途进度回传
+- 节点状态增量同步与完成时全量状态对齐
+- result bundle 与显式 `artifact_kind` 输出口写入 run artifact store
+- `artifact_records` 索引和 preview/payload 懒加载
+- legacy 聚合节点在图运行时内兜底
+
+## Artifact Store
+
+运行时会在每次 run 结束时把可表格化或对象化的结果写入 `runs/<run_id>/artifacts/`：
+
+- 内置分析节点通过 `result_bundle_key` 绑定到结果 bundle，再生成 artifact record。
+- 插件或自定义节点可以在输出口声明 `artifact_kind`，executor 返回该输出口的普通 JSON payload 后，native DAG 会生成 artifact payload、preview 和 handle。
+- `run_record.artifacts` 保存本次 run 的 handle 摘要，`manifest.artifact_records` 保存项目级索引，前端 Artifact Browser 只在用户点击时加载 preview。
 
 ## 活跃子图规则
 
-当前运行时不是“画布上所有节点都执行”，而是：
+运行时不是“画布上所有节点都执行”，而是：
 
 1. 先归一化边和端口连接
 2. 计算可达节点
@@ -100,26 +92,54 @@ TextFlow 现在不是“只有线性 pipeline”，也不是“完全图原生�
 - 缺少必需输入的多输入节点不会进入活跃子图
 - 输出节点决定了本次真正写出哪些结果
 
-## workflow 到 pipeline 的编译
+## runtime_profile
 
-编译器当前按“节点类型 -> compiler hook”注册，而不是硬编码在单个大分支里。
+虽然项目不再保存独立流程快照，但运行时仍会从 workflow 派生一个只读 `runtime_profile`，用于：
 
-编译阶段主要做三件事：
+- 汇总 `run_scope / cleaning / normalization / tokenization / dictionary / filtering / analysis / export`
+- 生成 `enabled_steps`
+- 生成 `recipe_id` 与 `output_bundle_id`
+- 写入 `params_snapshot.json`
 
-- 把节点配置映射回 `cleaning / normalization / tokenization / dictionary / filtering / analysis / export`
-- 生成 `enabled_steps` 和 `execution_order`
-- 根据输出节点推导 `output_bundle_id` 和实际导出开关
+它的作用只是运行时视图，不是项目真相，也不会写回项目持久化结构。
 
-因此 pipeline 现在更像：
+## 运行快照与输出
 
-> workflow 的兼容快照，而不是唯一真相。
+每次运行仍会写出：
+
+- `runs/<run_id>/params_snapshot.json`
+- `runs/<run_id>/logs.json`
+- `runs/<run_id>/logs.txt`
+- `runs/<run_id>/corpus_snapshot.json`
+
+其中 `params_snapshot.json` 现在保存的是：
+
+- `workflow_definition`
+- `workflow_hash`
+- `runtime_profile`
+
+而不是旧的独立流程快照。
+
+其中 `corpus_snapshot.json` 当前已经做了轻量化：
+
+- 小语料仍保留完整文本快照，方便审计与复现
+- 大语料默认只保存预览文本、计数与元数据，避免运行结束时的大块写盘拖慢 UI
+
+## 进度事件
+
+当前 workflow 运行中的进度 detail 采用两种模式：
+
+- 高频中途事件只回传 `node_state_delta`
+- 运行完成时再做一次 `full_node_state_sync`
+
+这样可以让桌面端持续拿到节点级状态变化，同时避免每个轮询周期都重复发送整张节点状态表。
 
 ## 节点缓存
 
-当前 native DAG 已经写出节点缓存，路径大致为：
+当前 native DAG 会把节点缓存写到：
 
 ```text
-cache/nodes/<node_id>/<cache_key>.json
+cache/nodes/<node_id>/<cache_key>.pkl
 ```
 
 缓存 key 会综合：
@@ -131,45 +151,31 @@ cache/nodes/<node_id>/<cache_key>.json
 - 节点配置
 - 输入 hash
 
-当前缓存已经在 benchmark 中证明能显著降低二次运行成本。
+其中 `workflow_hash` 只覆盖执行相关 payload；画布 viewport、节点位置、分组、折叠等 UI 状态不会触发缓存失效。
 
-## 输出选择
+## 兼容策略
 
-输出节点不只是开关，它们还会借由 node definition 中的元信息决定：
+当前已经没有“历史流程快照读取迁移”这一层：
 
-- 结果 bundle 的回写位置
-- 可派生的 PNG 图表
-- 是否进入 HTML 报告或审计摘要
-
-这让当前导出已经从“全局导出开关”转向“由 sink 节点消费上游结果”。
-
-## 插件节点
-
-本地纯 Python 插件节点当前可以注册：
-
-- definition
-- compiler
-- executor
-
-当前行为是：
-
-- 前端会把插件 definition 放进工具箱
-- compiler hook 可以影响兼容 pipeline
-- 如果插件节点提供 executor，且 workflow 满足原生执行条件，它也可以进入 native DAG
+- 项目真相只认 `workflow_definitions` 与 `active_workflow_id`
+- 残留的旧运行快照字段不再参与恢复、迁移或回填
+- legacy workflow 聚合节点是否执行，属于图节点兼容问题，不再属于项目模型兼容问题
 
 ## 当前限制
 
-以下能力目前仍未完成：
+以下能力仍未完成：
 
-- DAG 并行调度
+- 更细粒度的 ready-queue / 动态并行调度
 - 面向用户的局部重跑
-- 完整 dirty 传播
-- 完整 artifact registry
+- 更细粒度的 dirty 传播可视化
+- 跨项目 artifact registry 和 artifact 生命周期治理
 - 更细粒度的中间结果浏览器
 - 安全隔离和签名分发级别的插件生态
 
 ## 当前最重要的判断
 
-TextFlow 现在的 workflow 系统已经足够被视为正式架构的一部分，但还不应该被描述成“完整的图原生运行时”。更准确的说法是：
+当前仓库已经不应再描述成“workflow + 兼容旧流程快照 + bridge/native 混合运行”。
 
-> 当前仓库采用 workflow 编辑层 + 兼容 pipeline 快照 + 部分 native DAG 执行的混合方案。
+更准确的描述是：
+
+> 当前仓库采用 workflow-only 持久化 + workflow-only native DAG 执行；历史流程快照已不再参与项目模型恢复。

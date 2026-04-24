@@ -12,6 +12,27 @@ from .node_registry import NodeRegistryBuilder
 PLUGIN_ENV_VAR = "TEXTFLOW_NODE_PLUGIN_DIR"
 
 
+def artifact_output_port(
+    port_id: str,
+    *,
+    port_type: str = "AnyTable",
+    label: str | None = None,
+    artifact_kind: str = "table",
+    **extra: object,
+) -> dict[str, object]:
+    if not port_id:
+        raise ValueError("Artifact output port requires a port_id")
+    if not artifact_kind:
+        raise ValueError("Artifact output port requires an artifact_kind")
+    return {
+        "port_id": port_id,
+        "port_type": port_type,
+        "label": label or port_id,
+        "artifact_kind": artifact_kind,
+        **extra,
+    }
+
+
 def default_plugin_roots() -> list[Path]:
     roots: list[Path] = []
     configured = os.getenv(PLUGIN_ENV_VAR, "")
@@ -46,7 +67,7 @@ def _plugin_entrypoint(module: object):
 def _invoke_entrypoint(entrypoint, builder: NodeRegistryBuilder) -> None:
     parameter_count = len(inspect.signature(entrypoint).parameters)
     if parameter_count >= 2:
-        entrypoint(builder, builder.pipeline_definition)
+        entrypoint(builder, builder.runtime_profile_definition)
     else:
         entrypoint(builder)
 

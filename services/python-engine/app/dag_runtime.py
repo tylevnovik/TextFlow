@@ -476,6 +476,19 @@ def _artifact_kind_for_result_value(value: Any) -> str | None:
     return None
 
 
+def _explicit_artifact_output_bindings(definition: dict[str, Any]) -> list[tuple[str, str]]:
+    outputs = definition.get("outputs") if isinstance(definition.get("outputs"), list) else []
+    bindings: list[tuple[str, str]] = []
+    for output_port in outputs:
+        if not isinstance(output_port, dict):
+            continue
+        port_id = str(output_port.get("port_id") or "")
+        artifact_kind = str(output_port.get("artifact_kind") or output_port.get("artifact_output_kind") or "")
+        if port_id and artifact_kind:
+            bindings.append((port_id, artifact_kind))
+    return bindings
+
+
 def _export_selection_from_active_graph(
     node_lookup: dict[str, dict[str, Any]],
     active_edges: list[dict[str, Any]],
@@ -1339,6 +1352,27 @@ def run_project_workflow_native(
                 value,
             )
         )
+    for node in active_workflow.get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("node_id") or "")
+        node_type = str(node.get("node_type") or "")
+        state = node_states.get(node_id)
+        definition = definition_map.get(node_type) or {}
+        if not state:
+            continue
+        for port_id, artifact_kind in _explicit_artifact_output_bindings(definition):
+            if port_id not in state.outputs:
+                continue
+            run_artifact_records.append(
+                write_artifact(
+                    project_dir,
+                    run_record["run_id"],
+                    node_id,
+                    artifact_kind,
+                    state.outputs.get(port_id),
+                )
+            )
     run_record["artifacts"] = [build_artifact_handle(record) for record in run_artifact_records]
     run_record["invalidated_artifact_count"] = invalidate_artifacts_for_dirty_nodes(
         manifest,

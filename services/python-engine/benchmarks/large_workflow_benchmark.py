@@ -17,9 +17,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+BENCHMARK_REQUIRES_ARTIFACT_STORE = True
+
 from app.defaults import default_import_template, utc_now_iso  # noqa: E402
 from app.ingestion import import_files  # noqa: E402
-from app.pipeline import run_project_pipeline  # noqa: E402
+from app.workflow_runner import run_project_workflow  # noqa: E402
 from app.project_store import create_project, save_project  # noqa: E402
 from app.sample_projects import _append_dictionary_terms, _configure_workflow  # noqa: E402
 
@@ -172,7 +174,7 @@ def main() -> int:
     progress_events: list[dict[str, Any]] = []
     run_started = perf_counter()
 
-    def on_progress(progress: float, message: str) -> None:
+    def on_progress(progress: float, message: str, _detail: dict[str, Any] | None = None) -> None:
         progress_events.append(
             {
                 "elapsed_seconds": round(perf_counter() - run_started, 3),
@@ -181,9 +183,9 @@ def main() -> int:
             }
         )
 
-    manifest, corpus, run_record = run_project_pipeline(project_dir, manifest, corpus, progress_callback=on_progress)
+    manifest, corpus, run_record = run_project_workflow(project_dir, manifest, corpus, progress_callback=on_progress)
     run_seconds = round(perf_counter() - run_started, 3)
-    save_project(project_dir, manifest, corpus)
+    save_project(project_dir, manifest, corpus, already_normalized=True)
     total_seconds = round(perf_counter() - benchmark_started, 3)
 
     result_bundle = manifest["results"]
@@ -203,6 +205,8 @@ def main() -> int:
             "status": run_record["status"],
             "run_id": run_record["run_id"],
             "processed_document_count": run_record["processed_document_count"],
+            "artifact_store_enabled": True,
+            "artifact_record_count": len(manifest.get("artifact_records", [])),
             "artifact_count": len(run_record.get("artifacts", [])),
             "report_file_count": len(result_bundle.get("report_files", [])),
         },

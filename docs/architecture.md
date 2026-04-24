@@ -18,7 +18,7 @@ apps/desktop/
   src-tauri/                 # Tauri 命令、sidecar 启动与 bundling
 
 services/python-engine/
-  app/                       # 项目存储、导入、pipeline、DAG、导出、插件
+  app/                       # 项目存储、导入、workflow 运行时、DAG、导出、插件
   tests/                     # Python 测试
   benchmarks/                # 大语料 benchmark
 
@@ -45,7 +45,7 @@ plugins/nodes/
 - `create_project`
 - `open_project`
 - `import_project_files`
-- `run_pipeline`
+- `run_workflow`
 - `export_project`
 
 ### 3. Tauri 与 sidecar 通信
@@ -59,6 +59,7 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 HTTP 
 ### 4. 任务与进度
 
 - sidecar 任务管理器当前使用单 worker 顺序执行。
+- 单次 workflow run 内部已支持同层就绪、parallel-safe 节点的并发执行。
 - Tauri 轮询任务状态并向前端发出 `engine-progress` 事件。
 - 前端会把 stage、当前节点、完成度和摘要映射到顶部进度条。
 
@@ -101,7 +102,6 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 HTTP 
   corpus/
     imported/
   dictionaries/
-  pipelines/
   metadata/
     corpus.json
   runs/
@@ -125,9 +125,14 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 HTTP 
 当前项目模型的关键字段包括：
 
 - `source_files`
+- `corpus_resources`
+- `corpus_views`
+- `ingestion_specs`
+- `artifact_records`
+- `review_tasks`
+- `experiment_specs`
 - `import_template`
 - `dictionary_set`
-- `pipeline`
 - `workflow_definitions`
 - `active_workflow_id`
 - `run_history`
@@ -135,10 +140,11 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 HTTP 
 
 其中：
 
-- `workflow_definitions` 是当前编辑层的主模型
-- `pipeline` 是兼容快照和 bridge 执行输入
+- `workflow_definitions` 是当前编辑与持久化真相
 - `run_history` 是运行记录真相
 - `results` 是项目级最新结果快照
+- `artifact_records` 是 run artifact store 的可懒加载索引
+- `corpus_views / ingestion_specs / review_tasks / experiment_specs` 是产品 surface 的可复现状态，不属于临时 UI 状态
 
 ### DictionarySet
 
@@ -182,11 +188,11 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 HTTP 
 - `matplotlib`
 - `wordcloud`
 
-## workflow 与兼容层
+## workflow 与运行层
 
-当前 architecture 的关键决定不是“用不用 workflow”，而是：
+当前 architecture 的关键决定是：
 
-> workflow 已经进入项目真相层，但执行层同时保留 native DAG 和兼容 pipeline 两条路径。
+> workflow graph 是唯一真相，执行层统一走 native DAG。
 
 详细规则见 [工作流与运行时](./workflow-runtime.md)。
 
@@ -203,8 +209,9 @@ sidecar 启动时会扫描：
 - node definition
 - compiler hook
 - executor hook
+- artifact output port declaration
 
-前端当前优先读取 sidecar 返回的 `node_definitions`，因此插件节点可以进入工具箱和 schema 驱动表单。
+前端当前优先读取 sidecar 返回的 `node_definitions`，因此插件节点可以进入工具箱和 schema 驱动表单。插件输出口若声明 `artifact_kind`，native DAG 会把该输出写入 run artifact store，并把 handle 写回 `run_record.artifacts` 和 `manifest.artifact_records`。
 
 ## 打包策略
 
@@ -225,7 +232,7 @@ sidecar 启动时会扫描：
 
 - front-end 仍偏单仓库组件式组织，页面与复杂 workflow UI 代码还比较集中。
 - sidecar 当前仍是单任务 worker，不支持多任务并行。
-- native DAG 已进入主链，但并没有完全替换掉兼容 pipeline。
-- 当前还没有 artifact registry、完整的局部重跑和多项目协同设计。
+- native DAG 已成为唯一运行主链，并支持同层就绪节点的保守并行调度。
+- 当前已有项目内 artifact record 索引和懒加载 preview，但还没有跨项目 artifact registry、面向用户的完整局部重跑和多项目协同设计。
 
 这些边界并不阻碍当前主链可用，但决定了后续收敛工作的重点。

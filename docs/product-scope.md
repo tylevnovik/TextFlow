@@ -42,6 +42,8 @@
 - `workflow_definitions + active_workflow_id` 已写入项目模型
 - manual/template workflow 已可走 native DAG
 - 节点缓存和节点级运行摘要已接入
+- 语料资源、语料视图、导入规格、artifact records、review tasks 和 experiment specs 已写入项目模型
+- 桌面端已提供 Resource Browser、Artifact Browser、Review Queue、Experiment Matrix 和 Run Diff surface
 - 本地纯 Python 插件节点已可被 sidecar 扫描并注册
 - 首次启动自动生成 3 个示例项目
 
@@ -63,8 +65,7 @@
 - 云同步
 - 多用户协作
 - 移动端 App
-- 节点级并行调度
-- 完整 artifact registry
+- 跨项目 artifact registry
 - 面向终端用户的局部重跑和 dirty 传播 UI
 
 ## 当前建议的交付口径

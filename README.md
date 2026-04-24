@@ -43,10 +43,15 @@ TextFlow Studio 是一个桌面优先的本地文本预处理与基础文本挖�
 
 - workflow 画布已成为主流程入口
 - 节点注册表与 schema 驱动前后端同步
-- workflow 到兼容 pipeline 的编译层
-- 对符合条件的 `manual/template` workflow 走 native DAG
+- workflow-only native DAG 执行主链
+- 同层就绪的 parallel-safe 分析/导出节点会并行执行
+- 运行时会从 workflow 派生只读 `runtime_profile`
 - 节点级缓存与节点级运行摘要
+- 增量进度回传、最终全量状态同步与轻量 `corpus_snapshot`
+- 项目保存支持按脏区写盘与 unchanged JSON 跳过写入
 - 本地纯 Python 插件节点加载
+- 语料资源、语料视图、导入规格、运行产物、复核队列和实验矩阵已进入桌面 UI
+- 节点输出可写入 artifact store，结果页支持按需加载 artifact preview
 
 ## 当前状态
 
@@ -147,4 +152,5 @@ npm run tauri:build --workspace apps/desktop
 - 前端自动化测试与 CI
 - Windows 发版链路的持续验证
 - macOS 构建与运行验证
-- native DAG 的并行调度、局部重跑和更完整的 artifact 管理
+- native DAG 更细粒度的 ready-queue 调度、局部重跑和更完整的 artifact 管理
+- 超大项目的冷启动、结果页首屏和导出阶段 I/O 仍有继续优化空间

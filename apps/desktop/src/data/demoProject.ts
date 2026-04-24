@@ -420,6 +420,19 @@ const workflowDefinitions: WorkflowDefinition[] = [
         runtime_meta: { step_id: "resource", node_impl_version: "1.0.0" }
       },
       {
+        node_id: "node-runtime-dictionary-overlay",
+        node_type: "overlay_dictionary_rules",
+        label: "运行时词表叠加",
+        position: { x: 960, y: 60 },
+        inputs: [{ port_id: "dictionary_set_in", port_type: "DictionarySet" }],
+        outputs: [{ port_id: "dictionary_set", port_type: "DictionarySet" }],
+        config: {
+          overlay_rows_text: "standard_terms|large language model|LLM|true\nsynonym_map|generative ai|生成式|true"
+        },
+        ui_state: { collapsed: false, bypassed: false },
+        runtime_meta: { step_id: "resource", node_impl_version: "1.0.0" }
+      },
+      {
         node_id: "node-clean-text",
         node_type: "clean_text",
         label: "基础清洗",
@@ -540,7 +553,8 @@ const workflowDefinitions: WorkflowDefinition[] = [
       { edge_id: "edge-3", from_node: "node-clean-text", from_port: "clean_corpus", to_node: "node-normalize-text", to_port: "corpus_in" },
       { edge_id: "edge-4", from_node: "node-normalize-text", from_port: "normalized_corpus", to_node: "node-tokenize", to_port: "corpus_in" },
       { edge_id: "edge-5", from_node: "node-tokenize", from_port: "token_corpus", to_node: "node-apply-dictionary-rules", to_port: "token_corpus_in" },
-      { edge_id: "edge-6", from_node: "node-project-dictionary-set", from_port: "dictionary_set", to_node: "node-apply-dictionary-rules", to_port: "dictionary_set_in" },
+      { edge_id: "edge-6", from_node: "node-project-dictionary-set", from_port: "dictionary_set", to_node: "node-runtime-dictionary-overlay", to_port: "dictionary_set_in" },
+      { edge_id: "edge-6-overlay", from_node: "node-runtime-dictionary-overlay", from_port: "dictionary_set", to_node: "node-apply-dictionary-rules", to_port: "dictionary_set_in" },
       { edge_id: "edge-7", from_node: "node-apply-dictionary-rules", from_port: "token_corpus", to_node: "node-filter-terms", to_port: "token_corpus_in" },
       { edge_id: "edge-8", from_node: "node-filter-terms", from_port: "filtered_token_corpus", to_node: "node-analyze-corpus", to_port: "token_corpus_in" },
       { edge_id: "edge-9", from_node: "node-analyze-corpus", from_port: "analysis_bundle", to_node: "node-export-results", to_port: "analysis_bundle_in" },
@@ -565,12 +579,82 @@ const manifest: ProjectManifest = {
     { id: "source-1", name: "literature_sample.xlsx", source_type: "xlsx", relative_path: "corpus/imported/literature_sample.xlsx", imported_at: now, row_count: 2 },
     { id: "source-2", name: "patent_sample.json", source_type: "json", relative_path: "corpus/imported/patent_sample.json", imported_at: now, row_count: 1 }
   ],
-  corpus_resources: [],
-  corpus_views: [],
-  ingestion_specs: [],
-  artifact_records: [],
-  review_tasks: [],
-  experiment_specs: [],
+  corpus_resources: [
+    {
+      id: "resource-demo-mixed-corpus",
+      name: "Demo mixed corpus import",
+      source_files: ["source-1", "source-2"],
+      fingerprint: "sha256:demo-mixed-corpus"
+    }
+  ],
+  corpus_views: [
+    {
+      id: "view-cn-institutions-2024",
+      name: "CN institutions 2024+",
+      resource_ids: ["resource-demo-mixed-corpus"],
+      filter_spec: { country_or_region: ["CN"], year: { operator: "gte", values: [2024] } },
+      doc_ids: ["DOC-001", "DOC-003"]
+    }
+  ],
+  ingestion_specs: [
+    {
+      id: "ingest-demo-literature",
+      name: "Demo literature + patent fields",
+      source_profile: "literature",
+      field_mappings: [
+        { source_field: "title", target_field: "title", required: true },
+        { source_field: "abstract", target_field: "raw_text", required: true },
+        { source_field: "year", target_field: "year" },
+        { source_field: "institution", target_field: "institution" }
+      ],
+      text_build: { mode: "concat_fields", fields: ["title", "abstract"], delimiter: "\n\n", skip_empty: true },
+      dedupe_rules: { keys: ["title", "year", "institution"] }
+    }
+  ],
+  artifact_records: [
+    {
+      artifact_id: "artifact-demo-frequency",
+      run_id: "run-20260416-1810",
+      node_id: "node-analyze-corpus",
+      kind: "table",
+      path: "runs/run-20260416-1810/artifacts/artifact-demo-frequency.json",
+      preview_path: "runs/run-20260416-1810/artifacts/artifact-demo-frequency.preview.json",
+      row_count: frequencyRows.length
+    },
+    {
+      artifact_id: "artifact-demo-report",
+      run_id: "run-20260416-1810",
+      node_id: "node-export-results",
+      kind: "object",
+      path: "runs/run-20260416-1810/artifacts/artifact-demo-report.json",
+      preview_path: "runs/run-20260416-1810/artifacts/artifact-demo-report.preview.json",
+      row_count: 1
+    }
+  ],
+  review_tasks: [
+    {
+      review_id: "review-demo-llm-merge",
+      project_id: "project-demo",
+      review_type: "dictionary_overlay",
+      status: "open",
+      target_ref: { term: "large language model", dictionary_kind: "standard_terms" },
+      title: "确认 LLM 标准词合并",
+      description: "示例复核任务：确认运行时叠加规则是否应写回项目词表。",
+      created_at: now,
+      updated_at: now
+    } as ProjectManifest["review_tasks"][number] & { title: string; description: string; created_at: string; updated_at: string }
+  ],
+  experiment_specs: [
+    {
+      experiment_id: "exp-demo-keyword-depth",
+      name: "Keyword depth variants",
+      workflow_id: "wf-default",
+      variant_matrix: [
+        { label: "baseline", node_overrides: { "node-analyze-corpus": { top_k_project: 100 } } },
+        { label: "expanded-keywords", node_overrides: { "node-analyze-corpus": { top_k_project: 160 } } }
+      ]
+    }
+  ],
   shared_resource_refs: [],
   settings: {
     default_language: "mixed",

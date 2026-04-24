@@ -17,7 +17,7 @@ sidecar 启动时会按顺序尝试扫描：
 - `register_nodes(builder)`
 - `register(builder)`
 
-如果入口函数接收两个参数，第二个参数会传入当前 pipeline 基线配置。
+如果入口函数接收两个参数，第二个参数会传入当前 runtime profile 基线配置。
 
 ## builder 可注册的内容
 
@@ -28,17 +28,27 @@ sidecar 启动时会按顺序尝试扫描：
 - `builder.register_executor(executor_id, executor_hook)`
 - `builder.register_node(definition, compiler=..., executor=...)`
 
+如果插件节点会产生可浏览的中间表格、对象或导出摘要，输出口必须显式声明产物类型。推荐使用：
+
+```python
+from app.node_plugins import artifact_output_port
+
+artifact_output_port("plugin_table", label="插件表格", artifact_kind="table")
+```
+
+`artifact_kind` 当前建议使用 `table`、`object`、`csv`、`xlsx`、`png`、`html` 或插件自定义的短字符串。executor 仍然只需要在该输出口返回普通 JSON 可序列化 payload；native DAG 会把 payload 写入 run artifact store，并在 `run_record.artifacts` 与 `manifest.artifact_records` 中登记可懒加载的 handle。
+
 ## 当前运行时行为
 
 插件节点现在已经能参与三件事：
 
-1. 返回给前端工具箱  
+1. 返回给前端工具箱
    sidecar 会把插件 definition 一起放进 `node_definitions`，前端可直接显示。
 
-2. 影响兼容 pipeline  
-   如果插件提供 compiler hook，它可以把节点配置编译回兼容 pipeline。
+2. 影响运行时基线
+   如果插件提供 compiler hook，它可以把节点配置编译回当前 runtime profile。
 
-3. 进入 native DAG  
+3. 进入 native DAG
    如果插件同时提供 executor，且当前 workflow 满足 native DAG 条件，它也可以进入原生节点执行链。
 
 如果插件节点只有 compiler、没有 executor，或者图中混入 legacy 聚合节点，那么整个 workflow 仍可能回退到兼容 bridge 路径。
@@ -51,6 +61,9 @@ def _compile(context, node):
     context.enable_step("analysis")
 
 
+from app.node_plugins import artifact_output_port
+
+
 def register_nodes(builder):
     builder.register_node(
         {
@@ -59,7 +72,7 @@ def register_nodes(builder):
             "category": "analysis",
             "description": "Loaded from plugins/nodes.",
             "inputs": [],
-            "outputs": [{"port_id": "plugin_out", "port_type": "KeywordTable", "label": "插件输出"}],
+            "outputs": [artifact_output_port("plugin_out", port_type="KeywordTable", label="插件输出", artifact_kind="table")],
             "params": [{"param_id": "top_n", "label": "Top N", "kind": "number", "default_value": 64}],
             "runtime": {
                 "step_id": "analysis",
@@ -70,7 +83,7 @@ def register_nodes(builder):
             },
         },
         compiler=_compile,
-        executor=lambda *_args, **_kwargs: {"status": "ok"},
+        executor=lambda *_args, **_kwargs: {"plugin_out": [{"term": "plugin", "score": 1.0}]},
     )
 ```
 

@@ -83,6 +83,7 @@ npm run tauri:build --workspace apps/desktop
 - Tauri 在 build 前会先执行 `scripts/build-desktop-release.ps1`
 - `build-desktop-release.ps1` 会先重建 Python sidecar，再构建前端
 - bundling 目标当前为 `NSIS`
+- 发版前应确认 `apps/desktop/src-tauri/target/release/bundle/nsis/` 下生成 Windows installer
 
 ## 词表快照更新
 
@@ -111,23 +112,32 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-large-benchmark.ps1 --lim
 
 ## 当前测试与验证情况
 
-截至 `2026-04-23`，本地已验证：
+截至 `2026-04-24`，本地已验证或纳入最终验证清单：
 
 - `npm run lint` 通过
-- `npm run test:engine` 通过，`48` 个测试全部通过
+- `npm run test --workspace apps/desktop` 通过
+- `npm run test:engine` 通过
+- `npm run build` 通过
+- `npm run tauri:build --workspace apps/desktop` 通过，并已产出 NSIS installer
+
+当前 Windows installer 输出位置：
+
+```text
+apps/desktop/src-tauri/target/release/bundle/nsis/TextFlow Studio_0.1.0_x64-setup.exe
+```
 
 当前测试重点在：
 
 - 项目存储与工作区 CLI
-- 导入与 pipeline 主链
+- 导入与 workflow 主链
 - workflow 节点目录和前后端 schema 一致性
-- native DAG / bridge 的关键路径
+- native DAG 的关键路径
 
 ## 当前开发注意事项
 
 - 目前没有前端单元测试和 E2E 测试。
 - 仓库中没有 CI 配置，回归主要依赖本地命令。
-- Python 测试耗时接近 8 分钟，适合在较完整改动后执行。
+- Python 测试耗时约 3 分钟，适合在较完整改动后执行。
 - sidecar 打包依赖 `PyInstaller`，首次构建会慢一些。
 - 大语料性能当前主要受关键词提取和导出写盘影响。
 

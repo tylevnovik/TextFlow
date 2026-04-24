@@ -1,6 +1,6 @@
 # 大规模压测记录
 
-本文档记录仓库当前保留的万条级 workflow 压测入口和最近一轮结果，用于评估 native DAG 是否真的带来了性能收益。
+本文档记录当前 workflow-only native DAG 主链的压测入口和最近一次结果。
 
 ## 压测入口
 
@@ -20,6 +20,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-large-benchmark.ps1
 - 数据集：`20 Newsgroups train`
 - 默认规模：`11314` 条
 - benchmark 脚本：`services/python-engine/benchmarks/large_workflow_benchmark.py`
+- artifact store：启用，summary 会记录 `artifact_store_enabled` 和 `artifact_record_count`
 - 默认工作流：
 
 ```text
@@ -38,52 +39,76 @@ corpus_input
   -> save_csv / save_png / save_html_report
 ```
 
-## 仓库当前记录的关键结果
+## 最近一次记录
 
-下面这些数字来自仓库当前保留的 benchmark 记录，代表最近一轮已整理的阶段性结果：
+命令：
 
-- 旧 bridge 冷启动：`151.32s`
-- native DAG 初版冷启动：`313.715s`
-- native DAG 第一轮优化后冷启动：`153.548s`
-- native DAG 第二轮优化后冷启动：`87.64s`
-- native DAG 第二轮优化后二次重跑：`53.47s`
-- 二次重跑缓存命中：`12/16` 节点
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-large-benchmark.ps1 --limit 1200
+```
 
-这说明两件事：
+结果：
 
-- native DAG 不是天然更快，初版甚至明显更慢
-- 但经过结构性优化之后，native DAG 已经明显超过旧 bridge，并且二次运行收益更明显
+- 导入耗时：`0.04s`
+- 运行耗时：`14.068s`
+- 总耗时：`18.067s`
+- 处理文档数：`1200`
+- 运行状态：`completed`
+- 产物数：`8`
+- artifact record 数：由 `manifest.artifact_records` 统计，需与 run artifact handle 数保持同向增长
+- 报告文件数：`11`
+
+核心结果规模：
+
+- `frequency_rows`: `23279`
+- `cooccurrence_rows`: `88435`
+- `feature_term_rows`: `23279`
+- `selected_feature_terms`: `1000`
+- `keyword_rows`: `9611`
+- `keyword_cluster_rows`: `1000`
+- `document_cluster_rows`: `1200`
 
 ## 当前性能热点
 
-目前最大的热点已经不再是“DAG 框架本身”，而是：
+当前最大的热点主要集中在：
 
-- 大语料关键词提取
+- 关键词提取
+- 大规模 CSV / PNG / HTML 导出
+- 超大项目在当前项目装载时对词表与结果快照的水合
 - `corpus_snapshot.json` 等大文件写盘
-- 大型 CSV / PNG / HTML 产物导出
 
-## 已经完成的关键优化
+## 已完成的关键优化
 
+- workflow 运行时统一切到 native DAG，不再在 bridge 与 DAG 之间来回切换
+- 项目持久化切到 workflow-only，避免保存阶段重复写独立流程快照
+- 节点缓存使用二进制 `.pkl`，降低大量 JSON 序列化开销
 - 去掉节点间大语料 `deepcopy`
-- 节点缓存从更重的 `gzip json` 迁移到普通 `json`
-- 把 `TF-IDF` 与 `YAKE` 的部分联算拆开
 - 词表应用改成运行时查表结构
+- 正则规则、短语规则和分词词典注入改成运行时缓存
+- 中等规模语料上的 `YAKE` 关键词提取改为多进程并行
 - 审计表只记录真实命中规则
-- 对超大语料的关键词提取切到更快路径
+- 大语料聚类图改成簇级标注，降低 PNG 导出成本
+- 保存阶段增加已归一化快路径，减少重复 manifest 归一化与深拷贝
+- 项目保存支持按脏区写盘，并对 unchanged JSON 跳过重复落盘
+- `workflow_run` 进度支持 `node_state_delta` 增量回传，降低高频轮询负担
+- `corpus_snapshot.json` 改成轻量快照策略，大语料默认不再全量塞入原文
+- 聚类分析切到 `MiniBatchKMeans` + 稀疏矩阵降维路径，减少大矩阵 `toarray()` 开销
+- benchmark summary 现在显式记录 artifact store 是否启用和项目级 artifact record 数，防止压测绕开产物索引链路
+- 共现统计改成整数 term-id 计数路径，降低大语料字符串哈希负担
+- 首次空工作区冷启动中，示例项目生成已跳过重复的大词表全量归一化，冷启动基准从约 `24.9s` 降到约 `5-7s`
 - 给长时间节点和导出阶段补了中途进度回传
-
-## 为什么这份 benchmark 重要
-
-这份 benchmark 的价值不是“证明我们有一张漂亮的性能表”，而是它验证了当前架构方向：
-
-- 输出节点回溯活跃子图是有效的
-- 节点缓存确实能让二次运行更快
-- 运行热点已经可以定位到具体节点和具体 I/O 阶段
 
 ## 当前结论
 
-当前 native DAG 已经值得继续推进，但下一阶段的收益点更偏向：
+当前 benchmark 说明：
 
-- 减少大型 run snapshot 的写盘成本
-- 继续压缩关键词提取和导出阶段的热点
-- 逐步把更多 bridge 逻辑迁到更明确的节点执行路径
+- native DAG 主链已经稳定可用
+- workflow-only 持久化没有带来明显性能回退
+- 当前瓶颈已经从“运行框架切换成本”转向“关键词提取 + 导出 I/O + 当前项目水合”
+
+下一阶段最值得继续优化的是：
+
+- 更细粒度的 ready-queue 并行调度
+- 大语料导出阶段写盘
+- 关键词提取与主题分析热点
+- 局部重跑与更细粒度的 artifact 管理

@@ -99,6 +99,50 @@ export const builtinWorkflowNodeSchema: Record<WorkflowNodeType, GeneratedWorkfl
     outputs: [{ port_id: "time_bucket_table", port_type: "AnyTable", label: "时间分桶表", result_bundle_key: "time_bucket_assignments" }],
     stepId: "analysis"
   },
+  conditional_router: {
+    label: "条件路由",
+    description: "用受控字段条件把语料或结果表拆成匹配与未匹配两路，不执行任意脚本。",
+    category: "process",
+    inputs: [
+      { port_id: "corpus_in", port_type: "CorpusTable", label: "语料输入" },
+      { port_id: "table_in", port_type: "AnyTable", label: "表格输入" }
+    ],
+    outputs: [
+      { port_id: "matched_corpus", port_type: "CorpusTable", label: "匹配语料" },
+      { port_id: "unmatched_corpus", port_type: "CorpusTable", label: "未匹配语料" },
+      { port_id: "matched_table", port_type: "AnyTable", label: "匹配表格" },
+      { port_id: "unmatched_table", port_type: "AnyTable", label: "未匹配表格" },
+      { port_id: "route_summary", port_type: "AnyTable", label: "路由摘要", result_bundle_key: "conditional_route_summary" }
+    ],
+    stepId: "scope"
+  },
+  result_gate: {
+    label: "结果门禁",
+    description: "根据上游结果表中的摘要指标决定是否放行下游表格。",
+    category: "analysis",
+    inputs: [
+      { port_id: "metric_table_in", port_type: "AnyTable", label: "指标表" },
+      { port_id: "payload_in", port_type: "AnyTable", label: "待放行表格" }
+    ],
+    outputs: [
+      { port_id: "passed_table", port_type: "AnyTable", label: "放行表格" },
+      { port_id: "blocked_table", port_type: "AnyTable", label: "拦截表格" },
+      { port_id: "gate_summary", port_type: "AnyTable", label: "门禁摘要", result_bundle_key: "result_gate_summary" }
+    ],
+    stepId: "analysis"
+  },
+  manual_review_gate: {
+    label: "人工复核门禁",
+    description: "等待指定复核任务达到目标状态后再放行下游表格。",
+    category: "process",
+    inputs: [{ port_id: "payload_in", port_type: "AnyTable", label: "待复核表格" }],
+    outputs: [
+      { port_id: "approved_payload", port_type: "AnyTable", label: "已放行表格" },
+      { port_id: "blocked_payload", port_type: "AnyTable", label: "待复核表格" },
+      { port_id: "review_gate_summary", port_type: "AnyTable", label: "复核门禁摘要", result_bundle_key: "review_gate_summary" }
+    ],
+    stepId: "resource"
+  },
   clean_text: {
     label: "基础清洗",
     description: "去噪、清理空白并处理 HTML 与 URL。",

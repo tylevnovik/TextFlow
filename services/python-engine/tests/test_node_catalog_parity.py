@@ -3,7 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from app.project_store import create_project
 from app.node_definitions import build_builtin_node_definitions
+from app.workflow_runner import run_project_workflow
+from benchmarks import large_workflow_benchmark
 
 
 NODE_KEY_PATTERN = re.compile(r"^  ([a-z_]+): \{$", re.MULTILINE)
@@ -148,3 +151,113 @@ def test_builtin_schema_includes_new_corpus_selection_nodes():
         "bucket_by_time",
     ]:
         assert node_type in definitions
+
+
+def test_plugin_nodes_can_emit_artifact_handles(tmp_path, monkeypatch):
+    plugin_dir = tmp_path / "plugins"
+    plugin_dir.mkdir()
+    plugin_path = plugin_dir / "artifact_plugin.py"
+    plugin_path.write_text(
+        """
+from app.node_plugins import artifact_output_port
+
+
+def _execute(_context, _node, _inputs):
+    return {"plugin_table": [{"term": "plugin", "score": 1.0}]}
+
+
+def register_nodes(builder):
+    builder.register_node(
+        {
+            "type": "demo_artifact_plugin",
+            "title": "Demo Artifact Plugin",
+            "category": "analysis",
+            "description": "Emits an artifact-backed table.",
+            "inputs": [],
+            "outputs": [artifact_output_port("plugin_table", label="Plugin Table", artifact_kind="table")],
+            "params": [],
+            "runtime": {
+                "step_id": "analysis",
+                "executor": "plugin.demo_artifact",
+                "cacheable": False,
+                "previewable": True,
+                "output_node": False,
+            },
+        },
+        executor=_execute,
+    )
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TEXTFLOW_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    monkeypatch.setenv("TEXTFLOW_NODE_PLUGIN_DIR", str(plugin_dir))
+
+    project_dir, manifest = create_project("plugin-artifact-contract", "plugin artifact contract test")
+    manifest["workflow_definitions"] = [
+        {
+            "workflow_id": "wf-plugin-artifact",
+            "name": "Plugin artifact workflow",
+            "version": "1.0.0",
+            "graph_mode": "dag",
+            "source": "test",
+            "meta": {},
+            "nodes": [
+                {
+                    "node_id": "node-plugin",
+                    "node_type": "demo_artifact_plugin",
+                    "label": "Demo Artifact Plugin",
+                    "position": {"x": 0, "y": 0},
+                    "inputs": [],
+                    "outputs": [{"port_id": "plugin_table", "port_type": "AnyTable"}],
+                    "config": {},
+                    "ui_state": {"collapsed": False, "bypassed": False},
+                    "runtime_meta": {"step_id": "analysis", "node_impl_version": "1.0.0"},
+                },
+                {
+                    "node_id": "node-save",
+                    "node_type": "save_csv",
+                    "label": "Save CSV",
+                    "position": {"x": 240, "y": 0},
+                    "inputs": [{"port_id": "table_in", "port_type": "AnyTable"}],
+                    "outputs": [{"port_id": "artifact", "port_type": "ExportArtifact"}],
+                    "config": {},
+                    "ui_state": {"collapsed": False, "bypassed": False},
+                    "runtime_meta": {"step_id": "export", "node_impl_version": "1.0.0"},
+                },
+            ],
+            "edges": [
+                {
+                    "edge_id": "edge-plugin-save",
+                    "from_node": "node-plugin",
+                    "from_port": "plugin_table",
+                    "to_node": "node-save",
+                    "to_port": "table_in",
+                }
+            ],
+            "groups": [],
+            "viewport": {"x": 0, "y": 0, "zoom": 1},
+            "created_at": manifest["created_at"],
+            "updated_at": manifest["updated_at"],
+        }
+    ]
+    manifest["active_workflow_id"] = "wf-plugin-artifact"
+
+    updated_manifest, _corpus, run_record = run_project_workflow(project_dir, manifest, [])
+
+    plugin_artifacts = [
+        record
+        for record in updated_manifest.get("artifact_records", [])
+        if record.get("node_id") == "node-plugin"
+    ]
+    assert run_record["status"] == "completed"
+    assert plugin_artifacts
+    assert plugin_artifacts[0]["kind"] == "table"
+    assert any(handle.get("node_id") == "node-plugin" for handle in run_record.get("artifacts", []))
+
+
+def test_benchmark_workflow_runs_with_artifact_store_enabled():
+    benchmark_source = Path(large_workflow_benchmark.__file__).read_text(encoding="utf-8")
+
+    assert large_workflow_benchmark.BENCHMARK_REQUIRES_ARTIFACT_STORE is True
+    assert '"artifact_store_enabled": True' in benchmark_source
+    assert '"artifact_record_count": len(manifest.get("artifact_records", []))' in benchmark_source
