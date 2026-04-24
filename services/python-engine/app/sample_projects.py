@@ -1,354 +1,278 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import math
+import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from .defaults import default_import_template, make_dictionary_entry
-from .ingestion import import_files
+from .defaults import default_import_template, make_dictionary_entry, utc_now_iso
 from .project_store import create_project, save_project
+from .sample_dataset_cache import ensure_public_sample_cache_available, read_normalized_sample_cache, sample_data_cache_root
 
-FIRST_BUILTIN_SAMPLE_PROJECT_NAME = "示例项目 - 学术摘要机构主题"
-
-
-def _sms_rows() -> list[dict[str, Any]]:
-    texts = [
-        ("ham", "Go until jurong point, crazy.. Available only in bugis n great world la e buffet... Cine there got amore wat..."),
-        ("ham", "Nah I don't think he goes to usf, he lives around here though"),
-        ("ham", "As per your request 'Melle Melle' has been set as your callertune for all callers. Press *9 to copy your friends callertune."),
-        ("ham", "I'm gonna be home soon and I don't want to talk about this stuff anymore tonight, k? I've cried enough today."),
-        ("spam", "Free entry in 2 a weekly comp to win FA Cup final tickets. Text FA to 87121 to receive entry question. T&C's apply."),
-        ("spam", "WINNER!! As a valued network customer you have been selected to receive a £900 prize reward. To claim call 09061701461."),
-        ("spam", "Had your mobile 11 months or more? You are entitled to update to the latest colour mobiles with camera for free."),
-        ("spam", "URGENT! You have won a 1 week free membership in our £100,000 prize jackpot. Txt the word CLAIM to 81010 now."),
-    ]
-    rows: list[dict[str, Any]] = []
-    for index, (label, text) in enumerate(texts, start=1):
-        rows.append(
-            {
-                "doc_id": f"SMS-{index:03d}",
-                "title": f"{label.upper()} message {index}",
-                "raw_text": text,
-                "source": "SMS Spam Collection",
-                "category_or_tag": label,
-                "keyword_field": label,
-                "year": 2012 if label == "ham" else 2011,
-            }
-        )
-    return rows
+FIRST_BUILTIN_SAMPLE_PROJECT_NAME = "示例 01 - 基础文本预处理"
 
 
-def _newsgroups_rows() -> list[dict[str, Any]]:
-    return [
-        {
-            "doc_id": "NEWS-001",
-            "title": "Re: Please Recommend 3D Graphics Library For Mac.",
-            "raw_text": "I too would like a 3D graphics library. How much do C libraries cost anyway? Can you get the tools used by RenderMan at a reasonable cost? Sorry that I do not have answers, only more questions about practical graphics tooling.",
-            "source": "20 Newsgroups",
-            "category_or_tag": "comp.graphics",
-            "keyword_field": "3d graphics; library",
-            "year": 1993,
-        },
-        {
-            "doc_id": "NEWS-002",
-            "title": "Fast wireframe graphics",
-            "raw_text": "I am working on a program to display 3D wireframe models while the user changes viewing parameters. I am considering the SRGP package, but I wonder whether there is another public-domain graphics package that would be faster for real-time performance on a Sun IPX.",
-            "source": "20 Newsgroups",
-            "category_or_tag": "comp.graphics",
-            "keyword_field": "wireframe; realtime rendering",
-            "year": 1993,
-        },
-        {
-            "doc_id": "NEWS-003",
-            "title": "Closed-curve intersection",
-            "raw_text": "I would like a reference to an algorithm that can detect whether one closed curve bounded by Bezier curves lies completely within another closed curve bounded by Bezier curves. Any reliable computational geometry references would help.",
-            "source": "20 Newsgroups",
-            "category_or_tag": "comp.graphics",
-            "keyword_field": "bezier curves; computational geometry",
-            "year": 1993,
-        },
-        {
-            "doc_id": "NEWS-004",
-            "title": "Re: Toyota wagons",
-            "raw_text": "Toyota has cornered the market on ugly station wagons. After seeing the new Camry sedan, I had thought Toyota would finally turn out something nicer looking, but the new wagon still looks awkward and overly bulky.",
-            "source": "20 Newsgroups",
-            "category_or_tag": "rec.autos",
-            "keyword_field": "toyota; station wagon",
-            "year": 1993,
-        },
-        {
-            "doc_id": "NEWS-005",
-            "title": "water in trunk of 89 Probe??",
-            "raw_text": "Water gradually builds up in the trunk of my friend's 89 Ford Probe after a good thunderstorm. Is this a common problem, and where are the drain holes located for the hatch? We keep having to remove the spare and scoop out the water.",
-            "source": "20 Newsgroups",
-            "category_or_tag": "rec.autos",
-            "keyword_field": "ford probe; maintenance",
-            "year": 1993,
-        },
-        {
-            "doc_id": "NEWS-006",
-            "title": "Re: Dumbest automotive concepts of all time",
-            "raw_text": "Wasn't the original intent of reverse lights to help the driver see while backing up? Side-mounted reverse lights may help other drivers notice movement, but I doubt warning nearby cars was their original purpose.",
-            "source": "20 Newsgroups",
-            "category_or_tag": "rec.autos",
-            "keyword_field": "reverse lights; automotive design",
-            "year": 1993,
-        },
-        {
-            "doc_id": "NEWS-007",
-            "title": "Re: Abyss: breathing fluids",
-            "raw_text": "Could you use some sort of mechanical chest compression as an aid? Something like a portable iron lung might support breathing under unusual pressure conditions. In space, you already have to trust your suit anyway.",
-            "source": "20 Newsgroups",
-            "category_or_tag": "sci.space",
-            "keyword_field": "breathing fluids; spacesuit",
-            "year": 1993,
-        },
-        {
-            "doc_id": "NEWS-008",
-            "title": "Re: Shuttle Launch Question",
-            "raw_text": "My understanding is that the expected errors are basically known bugs in the warning software. Rather than fix the code and risk new bugs, crews are told to ignore a few specific warning numbers before liftoff.",
-            "source": "20 Newsgroups",
-            "category_or_tag": "sci.space",
-            "keyword_field": "shuttle launch; warning system",
-            "year": 1993,
-        },
-        {
-            "doc_id": "NEWS-009",
-            "title": "Looking for a little research help",
-            "raw_text": "I am writing a science fiction script and looking for help on questions regarding the Moon and Earth. I want the story to stay as scientifically accurate as possible instead of ignoring the basic facts about computers and orbital mechanics.",
-            "source": "20 Newsgroups",
-            "category_or_tag": "sci.space",
-            "keyword_field": "science fiction; moon research",
-            "year": 1993,
-        },
-    ]
-
-
-def _openalex_rows() -> list[dict[str, Any]]:
-    return [
-        {
-            "doc_id": "OA-001",
-            "title": "Exploring students’ perspectives on Generative AI-assisted academic writing",
-            "abstract": "The rapid development of generative artificial intelligence and large language models has reshaped academic writing support. This study examines opportunities and challenges of AI-assisted writing in higher education and argues that institutions must balance learning benefits, transparency, and integrity safeguards.",
-            "source": "Education and Information Technologies",
-            "institution": "Old Dominion University",
-            "keyword_field": "generative ai; academic writing; higher education",
-            "category_or_tag": "genai_writing",
-            "year": 2024,
-        },
-        {
-            "doc_id": "OA-002",
-            "title": "The importance of transparency: Declaring the use of generative artificial intelligence in academic writing",
-            "abstract": "Generative AI tools such as ChatGPT and Bard are increasingly used in research writing. This article reviews journal policies and shows that disclosure rules remain uneven, making transparency declarations an important governance requirement for academic publishing.",
-            "source": "Journal of Nursing Scholarship",
-            "institution": "RMIT Vietnam",
-            "keyword_field": "generative ai; transparency; journal policy",
-            "category_or_tag": "genai_writing",
-            "year": 2023,
-        },
-        {
-            "doc_id": "OA-003",
-            "title": "Addressing the use of generative AI in academic writing",
-            "abstract": "The rise of generative AI has been a disruptive force in academia. This paper discusses how students may rely on AI systems to complete writing tasks and reports an active learning intervention that helps learners critique, supervise, and responsibly use AI-generated text.",
-            "source": "Computers and Education Artificial Intelligence",
-            "institution": "Agder Research",
-            "keyword_field": "generative ai; student learning; academic writing",
-            "category_or_tag": "genai_writing",
-            "year": 2024,
-        },
-        {
-            "doc_id": "OA-004",
-            "title": "Advancing Students’ Academic Excellence in Distance Education: Exploring the Potential of Generative AI Integration",
-            "abstract": "This qualitative study explores how generative AI can improve academic writing skills in distance education. The findings emphasize human-AI collaboration, teaching design, and scaffolding strategies that can raise writing quality while preserving student agency.",
-            "source": "Open Praxis",
-            "institution": "University of South Africa",
-            "keyword_field": "distance education; generative ai; writing support",
-            "category_or_tag": "genai_writing",
-            "year": 2024,
-        },
-        {
-            "doc_id": "OA-005",
-            "title": "Recycling of Lithium-Ion Batteries—Current State of the Art, Circular Economy, and Next Generation Recycling",
-            "abstract": "Lithium-ion batteries have become a dominant energy storage technology, and their large-scale use makes recycling essential. This review analyses the current state of recycling technology, circular economy constraints, and the need to adapt processes to future cell chemistries.",
-            "source": "Advanced Energy Materials",
-            "institution": "University of Münster",
-            "keyword_field": "lithium ion batteries; recycling; circular economy",
-            "category_or_tag": "battery_recycling",
-            "year": 2022,
-        },
-        {
-            "doc_id": "OA-006",
-            "title": "A Mini-Review on Metal Recycling from Spent Lithium Ion Batteries",
-            "abstract": "The rapid growth of lithium ion batteries in electronics and electric vehicles has increased the amount of hazardous waste and valuable metals entering end-of-life streams. This review compares pyrometallurgy, hydrometallurgy, and related pretreatment approaches for efficient metal recovery.",
-            "source": "Engineering",
-            "institution": "Institute of Process Engineering",
-            "keyword_field": "metal recycling; hydrometallurgy; spent batteries",
-            "category_or_tag": "battery_recycling",
-            "year": 2018,
-        },
-        {
-            "doc_id": "OA-007",
-            "title": "The future of automotive lithium-ion battery recycling: Charting a sustainable course",
-            "abstract": "This paper looks beyond near-term electric vehicle growth to the period when large volumes of end-of-life batteries require treatment. It argues that coordinated technical, economic, and institutional planning is needed now to ensure lithium-ion battery recycling becomes commercially and environmentally sustainable.",
-            "source": "Sustainable Materials and Technologies",
-            "institution": "Argonne National Laboratory",
-            "keyword_field": "automotive batteries; sustainable recycling; electric vehicles",
-            "category_or_tag": "battery_recycling",
-            "year": 2014,
-        },
-        {
-            "doc_id": "OA-008",
-            "title": "Progresses in Sustainable Recycling Technology of Spent Lithium-Ion Batteries",
-            "abstract": "The increasing number of lithium-ion batteries creates environmental and safety pressures if waste is not properly managed. This review discusses why recycling is essential for sustainable development and compares major technologies for recycling and reusing spent batteries.",
-            "source": "Energy & Environment Materials",
-            "institution": "Northeast Normal University",
-            "keyword_field": "sustainable recycling; battery waste; reuse",
-            "category_or_tag": "battery_recycling",
-            "year": 2021,
-        },
-    ]
+def _source_spec(
+    filename: str,
+    file_format: str,
+    dataset_id: str,
+    language: str,
+    selector: str,
+    ratio: float,
+) -> dict[str, Any]:
+    return {
+        "filename": filename,
+        "format": file_format,
+        "dataset_id": dataset_id,
+        "language": language,
+        "selector": selector,
+        "ratio": ratio,
+    }
 
 
 BUILTIN_SAMPLE_PROJECTS: list[dict[str, Any]] = [
     {
-        "slug": "sample-openalex-institutions",
+        "order": 1,
+        "slug": "sample-01-basic-preprocessing",
         "name": FIRST_BUILTIN_SAMPLE_PROJECT_NAME,
-        "description": "开源数据集示例：基于 OpenAlex 小样本的学术摘要机构主题分析，适合查看特征词、关键词聚类、机构关键词与机构主题。",
+        "description": "使用真实公开百科文本演示清洗、标准化、切词与导出。",
+        "difficulty": "基础",
+        "default_row_count": 20_000,
+        "goal": "我有一批杂乱文本，如何清洗、标准化、切词并导出？",
+        "guided_steps": ["查看样例说明与审计来源", "运行清洗与标准化节点", "检查切词结果并导出 HTML 报告"],
+        "covered_nodes": ["corpus_input", "dictionary_input", "clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms", "frequency_statistics", "save_csv", "save_html_report", "note", "group"],
+        "covered_settings": ["strip_html", "normalize_whitespace", "case_mode", "language_mode"],
+        "public_data_only": True,
+        "language_balance": {"en": 0.5, "zh": 0.5},
+        "source_datasets": ["wikimedia_enwiki", "wikimedia_zhwiki"],
+        "source_profile": "generic",
+        "sources": [
+            _source_spec("basic_preprocessing_en.csv", "csv", "wikimedia_enwiki", "en", "sample_01_basic_en", 0.5),
+            _source_spec("basic_preprocessing_zh.csv", "csv", "wikimedia_zhwiki", "zh", "sample_01_basic_zh", 0.5),
+        ],
+        "workflow_name": "基础文本预处理工作流",
+        "import_template_overrides": {"text_build": {"mode": "concat_fields", "fields": ["raw_text"], "delimiter": "\n\n", "skip_empty": True}},
+        "node_config_overrides": {"clean_text": {"strip_html": True}, "normalize_text": {"normalize_whitespace": True}, "save_html_report": {"include_audit": True}},
+        "dictionary_terms": {"phrase_lexicon": [("text mining", "text_mining"), ("自然语言处理", "自然语言处理")]},
+        "review_tasks": [],
+        "experiment_specs": [],
+    },
+    {
+        "order": 2,
+        "slug": "sample-02-dictionary-frequency",
+        "name": "示例 02 - 词表治理与词频统计",
+        "description": "使用真实公开双语语料演示术语保留、同义词统一、噪声过滤与高频词统计。",
+        "difficulty": "基础",
+        "default_row_count": 10_000,
+        "goal": "如何保留行业术语、统一同义词、过滤噪声并看高频词？",
+        "guided_steps": ["查看词表资源与覆盖范围", "叠加词表规则后运行词频", "检查共现与词项-文档关系"],
+        "covered_nodes": ["corpus_input", "dictionary_input", "select_dictionary_tables", "overlay_dictionary_rules", "clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms", "frequency_statistics", "term_document_analysis", "cooccurrence_analysis", "save_xlsx", "save_html_report", "note", "group"],
+        "covered_settings": ["selected_tables", "overlay_rows_text", "min_term_frequency", "cooccurrence_window"],
+        "public_data_only": True,
+        "language_balance": {"en": 0.5, "zh": 0.5},
+        "source_datasets": ["un_parallel_en_zh"],
+        "source_profile": "generic",
+        "sources": [
+            _source_spec("dictionary_frequency_en.csv", "csv", "un_parallel_en_zh", "en", "sample_02_dictionary_en", 0.5),
+            _source_spec("dictionary_frequency_zh.csv", "csv", "un_parallel_en_zh", "zh", "sample_02_dictionary_zh", 0.5),
+        ],
+        "workflow_name": "词表治理与词频统计工作流",
+        "import_template_overrides": {"text_build": {"mode": "concat_fields", "fields": ["raw_text"], "delimiter": "\n\n", "skip_empty": True}},
+        "node_config_overrides": {"cooccurrence_analysis": {"cooccurrence_window": 4}, "save_html_report": {"include_audit": True}},
+        "dictionary_terms": {"phrase_lexicon": [("climate finance", "climate_finance"), ("可持续发展", "可持续发展")], "synonym_map": [("llm", "large language model"), ("人工智能", "人工智能")]},
+        "review_tasks": [],
+        "experiment_specs": [],
+    },
+    {
+        "order": 3,
+        "slug": "sample-03-academic-keywords-topics",
+        "name": "示例 03 - 学术摘要关键词与主题",
+        "description": "使用 OpenAlex 双语摘要演示关键词、主题、时间趋势与文档聚类。",
+        "difficulty": "进阶",
+        "default_row_count": 10_000,
+        "goal": "如何从论文摘要中找关键词、主题和时间趋势？",
+        "guided_steps": ["查看摘要语料与年份字段", "运行关键词提取与主题建模", "对照主题与时间趋势导出图表"],
+        "covered_nodes": ["corpus_input", "dictionary_input", "clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms", "term_document_analysis", "term_year_analysis", "feature_term_selection", "keyword_extraction", "keyword_clustering", "topic_modeling", "document_clustering", "save_xlsx", "save_png", "save_html_report", "note", "group"],
+        "covered_settings": ["feature_term_count", "top_k_project", "topic_model_k", "document_cluster_k"],
+        "public_data_only": True,
+        "language_balance": {"en": 0.5, "zh": 0.5},
+        "source_datasets": ["openalex_works"],
         "source_profile": "literature",
-        "source_filename": "openalex_institution_topics.csv",
-        "rows": _openalex_rows(),
-        "workflow_name": "学术摘要机构主题流",
-        "import_template_overrides": {},
-        "keep_node_types": {
-            "corpus_input",
-            "dictionary_input",
-            "clean_text",
-            "normalize_text",
-            "tokenize",
-            "apply_dictionary_rules",
-            "filter_terms",
-            "frequency_statistics",
-            "term_year_analysis",
-            "feature_term_selection",
-            "keyword_extraction",
-            "keyword_clustering",
-            "institution_keyword_analysis",
-            "institution_topic_analysis",
-            "save_xlsx",
-            "save_png",
-            "save_html_report",
-        },
-        "node_config_overrides": {
-            "feature_term_selection": {"feature_term_count": 120},
-            "keyword_clustering": {"keyword_cluster_k": 2, "topic_model_k": 2},
-            "institution_topic_analysis": {"topic_model_k": 2},
-            "save_html_report": {"include_audit": True},
-        },
-        "dictionary_terms": {
-            "phrase_lexicon": [
-                ("generative ai", "generative_ai"),
-                ("academic writing", "academic_writing"),
-                ("lithium ion batteries", "lithium_ion_batteries"),
-                ("battery recycling", "battery_recycling"),
-                ("circular economy", "circular_economy"),
-            ],
-        },
-        "dataset": {
-            "name": "OpenAlex API subset",
-            "url": "https://api.openalex.org/",
-            "license": "CC0 / No Rights Reserved",
-        },
+        "sources": [
+            _source_spec("academic_topics_en.xlsx", "xlsx", "openalex_works", "en", "sample_03_openalex_en", 0.5),
+            _source_spec("academic_topics_zh.xlsx", "xlsx", "openalex_works", "zh", "sample_03_openalex_zh", 0.5),
+        ],
+        "workflow_name": "学术关键词与主题工作流",
+        "import_template_overrides": {"text_build": {"mode": "concat_fields", "fields": ["raw_text"], "delimiter": "\n\n", "skip_empty": True}},
+        "node_config_overrides": {"feature_term_selection": {"feature_term_count": 120}, "keyword_clustering": {"keyword_cluster_k": 6}, "topic_modeling": {"topic_model_k": 6}},
+        "dictionary_terms": {"phrase_lexicon": [("large language model", "large_language_model"), ("机器学习", "机器学习")]},
+        "review_tasks": [],
+        "experiment_specs": [],
     },
     {
-        "slug": "sample-newsgroups-topics",
-        "name": "示例项目 - 新闻组主题聚类",
-        "description": "开源数据集示例：基于 20 Newsgroups 小样本的主题聚类与文档聚类，适合查看关键词聚类、文档散点与导出图表。",
-        "source_profile": "generic",
-        "source_filename": "twenty_newsgroups_topics.csv",
-        "rows": _newsgroups_rows(),
-        "workflow_name": "新闻组主题聚类流",
-        "import_template_overrides": {
-            "text_build": {"mode": "concat_fields", "fields": ["title", "raw_text"], "delimiter": "\n\n", "skip_empty": True},
-        },
-        "keep_node_types": {
-            "corpus_input",
-            "dictionary_input",
-            "clean_text",
-            "normalize_text",
-            "tokenize",
-            "apply_dictionary_rules",
-            "filter_terms",
-            "frequency_statistics",
-            "feature_term_selection",
-            "keyword_extraction",
-            "keyword_clustering",
-            "document_clustering",
-            "save_csv",
-            "save_png",
-            "save_html_report",
-        },
-        "node_config_overrides": {
-            "feature_term_selection": {"feature_term_count": 150},
-            "keyword_clustering": {"keyword_cluster_k": 3, "topic_model_k": 3},
-            "document_clustering": {"document_cluster_k": 3},
-        },
-        "dictionary_terms": {
-            "phrase_lexicon": [
-                ("3d graphics", "3d_graphics"),
-                ("wireframe models", "wireframe_models"),
-                ("space shuttle", "space_shuttle"),
-            ],
-        },
-        "dataset": {
-            "name": "20 Newsgroups subset",
-            "url": "https://archive.ics.uci.edu/dataset/113/twenty+newsgroups",
-            "license": "CC BY 4.0",
-        },
+        "order": 4,
+        "slug": "sample-04-institution-topics",
+        "name": "示例 04 - 机构主题与技术方向",
+        "description": "使用 OpenAlex 双语摘要比较机构、关键词、主题与年份关系。",
+        "difficulty": "进阶",
+        "default_row_count": 10_000,
+        "goal": "如何比较机构、关键词和主题之间的关系？",
+        "guided_steps": ["先按机构与年份查看分布", "运行机构关键词与机构主题分析", "导出图表并核对来源归属"],
+        "covered_nodes": ["corpus_input", "dictionary_input", "filter_by_metadata", "bucket_by_time", "clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms", "term_year_analysis", "feature_term_selection", "keyword_extraction", "institution_keyword_analysis", "institution_topic_analysis", "save_xlsx", "save_png", "save_html_report", "note", "group"],
+        "covered_settings": ["metadata_field", "bucket_unit", "feature_term_count", "topic_model_k"],
+        "public_data_only": True,
+        "language_balance": {"en": 0.5, "zh": 0.5},
+        "source_datasets": ["openalex_works"],
+        "source_profile": "literature",
+        "sources": [
+            _source_spec("institution_topics_en.xlsx", "xlsx", "openalex_works", "en", "sample_04_institution_en", 0.5),
+            _source_spec("institution_topics_zh.xlsx", "xlsx", "openalex_works", "zh", "sample_04_institution_zh", 0.5),
+        ],
+        "workflow_name": "机构主题与技术方向工作流",
+        "import_template_overrides": {"text_build": {"mode": "concat_fields", "fields": ["raw_text"], "delimiter": "\n\n", "skip_empty": True}},
+        "node_config_overrides": {"institution_topic_analysis": {"topic_model_k": 5}, "save_html_report": {"include_audit": True}},
+        "dictionary_terms": {"phrase_lexicon": [("research policy", "research_policy"), ("技术路线", "技术路线")]},
+        "review_tasks": [],
+        "experiment_specs": [],
     },
     {
-        "slug": "sample-sms-cooccurrence",
-        "name": "示例项目 - 短信词频与共现",
-        "description": "开源数据集示例：基于 UCI SMS Spam Collection 小样本的词频、共现和导出流程，适合快速理解短文本工作流。",
+        "order": 5,
+        "slug": "sample-05-review-experiment-incremental",
+        "name": "示例 05 - 复核实验与增量运行",
+        "description": "使用联合国语料演示规则复核、实验对比与增量运行的基本场景。",
+        "difficulty": "高级",
+        "default_row_count": 10_000,
+        "goal": "如何复核结果、调参比较，并只重跑变更文档？",
+        "guided_steps": ["先运行基线词表规则", "查看复核与实验入口", "对比增量运行前后的差异"],
+        "covered_nodes": ["corpus_input", "dictionary_input", "overlay_dictionary_rules", "clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms", "keyword_extraction", "keyword_clustering", "save_html_report", "note", "group"],
+        "covered_settings": ["overlay_rows_text", "top_k_project", "keyword_cluster_k", "incremental_mode"],
+        "public_data_only": True,
+        "language_balance": {"en": 0.5, "zh": 0.5},
+        "source_datasets": ["un_parallel_en_zh"],
         "source_profile": "generic",
-        "source_filename": "sms_spam_collection.csv",
-        "rows": _sms_rows(),
-        "workflow_name": "短信词频共现流",
-        "import_template_overrides": {
-            "text_build": {"mode": "concat_fields", "fields": ["title", "raw_text"], "delimiter": "\n\n", "skip_empty": True},
-        },
-        "keep_node_types": {
-            "corpus_input",
-            "dictionary_input",
-            "clean_text",
-            "normalize_text",
-            "tokenize",
-            "apply_dictionary_rules",
-            "filter_terms",
-            "frequency_statistics",
-            "cooccurrence_analysis",
-            "keyword_extraction",
-            "save_csv",
-            "save_png",
-            "save_html_report",
-        },
-        "node_config_overrides": {
-            "cooccurrence_analysis": {"cooccurrence_window": 3, "min_cooccurrence": 1},
-            "keyword_extraction": {"top_k_per_doc": 5, "top_k_project": 40},
-        },
-        "dictionary_terms": {
-            "phrase_lexicon": [
-                ("claim code", "claim_code"),
-                ("free membership", "free_membership"),
-                ("prize reward", "prize_reward"),
-            ],
-        },
-        "dataset": {
-            "name": "SMS Spam Collection",
-            "url": "https://archive.ics.uci.edu/dataset/228/sms+spam+collection",
-            "license": "Research / public corpus aggregation",
-        },
+        "sources": [
+            _source_spec("review_experiment_en.json", "json", "un_parallel_en_zh", "en", "sample_05_review_en", 0.5),
+            _source_spec("review_experiment_zh.json", "json", "un_parallel_en_zh", "zh", "sample_05_review_zh", 0.5),
+        ],
+        "workflow_name": "复核实验与增量运行工作流",
+        "import_template_overrides": {"text_build": {"mode": "concat_fields", "fields": ["raw_text"], "delimiter": "\n\n", "skip_empty": True}},
+        "node_config_overrides": {"keyword_extraction": {"top_k_project": 80}, "keyword_clustering": {"keyword_cluster_k": 5}},
+        "dictionary_terms": {"phrase_lexicon": [("peacekeeping mission", "peacekeeping_mission"), ("国际合作", "国际合作")]},
+        "review_tasks": [],
+        "experiment_specs": [],
+    },
+    {
+        "order": 6,
+        "slug": "sample-06-multisource-merge-sampling",
+        "name": "示例 06 - 多来源语料合并与抽样",
+        "description": "使用百科与 OpenAlex 双语公开语料演示多来源合并、去重、抽样与多格式 seed 文件。",
+        "difficulty": "进阶",
+        "default_row_count": 10_000,
+        "goal": "如何合并 CSV/XLSX/JSON/TXT，多来源去重和抽样？",
+        "guided_steps": ["检查四种输入格式的 seed 文件", "运行合并、去重与抽样节点", "查看共现统计与导出图表"],
+        "covered_nodes": ["corpus_input", "dictionary_input", "merge_corpora", "filter_by_metadata", "deduplicate_documents", "sample_corpus", "clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms", "frequency_statistics", "cooccurrence_analysis", "save_csv", "save_png", "save_html_report", "note", "group"],
+        "covered_settings": ["dedupe_key", "sample_size", "sample_seed", "metadata_field"],
+        "public_data_only": True,
+        "language_balance": {"en": 0.5, "zh": 0.5},
+        "source_datasets": ["wikimedia_enwiki", "wikimedia_zhwiki", "openalex_works"],
+        "source_profile": "generic",
+        "sources": [
+            _source_spec("multisource_en.csv", "csv", "wikimedia_enwiki", "en", "sample_06_csv_en", 0.25),
+            _source_spec("multisource_zh.xlsx", "xlsx", "wikimedia_zhwiki", "zh", "sample_06_xlsx_zh", 0.25),
+            _source_spec("multisource_openalex_en.json", "json", "openalex_works", "en", "sample_06_json_en", 0.25),
+            _source_spec("multisource_openalex_zh.txt", "txt", "openalex_works", "zh", "sample_06_txt_zh", 0.25),
+        ],
+        "workflow_name": "多来源合并与抽样工作流",
+        "import_template_overrides": {"text_build": {"mode": "concat_fields", "fields": ["raw_text"], "delimiter": "\n\n", "skip_empty": True}},
+        "node_config_overrides": {"cooccurrence_analysis": {"cooccurrence_window": 5}, "save_html_report": {"include_audit": True}},
+        "dictionary_terms": {"phrase_lexicon": [("knowledge graph", "knowledge_graph"), ("主题聚类", "主题聚类")]},
+        "review_tasks": [],
+        "experiment_specs": [],
+    },
+    {
+        "order": 7,
+        "slug": "sample-07-group-compare-keyness",
+        "name": "示例 07 - 分组比较与关键性分析",
+        "description": "使用 OpenAlex 双语数据演示分组比较、关键性分析与时间切片。",
+        "difficulty": "高级",
+        "default_row_count": 10_000,
+        "goal": "如何比较不同时间、机构或产品线的关键词差异？",
+        "guided_steps": ["按年份或机构建立分组", "运行组间比较与 keyness", "对照频率和时间趋势图"],
+        "covered_nodes": ["corpus_input", "dictionary_input", "filter_by_metadata", "bucket_by_time", "clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms", "frequency_statistics", "term_year_analysis", "group_compare", "keyness_analysis", "save_csv", "save_png", "save_html_report", "note", "group"],
+        "covered_settings": ["group_field", "comparison_mode", "keyness_metric", "bucket_unit"],
+        "public_data_only": True,
+        "language_balance": {"en": 0.5, "zh": 0.5},
+        "source_datasets": ["openalex_works"],
+        "source_profile": "literature",
+        "sources": [
+            _source_spec("group_compare_en.csv", "csv", "openalex_works", "en", "sample_07_group_en", 0.5),
+            _source_spec("group_compare_zh.csv", "csv", "openalex_works", "zh", "sample_07_group_zh", 0.5),
+        ],
+        "workflow_name": "分组比较与关键性分析工作流",
+        "import_template_overrides": {"text_build": {"mode": "concat_fields", "fields": ["raw_text"], "delimiter": "\n\n", "skip_empty": True}},
+        "node_config_overrides": {"keyness_analysis": {"keyness_metric": "log_likelihood"}, "save_html_report": {"include_audit": True}},
+        "dictionary_terms": {"phrase_lexicon": [("policy diffusion", "policy_diffusion"), ("对比分析", "对比分析")]},
+        "review_tasks": [],
+        "experiment_specs": [],
+    },
+    {
+        "order": 8,
+        "slug": "sample-08-split-evaluate-join",
+        "name": "示例 08 - 切分评估与结果拼接",
+        "description": "使用双语百科文本演示语料切分、聚类评估与结果拼接。",
+        "difficulty": "高级",
+        "default_row_count": 10_000,
+        "goal": "如何切分语料、建模、评估聚类并拼接结果？",
+        "guided_steps": ["切分语料并观察样本差异", "运行主题建模与聚类评估", "拼接结果后导出表格和图表"],
+        "covered_nodes": ["corpus_input", "dictionary_input", "split_corpus", "clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms", "topic_modeling", "cluster_evaluation", "join_results", "document_clustering", "save_csv", "save_xlsx", "save_png", "save_html_report", "note", "group"],
+        "covered_settings": ["split_ratio", "topic_model_k", "document_cluster_k", "evaluation_metric"],
+        "public_data_only": True,
+        "language_balance": {"en": 0.5, "zh": 0.5},
+        "source_datasets": ["wikimedia_enwiki", "wikimedia_zhwiki"],
+        "source_profile": "generic",
+        "sources": [
+            _source_spec("split_evaluate_en.json", "json", "wikimedia_enwiki", "en", "sample_08_split_en", 0.5),
+            _source_spec("split_evaluate_zh.json", "json", "wikimedia_zhwiki", "zh", "sample_08_split_zh", 0.5),
+        ],
+        "workflow_name": "切分评估与结果拼接工作流",
+        "import_template_overrides": {"text_build": {"mode": "concat_fields", "fields": ["raw_text"], "delimiter": "\n\n", "skip_empty": True}},
+        "node_config_overrides": {"cluster_evaluation": {"evaluation_metric": "silhouette"}, "topic_modeling": {"topic_model_k": 5}},
+        "dictionary_terms": {"phrase_lexicon": [("semantic search", "semantic_search"), ("结果拼接", "结果拼接")]},
+        "review_tasks": [],
+        "experiment_specs": [],
+    },
+    {
+        "order": 9,
+        "slug": "sample-09-conditional-routing",
+        "name": "示例 09 - 条件路由与人工门禁",
+        "description": "使用联合国语料与 OpenAlex 双语数据演示条件路由、结果门禁与人工复核入口。",
+        "difficulty": "高级",
+        "default_row_count": 10_000,
+        "goal": "如何用条件、指标门禁和人工复核控制工作流？",
+        "guided_steps": ["检查路由条件与门禁阈值", "运行主流程并观察门禁结果", "进入人工复核后查看审计记录"],
+        "covered_nodes": ["corpus_input", "dictionary_input", "conditional_router", "result_gate", "manual_review_gate", "clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms", "save_html_report", "note", "group"],
+        "covered_settings": ["condition_expression", "gate_metric", "gate_threshold", "review_task_id"],
+        "public_data_only": True,
+        "language_balance": {"en": 0.5, "zh": 0.5},
+        "source_datasets": ["un_parallel_en_zh", "openalex_works"],
+        "source_profile": "generic",
+        "sources": [
+            _source_spec("conditional_router_en.csv", "csv", "un_parallel_en_zh", "en", "sample_09_router_en", 0.25),
+            _source_spec("conditional_router_zh.csv", "csv", "un_parallel_en_zh", "zh", "sample_09_router_zh", 0.25),
+            _source_spec("conditional_router_openalex_en.json", "json", "openalex_works", "en", "sample_09_openalex_en", 0.25),
+            _source_spec("conditional_router_openalex_zh.json", "json", "openalex_works", "zh", "sample_09_openalex_zh", 0.25),
+        ],
+        "workflow_name": "条件路由与人工门禁工作流",
+        "import_template_overrides": {"text_build": {"mode": "concat_fields", "fields": ["raw_text"], "delimiter": "\n\n", "skip_empty": True}},
+        "node_config_overrides": {"result_gate": {"gate_threshold": 0.6}, "save_html_report": {"include_audit": True}},
+        "dictionary_terms": {"phrase_lexicon": [("human review", "human_review"), ("质量门禁", "质量门禁")]},
+        "review_tasks": [],
+        "experiment_specs": [],
     },
 ]
 
@@ -365,55 +289,208 @@ def _append_dictionary_terms(manifest: dict[str, Any], dictionary_terms: dict[st
             sheet["entries"].append(make_dictionary_entry(source, target, 0))
 
 
-def _configure_workflow(manifest: dict[str, Any], *, workflow_name: str, keep_node_types: set[str], node_config_overrides: dict[str, dict[str, Any]]) -> None:
+def _configure_workflow_basics(manifest: dict[str, Any], spec: dict[str, Any]) -> None:
     workflow = manifest["workflow_definitions"][0]
     workflow["source"] = "manual"
-    workflow["name"] = workflow_name
-    workflow["nodes"] = [node for node in workflow["nodes"] if node.get("node_type") in keep_node_types]
-    kept_node_ids = {str(node["node_id"]) for node in workflow["nodes"]}
-    workflow["edges"] = [
-        edge
-        for edge in workflow["edges"]
-        if str(edge.get("from_node")) in kept_node_ids and str(edge.get("to_node")) in kept_node_ids
-    ]
+    workflow["name"] = str(spec["workflow_name"])
     for node in workflow["nodes"]:
-        patch = node_config_overrides.get(str(node.get("node_type")))
+        patch = dict(spec.get("node_config_overrides") or {}).get(str(node.get("node_type")))
         if patch:
             node["config"] = {**dict(node.get("config") or {}), **patch}
 
 
-def _write_sample_source(project_dir: Path, source_filename: str, rows: list[dict[str, Any]]) -> Path:
+def _sample_row_count(spec: dict[str, Any]) -> int:
+    override = os.getenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT")
+    if override:
+        row_count = int(override)
+    else:
+        row_count = int(spec.get("default_row_count") or 10_000)
+    if row_count < 2 or row_count % 2:
+        raise ValueError("Sample row count must be an even number so en/zh rows stay 1:1")
+    return row_count
+
+
+def _allocate_counts(sources: list[dict[str, Any]], target_total: int) -> list[int]:
+    if target_total == 0:
+        return [0 for _ in sources]
+
+    ratios = [max(float(source.get("ratio", 0.0) or 0.0), 0.0) for source in sources]
+    ratio_total = sum(ratios)
+    if ratio_total <= 0:
+        ratios = [1.0 for _ in sources]
+        ratio_total = float(len(sources))
+
+    exact_counts = [(target_total * ratio) / ratio_total for ratio in ratios]
+    counts = [math.floor(value) for value in exact_counts]
+    remainder = target_total - sum(counts)
+    ranked = sorted(
+        enumerate(exact_counts),
+        key=lambda item: (item[1] - math.floor(item[1]), -item[0]),
+        reverse=True,
+    )
+    for index, _value in ranked[:remainder]:
+        counts[index] += 1
+    return counts
+
+
+def _exportable_source_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    exported: list[dict[str, Any]] = []
+    for row in rows:
+        exported.append(
+            {
+                "doc_id": row.get("doc_id"),
+                "language": row.get("language"),
+                "title": row.get("title"),
+                "raw_text": row.get("raw_text"),
+                "year": row.get("year"),
+                "source": row.get("source"),
+                "institution": row.get("institution"),
+                "category_or_tag": row.get("category_or_tag"),
+                "keyword_field": row.get("keyword_field"),
+                "source_profile": row.get("source_profile"),
+                "extra_metadata_json": json.dumps(row.get("extra_metadata") or {}, ensure_ascii=False, sort_keys=True),
+            }
+        )
+    return exported
+
+
+def _write_rows_to_source_file(path: Path, file_format: str, rows: list[dict[str, Any]]) -> None:
+    export_rows = _exportable_source_rows(rows)
+    format_name = file_format.lower()
+    if format_name == "csv":
+        pd.DataFrame(export_rows).to_csv(path, index=False, encoding="utf-8-sig")
+        return
+    if format_name == "xlsx":
+        pd.DataFrame(export_rows).to_excel(path, index=False)
+        return
+    if format_name == "json":
+        path.write_text(json.dumps(export_rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        return
+    if format_name == "txt":
+        path.write_text("\n".join(str(row.get("raw_text") or "").replace("\r", " ").replace("\n", " ") for row in rows), encoding="utf-8")
+        return
+    raise ValueError(f"Unsupported sample source format: {file_format}")
+
+
+def _sample_seed_dir(project_dir: Path) -> Path:
     seed_dir = project_dir / "metadata" / "sample_seed"
     seed_dir.mkdir(parents=True, exist_ok=True)
-    source_path = seed_dir / source_filename
-    pd.DataFrame(rows).to_csv(source_path, index=False, encoding="utf-8-sig")
-    return source_path
+    return seed_dir
+
+
+def _source_file_record(project_dir: Path, path: Path, row_count: int) -> dict[str, Any]:
+    relative_path = path.relative_to(project_dir).as_posix()
+    digest = hashlib.md5(relative_path.encode("utf-8")).hexdigest()[:8]
+    return {
+        "id": f"source-{path.stem}-{digest}",
+        "name": path.name,
+        "source_type": path.suffix.lower().lstrip("."),
+        "relative_path": relative_path,
+        "imported_at": utc_now_iso(),
+        "row_count": row_count,
+    }
+
+
+def _load_cache_rows(dataset_id: str, language: str, selector: str | None) -> list[dict[str, Any]]:
+    cache_rows = read_normalized_sample_cache(sample_data_cache_root(), dataset_id, selector=selector)
+    return [deepcopy(row) for row in cache_rows if str(row.get("language") or "") == language]
+
+
+def _materialize_sample_sources(project_dir: Path, spec: dict[str, Any], row_count: int) -> tuple[list[Path], list[dict[str, Any]], list[dict[str, Any]]]:
+    ensure_public_sample_cache_available(spec["source_datasets"])
+    indexed_sources = list(enumerate(spec["sources"]))
+    sources_by_language: dict[str, list[tuple[int, dict[str, Any]]]] = {"en": [], "zh": []}
+    for index, source in indexed_sources:
+        language = str(source.get("language") or "")
+        if language not in sources_by_language:
+            raise ValueError(f"Unsupported sample source language: {language}")
+        sources_by_language[language].append((index, source))
+
+    source_payloads: dict[int, dict[str, Any]] = {}
+    per_language_target = row_count // 2
+    cache_pools: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    cache_offsets: dict[tuple[str, str, str], int] = {}
+
+    for language in ("en", "zh"):
+        language_sources = sources_by_language[language]
+        allocations = _allocate_counts([source for _index, source in language_sources], per_language_target)
+        for (index, source), requested_count in zip(language_sources, allocations, strict=True):
+            dataset_id = str(source["dataset_id"])
+            selector = str(source.get("selector") or "")
+            key = (dataset_id, language, selector)
+            rows = cache_pools.setdefault(key, _load_cache_rows(dataset_id, language, selector or None))
+            start = cache_offsets.get(key, 0)
+            end = start + requested_count
+            if len(rows) < end:
+                raise ValueError(
+                    f"Not enough real rows for dataset={dataset_id} language={language} selector={selector!r}: "
+                    f"requested={requested_count} available={max(len(rows) - start, 0)}"
+                )
+            cache_offsets[key] = end
+            selected_rows: list[dict[str, Any]] = []
+            for row in rows[start:end]:
+                materialized = deepcopy(row)
+                materialized["source_profile"] = str(spec["source_profile"])
+                selected_rows.append(materialized)
+            source_payloads[index] = {"source": source, "rows": selected_rows}
+
+    seed_dir = _sample_seed_dir(project_dir)
+    written_paths: list[Path] = []
+    corpus: list[dict[str, Any]] = []
+    source_files: list[dict[str, Any]] = []
+
+    for index, source in indexed_sources:
+        payload = source_payloads[index]
+        rows = payload["rows"]
+        path = seed_dir / str(source["filename"])
+        _write_rows_to_source_file(path, str(source["format"]), rows)
+        written_paths.append(path)
+        source_files.append(_source_file_record(project_dir, path, len(rows)))
+        relative_path = path.relative_to(project_dir).as_posix()
+        for row_index, row in enumerate(rows, start=1):
+            extra_metadata = dict(row.get("extra_metadata") or {})
+            extra_metadata["_source_relative_path"] = relative_path
+            extra_metadata["_source_file_name"] = path.name
+            extra_metadata["_source_row_index"] = row_index
+            row["extra_metadata"] = extra_metadata
+            corpus.append(row)
+
+    return written_paths, corpus, source_files
+
+
+def _write_sample_sources(project_dir: Path, spec: dict[str, Any], row_count: int) -> list[Path]:
+    written_paths, _corpus, _source_files = _materialize_sample_sources(project_dir, spec, row_count)
+    return written_paths
 
 
 def create_builtin_sample_projects() -> list[tuple[Path, dict[str, Any]]]:
     created: list[tuple[Path, dict[str, Any]]] = []
 
     for spec in BUILTIN_SAMPLE_PROJECTS:
+        row_count = _sample_row_count(spec)
         project_dir, manifest = create_project(str(spec["name"]), str(spec["description"]))
         manifest["import_template"] = default_import_template(str(spec["source_profile"]))
         manifest["import_template"] = {
             **manifest["import_template"],
-            **dict(spec.get("import_template_overrides") or {}),
+            **deepcopy(spec.get("import_template_overrides") or {}),
         }
         manifest.setdefault("settings", {})
-        manifest["settings"]["sample_project"] = deepcopy(spec["dataset"])
-        manifest["settings"]["sample_project"]["slug"] = spec["slug"]
-        manifest["settings"]["sample_project"]["workflow_name"] = spec["workflow_name"]
-        _append_dictionary_terms(manifest, dict(spec.get("dictionary_terms") or {}))
-        _configure_workflow(
-            manifest,
-            workflow_name=str(spec["workflow_name"]),
-            keep_node_types=set(spec["keep_node_types"]),
-            node_config_overrides=dict(spec.get("node_config_overrides") or {}),
-        )
+        manifest["settings"]["sample_project"] = {
+            "order": spec["order"],
+            "slug": spec["slug"],
+            "goal": spec["goal"],
+            "difficulty": spec["difficulty"],
+            "workflow_name": spec["workflow_name"],
+            "public_data_only": True,
+            "language_balance": deepcopy(spec["language_balance"]),
+            "source_datasets": deepcopy(spec["source_datasets"]),
+        }
+        manifest["review_tasks"] = deepcopy(spec.get("review_tasks") or [])
+        manifest["experiment_specs"] = deepcopy(spec.get("experiment_specs") or [])
+        _append_dictionary_terms(manifest, deepcopy(spec.get("dictionary_terms") or {}))
+        _configure_workflow_basics(manifest, spec)
 
-        source_path = _write_sample_source(project_dir, str(spec["source_filename"]), list(spec["rows"]))
-        corpus, source_files, _issues = import_files([source_path], manifest["import_template"], project_dir=project_dir)
+        _written_paths, corpus, source_files = _materialize_sample_sources(project_dir, spec, row_count)
         manifest["source_files"] = source_files
         save_project(project_dir, manifest, corpus)
         created.append((project_dir, manifest))
