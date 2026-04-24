@@ -26,8 +26,10 @@ import type {
 } from "@textflow/shared-types";
 import { sourceProfileImportTemplates, sourceProfiles } from "@textflow/shared-types";
 import type { ImportProjectFilesResponse } from "./bridge/desktopBridge";
+import { ExperimentPanel } from "./features/experiments/ExperimentPanel";
 import { ReviewQueuePanel } from "./features/review/ReviewQueuePanel";
 import { coerceReviewTasks } from "./features/review/reviewTypes";
+import { RunDiffPanel } from "./features/results/RunDiffPanel";
 import { useTaskProgress, useWorkspace } from "./store/workspaceStore";
 import {
   addWorkflowNodeByType,
@@ -4500,15 +4502,29 @@ function AnalysisPage() {
 
 function ResultsPage() {
   const {
-    state: { snapshot, loading, lastExport },
+    state: { snapshot, loading, lastExport, lastRunDiff },
+    compareRuns,
     exportProject,
     exportProjectBackup,
     openPath,
     revealPath,
     resolveReviewTask,
+    runExperimentMatrix,
     saveProjectPackagePath
   } = useWorkspace();
   const project = snapshot.current_project;
+  const experiments = project?.experiment_specs ?? [];
+  const [selectedExperimentId, setSelectedExperimentId] = useState<string | null>(experiments[0]?.experiment_id ?? null);
+
+  useEffect(() => {
+    if (!experiments.length) {
+      setSelectedExperimentId(null);
+      return;
+    }
+    if (!selectedExperimentId || !experiments.some((experiment) => experiment.experiment_id === selectedExperimentId)) {
+      setSelectedExperimentId(experiments[0].experiment_id);
+    }
+  }, [experiments, selectedExperimentId]);
 
   if (!project) {
     return <EmptyState title="还没有结果" body="先完成一次处理，这里就会出现表格、图表和报告。" />;
@@ -4648,6 +4664,24 @@ function ResultsPage() {
           }}
           onReject={async (reviewId, resolution) => {
             await resolveReviewTask(reviewId, resolution);
+          }}
+        />
+        <ExperimentPanel
+          experiments={experiments}
+          selectedExperimentId={selectedExperimentId}
+          latestDiff={lastRunDiff}
+          loading={loading}
+          onSelectExperiment={setSelectedExperimentId}
+          onRunExperiment={async (experimentId) => {
+            await runExperimentMatrix(experimentId);
+          }}
+        />
+        <RunDiffPanel
+          runs={project.run_history}
+          diff={lastRunDiff}
+          loading={loading}
+          onCompareRuns={async (leftRunId, rightRunId) => {
+            await compareRuns(leftRunId, rightRunId);
           }}
         />
       </>

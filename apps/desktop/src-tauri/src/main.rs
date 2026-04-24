@@ -591,6 +591,74 @@ async fn run_workflow(
 }
 
 #[tauri::command]
+async fn save_experiment_spec(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    experiment: Value,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "save-experiment-spec",
+        json!({
+            "project_id": project_id,
+            "experiment": experiment
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn list_experiment_specs(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+) -> Result<Value, String> {
+    engine_request(&app, &state, "list-experiment-specs", json!({ "project_id": project_id })).await
+}
+
+#[tauri::command]
+async fn run_experiment_matrix(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    experiment_id: String,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "run-experiment-matrix",
+        json!({
+            "project_id": project_id,
+            "experiment_id": experiment_id
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn compare_runs(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    left_run_id: String,
+    right_run_id: String,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "compare-runs",
+        json!({
+            "project_id": project_id,
+            "left_run_id": left_run_id,
+            "right_run_id": right_run_id
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
 async fn export_project(
     app: tauri::AppHandle,
     state: tauri::State<'_, EngineState>,
@@ -876,6 +944,10 @@ fn main() {
             delete_project,
             import_project_files,
             run_workflow,
+            save_experiment_spec,
+            list_experiment_specs,
+            run_experiment_matrix,
+            compare_runs,
             export_project,
             export_project_backup,
             save_project,

@@ -914,6 +914,11 @@ def normalize_run_record(
         "recipe_id",
         "output_bundle_id",
         "output_summary",
+        "experiment_id",
+        "experiment_name",
+        "variant_label",
+        "variant_index",
+        "variant_overrides",
     ]
     return {
         key: normalized[key]

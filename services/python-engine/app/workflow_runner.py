@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,26 @@ def enabled_workflow_step_order(runtime_profile: dict[str, Any]) -> list[str]:
 
 def workflow_step_enabled(runtime_profile: dict[str, Any], step: str) -> bool:
     return step in set(enabled_workflow_step_order(runtime_profile))
+
+
+def apply_workflow_variant_overrides(
+    workflow_definition: dict[str, Any],
+    node_overrides: dict[str, Any] | None,
+) -> dict[str, Any]:
+    next_workflow = deepcopy(workflow_definition)
+    overrides = node_overrides if isinstance(node_overrides, dict) else {}
+    for node in next_workflow.get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("node_id") or "")
+        override = overrides.get(node_id)
+        if not isinstance(override, dict):
+            continue
+        node["config"] = {
+            **(node.get("config") if isinstance(node.get("config"), dict) else {}),
+            **deepcopy(override),
+        }
+    return next_workflow
 
 
 def run_project_workflow_bridge(

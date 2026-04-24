@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import sys
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -12,10 +13,12 @@ import pandas as pd
 
 from .artifact_store import load_artifact_payload, load_artifact_preview
 from .defaults import deep_copy_manifest
+from .experiment_store import list_experiment_specs, run_experiment_matrix, save_experiment_spec
 from .ingestion import ensure_sample_files, import_files, parse_optional_year
 from .ingestion_specs import list_ingestion_specs, save_ingestion_spec
 from .review_store import create_review_task, list_review_tasks, resolve_review_task
 from .resource_store import create_corpus_view, delete_corpus_view, update_corpus_view
+from .run_diff import compare_runs
 from .workflow_runner import run_project_workflow
 from .project_store import (
     build_project_summary,
@@ -726,6 +729,72 @@ def action_apply_review_resolution(payload: dict[str, Any], progress_callback: P
     return action_resolve_review_task(payload, progress_callback)
 
 
+def action_save_experiment_spec(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在保存实验规格")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    spec_payload = payload.get("experiment") if isinstance(payload.get("experiment"), dict) else payload.get("spec")
+    if not isinstance(spec_payload, dict):
+        spec_payload = {key: value for key, value in payload.items() if key != "project_id"}
+    saved = save_experiment_spec(manifest, spec_payload)
+    save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections={"manifest"})
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "实验规格已保存")
+    return {
+        "experiment": saved,
+        "project": manifest,
+        "project_updated_at": manifest.get("updated_at"),
+    }
+
+
+def action_list_experiment_specs(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在读取实验规格")
+    ensure_bootstrap_project()
+    _project_dir, manifest, _corpus = load_project_or_fail(payload["project_id"])
+    experiments = list_experiment_specs(manifest)
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "实验规格已加载")
+    return {
+        "project_id": manifest["id"],
+        "experiments": experiments,
+    }
+
+
+def action_run_experiment_matrix(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.05, "正在准备实验矩阵")
+    ensure_bootstrap_project()
+    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
+    if not corpus:
+        notify(progress_callback, 0.12, "当前项目为空，正在载入示例语料")
+        corpus, source_files, _issues = import_files(ensure_sample_files(), manifest["import_template"], project_dir=project_dir)
+        manifest["source_files"] = source_files
+    result = run_experiment_matrix(
+        project_dir,
+        manifest,
+        corpus,
+        str(payload["experiment_id"]),
+        progress_callback=progress_callback,
+    )
+    save_project(project_dir, manifest, result["corpus"], already_normalized=True, dirty_sections={"manifest", "corpus"})
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "实验矩阵运行完成")
+    return result
+
+
+def action_compare_runs(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在比较运行结果")
+    ensure_bootstrap_project()
+    _project_dir, manifest, _corpus = load_project_or_fail(payload["project_id"])
+    diff = compare_runs(
+        manifest,
+        str(payload.get("left_run_id") or payload.get("leftRunId") or ""),
+        str(payload.get("right_run_id") or payload.get("rightRunId") or ""),
+    )
+    remember_project(manifest["id"], set_current=True)
+    notify(progress_callback, 1.0, "运行对比已完成")
+    return diff
+
+
 def action_save_ingestion_spec(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
     notify(progress_callback, 0.1, "正在保存导入规格")
     ensure_bootstrap_project()
@@ -843,6 +912,10 @@ ACTION_HANDLERS: dict[str, Callable[..., Any]] = {
     "list-review-tasks": action_list_review_tasks,
     "resolve-review-task": action_resolve_review_task,
     "apply-review-resolution": action_apply_review_resolution,
+    "save-experiment-spec": action_save_experiment_spec,
+    "list-experiment-specs": action_list_experiment_specs,
+    "run-experiment-matrix": action_run_experiment_matrix,
+    "compare-runs": action_compare_runs,
     "save-ingestion-spec": action_save_ingestion_spec,
     "list-ingestion-specs": action_list_ingestion_specs,
     "create-corpus-view": action_create_corpus_view,

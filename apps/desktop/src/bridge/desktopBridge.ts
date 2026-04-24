@@ -2,6 +2,7 @@ import type {
   CorpusItem,
   DictionaryKind,
   DictionaryTableResource,
+  ExperimentSpec,
   ExportFormat,
   WorkflowNodeRuntimeState,
   WorkflowRunProgressDetail,
@@ -103,6 +104,36 @@ export interface ResolveReviewTaskResponse {
   project_updated_at?: string;
 }
 
+export interface SaveExperimentSpecResponse {
+  experiment: ExperimentSpec;
+  project: ProjectManifest;
+  project_updated_at?: string;
+}
+
+export interface RunExperimentMatrixResponse {
+  experiment: ExperimentSpec;
+  runs: RunRecord[];
+  project: ProjectManifest;
+  corpus: CorpusItem[];
+}
+
+export interface RunDiffArtifactSummary {
+  step: string;
+  left_record_count: number;
+  right_record_count: number;
+  record_count_delta: number;
+  added_files: string[];
+  removed_files: string[];
+}
+
+export interface RunDiffSummary {
+  left_run_id: string;
+  right_run_id: string;
+  summary: string;
+  metrics?: Record<string, Record<string, number>>;
+  artifact_diffs?: RunDiffArtifactSummary[];
+}
+
 export interface DeleteProjectResponse {
   project_id: string;
   deleted_path: string;
@@ -155,6 +186,9 @@ interface DesktopBridge {
   createReviewTask(projectId: string, input: CreateReviewTaskInput): Promise<CreateReviewTaskResponse>;
   listReviewTasks(projectId: string, status?: string): Promise<ListReviewTasksResponse>;
   resolveReviewTask(projectId: string, reviewId: string, resolution: ReviewResolutionInput): Promise<ResolveReviewTaskResponse>;
+  saveExperimentSpec(projectId: string, experiment: Partial<ExperimentSpec>): Promise<SaveExperimentSpecResponse>;
+  runExperimentMatrix(projectId: string, experimentId: string): Promise<RunExperimentMatrixResponse>;
+  compareRuns(projectId: string, leftRunId: string, rightRunId: string): Promise<RunDiffSummary>;
   saveProject(project: ProjectManifest): Promise<ProjectSummary>;
   openPath(path: string): Promise<void>;
   revealPath(path: string): Promise<void>;
@@ -173,6 +207,10 @@ const delay = (ms: number) => new Promise((resolve) => {
 
 function simulatedReviewTasks(project: ProjectManifest): ReviewTaskRecord[] {
   return project.review_tasks as unknown as ReviewTaskRecord[];
+}
+
+function simulatedExperimentSpecs(project: ProjectManifest): ExperimentSpec[] {
+  return project.experiment_specs as ExperimentSpec[];
 }
 
 async function tryInvoke<T>(command: string, payload?: Record<string, unknown>): Promise<T | null> {
@@ -505,6 +543,119 @@ export const desktopBridge: DesktopBridge = {
       corpus: demoWorkspace.corpus,
       source_files: project.source_files,
       project_updated_at: new Date().toISOString()
+    };
+  },
+
+  async saveExperimentSpec(projectId, experiment) {
+    const result = await tryInvoke<SaveExperimentSpecResponse>("save_experiment_spec", {
+      projectId,
+      experiment
+    });
+    if (result !== null) {
+      return result;
+    }
+    await delay(120);
+    const project = demoWorkspace.current_project!;
+    const experiments = simulatedExperimentSpecs(project);
+    const experimentId = experiment.experiment_id ?? `exp-${Date.now()}`;
+    const saved: ExperimentSpec = {
+      experiment_id: experimentId,
+      name: experiment.name ?? "参数矩阵实验",
+      workflow_id: experiment.workflow_id ?? project.active_workflow_id,
+      variant_matrix: experiment.variant_matrix ?? [
+        { label: "baseline", node_overrides: {} },
+        { label: "high-keywords", node_overrides: { "node-keyword-extraction": { top_k_project: 24 } } }
+      ]
+    };
+    const existingIndex = experiments.findIndex((item) => item.experiment_id === experimentId);
+    if (existingIndex >= 0) {
+      experiments[existingIndex] = saved;
+    } else {
+      experiments.push(saved);
+    }
+    project.updated_at = new Date().toISOString();
+    return {
+      experiment: saved,
+      project,
+      project_updated_at: project.updated_at
+    };
+  },
+
+  async runExperimentMatrix(projectId, experimentId) {
+    const result = await tryInvoke<RunExperimentMatrixResponse>("run_experiment_matrix", {
+      projectId,
+      experimentId
+    });
+    if (result !== null) {
+      return result;
+    }
+    await delay(900);
+    const project = demoWorkspace.current_project!;
+    const experiment = simulatedExperimentSpecs(project).find((item) => item.experiment_id === experimentId)
+      ?? {
+        experiment_id: experimentId,
+        name: "参数矩阵实验",
+        workflow_id: project.active_workflow_id,
+        variant_matrix: [
+          { label: "baseline", node_overrides: {} },
+          { label: "high-keywords", node_overrides: { "node-keyword-extraction": { top_k_project: 24 } } }
+        ]
+      };
+    const runs = experiment.variant_matrix.map((variant, index) => ({
+      ...createSimulatedRun(),
+      run_id: `run-${Date.now()}-${index + 1}`,
+      experiment_id: experiment.experiment_id,
+      experiment_name: experiment.name,
+      variant_label: String((variant as Record<string, unknown>).label ?? `variant-${index + 1}`),
+      variant_index: index,
+      variant_overrides: variant
+    })) as RunRecord[];
+    project.run_history = [...project.run_history, ...runs];
+    project.updated_at = new Date().toISOString();
+    return {
+      experiment,
+      runs,
+      project,
+      corpus: demoWorkspace.corpus
+    };
+  },
+
+  async compareRuns(projectId, leftRunId, rightRunId) {
+    const result = await tryInvoke<RunDiffSummary>("compare_runs", {
+      projectId,
+      leftRunId,
+      rightRunId
+    });
+    if (result !== null) {
+      return result;
+    }
+    await delay(160);
+    const project = demoWorkspace.current_project!;
+    const left = project.run_history.find((run) => run.run_id === leftRunId);
+    const right = project.run_history.find((run) => run.run_id === rightRunId);
+    const leftRows = left?.artifacts.reduce((total, artifact) => total + artifact.record_count, 0) ?? 0;
+    const rightRows = right?.artifacts.reduce((total, artifact) => total + artifact.record_count, 0) ?? 0;
+    return {
+      left_run_id: leftRunId,
+      right_run_id: rightRunId,
+      summary: `Compared ${leftRunId} vs ${rightRunId}: artifact row delta ${rightRows - leftRows}.`,
+      metrics: {
+        processed_document_count: {
+          left: left?.processed_document_count ?? 0,
+          right: right?.processed_document_count ?? 0,
+          delta: (right?.processed_document_count ?? 0) - (left?.processed_document_count ?? 0)
+        }
+      },
+      artifact_diffs: [
+        {
+          step: "analysis",
+          left_record_count: leftRows,
+          right_record_count: rightRows,
+          record_count_delta: rightRows - leftRows,
+          added_files: [],
+          removed_files: []
+        }
+      ]
     };
   },
 

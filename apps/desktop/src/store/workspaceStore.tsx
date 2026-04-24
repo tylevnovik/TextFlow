@@ -13,6 +13,7 @@ import type {
   CorpusItem,
   DictionaryKind,
   ExportFormat,
+  ExperimentSpec,
   PageId,
   ProjectManifest,
   ProjectSummary,
@@ -26,7 +27,10 @@ import type {
   ExportProjectResponse,
   ExportProjectBackupResponse,
   ImportProjectFilesResponse,
-  ResolveReviewTaskResponse
+  ResolveReviewTaskResponse,
+  RunDiffSummary,
+  RunExperimentMatrixResponse,
+  SaveExperimentSpecResponse
 } from "../bridge/desktopBridge";
 import { desktopBridge } from "../bridge/desktopBridge";
 import type { ReviewResolutionInput } from "../features/review/reviewTypes";
@@ -45,6 +49,7 @@ interface WorkspaceState {
   loading: boolean;
   statusLine: string;
   lastExport: ExportProjectResponse | null;
+  lastRunDiff: RunDiffSummary | null;
   uiScale: number;
 }
 
@@ -70,6 +75,7 @@ type WorkspaceAction =
       statusLine?: string;
     }
   | { type: "setLastExport"; lastExport: ExportProjectResponse | null }
+  | { type: "setRunDiff"; lastRunDiff: RunDiffSummary | null }
   | { type: "setUiScale"; uiScale: number };
 
 interface SaveProjectOptions {
@@ -100,6 +106,9 @@ interface WorkspaceContextValue {
   importProjectPackage: (path: string) => Promise<void>;
   saveProject: (project: ProjectManifest, options?: SaveProjectOptions) => Promise<boolean>;
   runWorkflow: () => Promise<RunRecord | null>;
+  saveExperimentSpec: (experiment: Partial<ExperimentSpec>) => Promise<SaveExperimentSpecResponse | null>;
+  runExperimentMatrix: (experimentId: string) => Promise<RunExperimentMatrixResponse | null>;
+  compareRuns: (leftRunId: string, rightRunId: string) => Promise<RunDiffSummary | null>;
   exportProject: (formats: ExportFormat[]) => Promise<ExportProjectResponse | null>;
   openPath: (path: string) => Promise<void>;
   revealPath: (path: string) => Promise<void>;
@@ -275,6 +284,9 @@ function reducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState
         loading: false,
         snapshot: action.snapshot,
         lastExport: state.lastExport?.project_id === action.snapshot.current_project?.id ? state.lastExport : null,
+        lastRunDiff: action.snapshot.current_project
+          ? state.lastRunDiff
+          : null,
         statusLine: action.statusLine ?? state.statusLine
       };
     case "setStatus":
@@ -364,6 +376,11 @@ function reducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState
         ...state,
         lastExport: action.lastExport
       };
+    case "setRunDiff":
+      return {
+        ...state,
+        lastRunDiff: action.lastRunDiff
+      };
     case "setUiScale":
       return {
         ...state,
@@ -380,6 +397,7 @@ const initialState: WorkspaceState = {
   loading: true,
   statusLine: "正在准备工作台...",
   lastExport: null,
+  lastRunDiff: null,
   uiScale: DEFAULT_UI_SCALE
 };
 
@@ -758,6 +776,109 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         return response.run;
       } catch (error) {
         failAction("运行流程", error);
+        return null;
+      }
+    },
+    saveExperimentSpec: async (experiment) => {
+      const projectId = state.snapshot.current_project?.id;
+      if (!projectId) {
+        dispatch({ type: "setStatus", statusLine: "请先创建或打开项目，再保存实验规格。" });
+        return null;
+      }
+      dispatch({ type: "setLoading", loading: true, statusLine: "正在保存实验规格..." });
+      updateProgress({
+        action: "save-experiment-spec",
+        status: "running",
+        value: 0.04,
+        message: "正在保存实验规格..."
+      });
+      try {
+        const result = await desktopBridge.saveExperimentSpec(projectId, experiment);
+        setLastActionAt("保存实验规格");
+        dispatch({
+          type: "applyLocalPatch",
+          project: result.project,
+          projectUpdatedAt: result.project_updated_at,
+          loading: false,
+          statusLine: "实验规格已保存"
+        });
+        updateProgress({
+          action: "save-experiment-spec",
+          status: "completed",
+          value: 1,
+          message: "实验规格已保存"
+        });
+        return result;
+      } catch (error) {
+        failAction("保存实验规格", error);
+        return null;
+      }
+    },
+    runExperimentMatrix: async (experimentId) => {
+      const projectId = state.snapshot.current_project?.id;
+      if (!projectId) {
+        dispatch({ type: "setStatus", statusLine: "请先创建或打开项目，再运行实验矩阵。" });
+        return null;
+      }
+      dispatch({ type: "setLoading", loading: true, statusLine: "正在运行实验矩阵..." });
+      updateProgress({
+        action: "run-experiment-matrix",
+        status: "running",
+        value: 0.04,
+        message: "正在运行实验矩阵..."
+      });
+      try {
+        const result = await desktopBridge.runExperimentMatrix(projectId, experimentId);
+        setLastActionAt("运行实验矩阵");
+        dispatch({
+          type: "applyLocalPatch",
+          project: result.project,
+          corpus: result.corpus,
+          loading: false,
+          statusLine: `实验矩阵已完成：${result.runs.length} 次运行`
+        });
+        updateProgress({
+          action: "run-experiment-matrix",
+          status: "completed",
+          value: 1,
+          message: `实验矩阵已完成：${result.runs.length} 次运行`
+        });
+        return result;
+      } catch (error) {
+        failAction("运行实验矩阵", error);
+        return null;
+      }
+    },
+    compareRuns: async (leftRunId, rightRunId) => {
+      const projectId = state.snapshot.current_project?.id;
+      if (!projectId) {
+        dispatch({ type: "setStatus", statusLine: "请先创建或打开项目，再比较运行结果。" });
+        return null;
+      }
+      dispatch({ type: "setLoading", loading: true, statusLine: "正在比较运行结果..." });
+      updateProgress({
+        action: "compare-runs",
+        status: "running",
+        value: 0.04,
+        message: "正在比较运行结果..."
+      });
+      try {
+        const diff = await desktopBridge.compareRuns(projectId, leftRunId, rightRunId);
+        dispatch({ type: "setRunDiff", lastRunDiff: diff });
+        dispatch({
+          type: "setLoading",
+          loading: false,
+          statusLine: "运行结果对比已生成"
+        });
+        updateProgress({
+          action: "compare-runs",
+          status: "completed",
+          value: 1,
+          message: "运行结果对比已生成"
+        });
+        return diff;
+      } catch (error) {
+        failAction("比较运行结果", error);
         return null;
       }
     },
