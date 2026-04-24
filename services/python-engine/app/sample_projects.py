@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
 from .defaults import default_import_template, make_dictionary_entry, utc_now_iso
 from .experiment_store import save_experiment_spec
@@ -1102,7 +1103,7 @@ def _write_rows_to_source_file(path: Path, file_format: str, rows: list[dict[str
         pd.DataFrame(export_rows).to_csv(path, index=False, encoding="utf-8-sig")
         return
     if format_name == "xlsx":
-        pd.DataFrame(export_rows).to_excel(path, index=False)
+        pd.DataFrame([_sanitize_xlsx_export_row(row) for row in export_rows]).to_excel(path, index=False)
         return
     if format_name == "json":
         path.write_text(json.dumps(export_rows, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1111,6 +1112,16 @@ def _write_rows_to_source_file(path: Path, file_format: str, rows: list[dict[str
         path.write_text("\n".join(str(row.get("raw_text") or "").replace("\r", " ").replace("\n", " ") for row in rows), encoding="utf-8")
         return
     raise ValueError(f"Unsupported sample source format: {file_format}")
+
+
+def _sanitize_xlsx_export_row(row: dict[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in row.items():
+        if isinstance(value, str):
+            sanitized[key] = ILLEGAL_CHARACTERS_RE.sub("", value)[:32767]
+        else:
+            sanitized[key] = value
+    return sanitized
 
 
 def _sample_seed_dir(project_dir: Path) -> Path:

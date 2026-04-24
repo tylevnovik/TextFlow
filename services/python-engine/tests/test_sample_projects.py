@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from collections import Counter
 
+import pandas as pd
 import pytest
 
 from app.node_definitions import build_builtin_node_definitions
 from app.sample_dataset_cache import write_normalized_sample_cache
 from app.sample_dataset_sources import normalize_public_sample_row
-from app.sample_projects import BUILTIN_SAMPLE_PROJECTS, _sample_row_count, create_builtin_sample_projects
+from app.sample_projects import BUILTIN_SAMPLE_PROJECTS, _sample_row_count, _write_rows_to_source_file, create_builtin_sample_projects
 from app.project_store import load_project
 from app.workflow_runner import run_project_workflow
 
@@ -182,3 +183,28 @@ def test_representative_sample_workflows_run(monkeypatch, isolated_workspace, tm
     manifest, corpus, run = run_project_workflow(project_dir, manifest, corpus)
     assert run["status"] == "completed"
     assert run["artifacts"]
+
+
+def test_xlsx_seed_export_sanitizes_illegal_excel_characters(tmp_path):
+    path = tmp_path / "seed.xlsx"
+    row = normalize_public_sample_row(
+        {
+            "doc_id": "openalex-en-illegal",
+            "title": "A real public record with a control character",
+            "raw_text": "beta-VAE with appropriately tuned\f beta > 1 remains real text after cleanup.",
+            "year": 2017,
+            "source": "OpenAlex",
+        },
+        dataset_id="openalex_works",
+        language="en",
+        source_record_id="W-illegal",
+        source_url="https://openalex.org/W-illegal",
+        source_profile="literature",
+    )
+
+    _write_rows_to_source_file(path, "xlsx", [row])
+
+    frame = pd.read_excel(path)
+    assert frame.loc[0, "doc_id"] == "openalex-en-illegal"
+    assert "\f" not in frame.loc[0, "raw_text"]
+    assert "beta-VAE" in frame.loc[0, "raw_text"]
