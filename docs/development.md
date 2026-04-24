@@ -58,6 +58,20 @@ npm run test:engine
 powershell -ExecutionPolicy Bypass -File .\scripts\test-engine.ps1
 ```
 
+### 缩小官方样例规模用于测试
+
+如果你只是在本地验证样例项目创建或 workflow smoke test，可以临时设置：
+
+```powershell
+$env:TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT = "120"
+```
+
+注意：
+
+- 这个值必须是偶数。
+- 样例创建会强制保持英中 `1:1`，所以奇数会直接报错。
+- 测试结束后可以执行 `Remove-Item Env:TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT` 清理当前终端环境变量。
+
 ## 构建
 
 ### 仅重建 Python sidecar

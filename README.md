@@ -21,7 +21,7 @@ TextFlow Studio 是一个桌面优先的本地文本预处理与基础文本挖�
 - `txt/csv/xlsx/json` 导入
 - `source profile`、字段映射、主文本拼接
 - 文档搜索、预览、编辑、删除
-- 首次启动自动生成 3 个示例项目
+- 首次启动自动生成 9 个后端构建的场景示例项目
 
 ### 文本处理
 
@@ -133,6 +133,12 @@ npm run tauri:build --workspace apps/desktop
 
 `tauri:build` 会先执行 `scripts/build-desktop-release.ps1`，自动重建 Python sidecar，然后再产出 NSIS 安装包。
 
+## Built-In Scenario Samples
+
+On first launch, TextFlow creates nine backend-built sample projects from real public datasets. Each official sample has at least 10,000 public-source documents, split exactly 1:1 between English and Chinese rows, and demonstrates a real workflow scenario from preprocessing to advanced gates.
+
+See `docs/examples.md`.
+
 ## 当前文档
 
 - [文档索引](./docs/README.md)
@@ -141,7 +147,7 @@ npm run tauri:build --workspace apps/desktop
 - [架构说明](./docs/architecture.md)
 - [工作流与运行时](./docs/workflow-runtime.md)
 - [开发与构建说明](./docs/development.md)
-- [示例项目说明](./docs/sample-projects.md)
+- [内置场景样例](./docs/examples.md)
 - [大规模压测记录](./docs/benchmark.md)
 - [插件节点说明](./plugins/nodes/README.md)
 - [历史方案与旧文档归档](./docs/archive/README.md)
