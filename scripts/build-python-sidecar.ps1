@@ -3,6 +3,8 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $engineRoot = Join-Path $projectRoot "services\python-engine"
 $venvPython = Join-Path $engineRoot ".venv\Scripts\python.exe"
+$publicSampleCacheDir = Join-Path $engineRoot "app\public_sample_cache"
+$publicSampleManifest = Join-Path $publicSampleCacheDir "manifest.json"
 $distDir = Join-Path $engineRoot "dist"
 $tempRoot = Join-Path $engineRoot ".tmp"
 $buildStamp = "{0}-{1}" -f (Get-Date -Format "yyyyMMdd-HHmmss"), ([guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -22,6 +24,15 @@ if (-not (Test-Path $venvPython)) {
   throw "Missing .venv. Run .\scripts\bootstrap-python.ps1 first."
 }
 
+& (Join-Path $PSScriptRoot "fetch-public-sample-data.ps1") -All
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to validate packaged public sample cache."
+}
+
+if (-not (Test-Path $publicSampleCacheDir) -or -not (Test-Path $publicSampleManifest)) {
+  throw "Missing packaged public sample cache or manifest. Run .\scripts\fetch-public-sample-data.ps1 -All before building."
+}
+
 & $venvPython -m pip install -e "$engineRoot[build]"
 if ($LASTEXITCODE -ne 0) {
   throw "Failed to install Python engine build dependencies."
@@ -37,6 +48,7 @@ try {
     --collect-data yake `
     --collect-data wordcloud `
     --add-data "$engineRoot\app\builtin_dictionary_sources;app\builtin_dictionary_sources" `
+    --add-data "$publicSampleCacheDir;app\public_sample_cache" `
     --name textflow-engine `
     --distpath $pyinstallerDistRoot `
     --workpath $pyinstallerWorkRoot `
