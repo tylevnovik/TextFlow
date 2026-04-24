@@ -2,9 +2,9 @@
 
 > **For Codex:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task.
 
-**Goal:** Replace the current small capability-demo samples with nine large, scenario-based built-in sample projects backed only by real public datasets, so users can learn real TextFlow workflows while covering nearly all non-legacy nodes and settings.
+**Goal:** Replace the current small capability-demo samples with nine large, scenario-based built-in sample projects backed only by real public datasets, with every scenario containing a 1:1 English/Chinese language split.
 
-**Architecture:** Built-in sample projects must remain backend-owned. The Python sidecar creates normal `.tfproj` projects from packaged or cached normalized subsets of real public datasets and stores source attribution plus scenario guidance in `settings.sample_project`. The frontend static `demoProject.ts` remains only a non-Tauri fallback/test fixture and must not become the source of real sample data.
+**Architecture:** Built-in sample projects must remain backend-owned. The Python sidecar creates normal `.tfproj` projects from packaged or cached normalized subsets of real public datasets, enforces per-sample `en`/`zh` balance, and stores source attribution plus scenario guidance in `settings.sample_project`. The frontend static `demoProject.ts` remains only a non-Tauri fallback/test fixture and must not become the source of real sample data.
 
 **Tech Stack:** Python 3.11 sidecar, pandas/openpyxl for public sample files, existing TextFlow project store/workflow runtime, pytest for engine tests, Markdown docs.
 
@@ -14,41 +14,53 @@
 
 - Create all nine sample projects during backend workspace bootstrap; do not hide advanced samples by default.
 - Each official sample project must have a default corpus size of at least `10_000` documents.
+- Every official sample project must contain exactly 50% English rows and 50% Chinese rows. For 10,000 rows this means 5,000 `en` rows and 5,000 `zh` rows; sample 01 has 10,000 `en` rows and 10,000 `zh` rows.
 - Use only real public datasets; do not synthesize text rows, institutions, abstracts, reviews, complaints, patents, filings, labels, or metadata.
 - Every sample row must be traceable to a public source dataset through `source_dataset_id`, `source_url`, `source_license`, and `source_record_id` where available.
-- If a public dataset must be subsetted for size, select a deterministic subset from real records only; do not fill gaps with generated text.
+- Every sample row must include a normalized `language` field with value `en` or `zh`, and language must be derived from source metadata or deterministic language detection over real text.
+- If a public dataset must be subsetted for size, select a deterministic subset from real records only; do not fill gaps with fabricated text.
 - Package normalized public-data subsets for offline first launch, or fetch/cache them during build; runtime bootstrap must not require internet.
+- English-only datasets may be used only as optional enrichment and only if matched by the same number of real Chinese rows in the same sample.
 - Keep normal Tauri app behavior backend-driven through Python sidecar projects.
 - Do not bulk-expand `apps/desktop/src/data/demoProject.ts`; it is only a mock/test fixture.
 - Do not teach or cover legacy nodes: `load_project_corpus`, `filter_corpus`, `project_dictionary_set`, `analyze_corpus`, `export_results`.
-- If a sample needs faster development/test generation, use an environment override such as `TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT` to read fewer real records from the local public-data cache; production defaults must stay at `>= 10_000`.
+- If a sample needs faster development/test creation, use an environment override such as `TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT` to read fewer real records from the local public-data cache; production defaults must stay at `>= 10_000`.
 
 ## Approved Public Data Sources
 
 The implementation may use these public sources. If a source becomes unavailable, replace it with another real public dataset and update this table before implementation.
 
-| Dataset ID | Source | Public Access / License Notes | Intended Samples |
-| --- | --- | --- | --- |
-| `cfpb_complaints` | [CFPB Consumer Complaint Database](https://www.consumerfinance.gov/data-research/consumer-complaints/) | CFPB says all published complaint data is freely available to use, analyze, and build on; narratives are published only after consumer consent and CFPB privacy steps. | 01, 02, 05, 07, 08, 09 |
-| `openalex_works` | [OpenAlex Works API or snapshot](https://developers.openalex.org/) | OpenAlex documents its complete dataset as free under CC0 / No Rights Reserved. | 03, 04, 06, 09 |
-| `patentsview` | [USPTO PatentsView](https://www.uspto.gov/ip-policy/economic-research/patentsview) and [PatentsView data downloads](https://patentsview.org/downloads/data-downloads) | USPTO describes PatentsView as a public, research-grade patent-data resource with API, query builder, visualization, and bulk download access. | 04, 06 |
-| `20_newsgroups_optional` | [UCI KDD 20 Newsgroups](https://kdd.ics.uci.edu/databases/20newsgroups/20newsgroups.html) | Public research dataset hosted by UCI KDD; use only as an optional substitute if redistribution terms are reviewed and documented in the manifest. | optional substitute only |
+| Dataset ID | Source | Languages | Public Access / License Notes | Intended Samples |
+| --- | --- | --- | --- | --- |
+| `un_parallel_en_zh` | [United Nations Parallel Corpus v1.0](https://www.un.org/dgacm/en/node/5471) and [download page](https://www.un.org/dgacm/en/content/uncorpus/download) | `en`, `zh` | Official UN records and parliamentary documents in the public domain, manually translated across UN official languages. | 02, 05, 09 |
+| `wikimedia_enwiki` | [English Wikipedia dumps](https://dumps.wikimedia.org/enwiki/latest/) | `en` | Wikimedia text dumps are reusable under CC BY-SA 4.0 / GFDL terms, with attribution and share-alike obligations. | 01, 06, 07, 08 |
+| `wikimedia_zhwiki` | [Chinese Wikipedia dumps](https://dumps.wikimedia.org/zhwiki/latest/) | `zh` | Same Wikimedia text dump licensing; use text-only article dumps and preserve source page attribution. | 01, 06, 07, 08 |
+| `openalex_works` | [OpenAlex Works API or snapshot](https://developers.openalex.org/) | `en`, `zh` | OpenAlex documents its complete dataset as free under CC0 / No Rights Reserved; select by source `language` metadata. | 03, 04, 06, 09 |
+| `cfpb_complaints_optional` | [CFPB Consumer Complaint Database](https://www.consumerfinance.gov/data-research/consumer-complaints/) | `en` | CFPB says all published complaint data is freely available to use, analyze, and build on; use only as balanced optional enrichment. | optional enrichment only |
+| `patentsview_optional` | [USPTO PatentsView](https://www.uspto.gov/ip-policy/economic-research/patentsview) and [PatentsView data downloads](https://patentsview.org/downloads/data-downloads) | `en` | USPTO describes PatentsView as a public, research-grade patent-data resource; use only as balanced optional enrichment. | optional enrichment only |
+| `20_newsgroups_optional` | [UCI KDD 20 Newsgroups](https://kdd.ics.uci.edu/databases/20newsgroups/20newsgroups.html) | `en` | Public research dataset hosted by UCI KDD; use only as an optional substitute if redistribution terms are reviewed and documented in the manifest. | optional substitute only |
 
-Default sample execution must use `cfpb_complaints`, `openalex_works`, and `patentsview`. Do not use AG News, Yelp, Amazon reviews, or other datasets with unclear redistribution terms unless their license is reviewed and documented in this plan before implementation.
+Default sample execution must use bilingual-capable or paired sources: `un_parallel_en_zh`, `wikimedia_enwiki` + `wikimedia_zhwiki`, and `openalex_works` filtered to `en` and `zh`. Do not use AG News, Yelp, Amazon reviews, or other datasets with unclear redistribution terms unless their license is reviewed and documented in this plan before implementation.
+
+## Language Balance Rule
+
+Every sample project is a bilingual task scenario. The implementation must calculate the requested row count per sample, split it into equal `en` and `zh` quotas, then pull real rows from approved public sources for each quota. If a source cannot satisfy either quota, fail the sample creation with a clear error; do not downsample only one language, backfill with another language, translate rows, or create synthetic rows.
+
+The per-row `language` value must be visible in imported corpus metadata so users can filter, group, and audit language-specific behavior.
 
 ## Target Sample Projects
 
-| Order | Sample Project | Default Rows | Primary User Question |
-| --- | --- | ---: | --- |
-| 01 | `示例 01 - 基础文本预处理` | 20,000 | “我有一批杂乱文本，如何清洗、标准化、切词并导出？” |
-| 02 | `示例 02 - 词表治理与词频统计` | 10,000 | “如何保留行业术语、统一同义词、过滤噪声并看高频词？” |
-| 03 | `示例 03 - 学术摘要关键词与主题` | 10,000 | “如何从论文摘要中找关键词、主题和时间趋势？” |
-| 04 | `示例 04 - 机构主题与技术方向` | 10,000 | “如何比较机构、关键词和主题之间的关系？” |
-| 05 | `示例 05 - 复核实验与增量运行` | 10,000 | “如何复核结果、调参比较，并只重跑变更文档？” |
-| 06 | `示例 06 - 多来源语料合并与抽样` | 10,000 | “如何合并 CSV/XLSX/JSON/TXT，多来源去重和抽样？” |
-| 07 | `示例 07 - 分组比较与关键性分析` | 10,000 | “如何比较不同时间、机构或产品线的关键词差异？” |
-| 08 | `示例 08 - 切分评估与结果拼接` | 10,000 | “如何切分语料、建模、评估聚类并拼接结果？” |
-| 09 | `示例 09 - 条件路由与人工门禁` | 10,000 | “如何用条件、指标门禁和人工复核控制工作流？” |
+| Order | Sample Project | Default Rows | Language Split | Primary User Question |
+| --- | --- | ---: | --- | --- |
+| 01 | `示例 01 - 基础文本预处理` | 20,000 | 10,000 `en` / 10,000 `zh` | “我有一批杂乱文本，如何清洗、标准化、切词并导出？” |
+| 02 | `示例 02 - 词表治理与词频统计` | 10,000 | 5,000 `en` / 5,000 `zh` | “如何保留行业术语、统一同义词、过滤噪声并看高频词？” |
+| 03 | `示例 03 - 学术摘要关键词与主题` | 10,000 | 5,000 `en` / 5,000 `zh` | “如何从论文摘要中找关键词、主题和时间趋势？” |
+| 04 | `示例 04 - 机构主题与技术方向` | 10,000 | 5,000 `en` / 5,000 `zh` | “如何比较机构、关键词和主题之间的关系？” |
+| 05 | `示例 05 - 复核实验与增量运行` | 10,000 | 5,000 `en` / 5,000 `zh` | “如何复核结果、调参比较，并只重跑变更文档？” |
+| 06 | `示例 06 - 多来源语料合并与抽样` | 10,000 | 5,000 `en` / 5,000 `zh` | “如何合并 CSV/XLSX/JSON/TXT，多来源去重和抽样？” |
+| 07 | `示例 07 - 分组比较与关键性分析` | 10,000 | 5,000 `en` / 5,000 `zh` | “如何比较不同时间、机构或产品线的关键词差异？” |
+| 08 | `示例 08 - 切分评估与结果拼接` | 10,000 | 5,000 `en` / 5,000 `zh` | “如何切分语料、建模、评估聚类并拼接结果？” |
+| 09 | `示例 09 - 条件路由与人工门禁` | 10,000 | 5,000 `en` / 5,000 `zh` | “如何用条件、指标门禁和人工复核控制工作流？” |
 
 ## Node Coverage Matrix
 
@@ -107,30 +119,42 @@ Add tests:
 ```python
 def test_public_source_registry_contains_only_real_public_sources():
     source_ids = {source.source_id for source in PUBLIC_SAMPLE_DATA_SOURCES}
-    assert {"cfpb_complaints", "openalex_works", "patentsview"} <= source_ids
+    assert {"un_parallel_en_zh", "wikimedia_enwiki", "wikimedia_zhwiki", "openalex_works"} <= source_ids
     for source in PUBLIC_SAMPLE_DATA_SOURCES:
         assert source.name
         assert source.homepage_url.startswith("https://")
         assert source.license_name
         assert source.public_access_note
         assert source.redistribution_note
+        assert set(source.languages) <= {"en", "zh"}
+
+
+def test_default_sources_can_supply_english_and_chinese_rows():
+    assert source_supports_language("un_parallel_en_zh", "en")
+    assert source_supports_language("un_parallel_en_zh", "zh")
+    assert source_supports_language("wikimedia_enwiki", "en")
+    assert source_supports_language("wikimedia_zhwiki", "zh")
+    assert source_supports_language("openalex_works", "en")
+    assert source_supports_language("openalex_works", "zh")
 
 
 def test_normalized_public_row_requires_source_attribution():
     row = normalize_public_sample_row(
         {
             "doc_id": "source-1",
-            "title": "Example title",
-            "raw_text": "Real public source text",
+            "title": "真实公开来源标题",
+            "raw_text": "真实公开来源文本",
             "year": 2024,
         },
-        dataset_id="cfpb_complaints",
+        dataset_id="un_parallel_en_zh",
+        language="zh",
         source_record_id="source-1",
-        source_url="https://www.consumerfinance.gov/data-research/consumer-complaints/",
+        source_url="https://www.un.org/dgacm/en/node/5471",
     )
-    assert row["extra_metadata"]["source_dataset_id"] == "cfpb_complaints"
+    assert row["language"] == "zh"
+    assert row["extra_metadata"]["source_dataset_id"] == "un_parallel_en_zh"
     assert row["extra_metadata"]["source_record_id"] == "source-1"
-    assert row["raw_text"] == "Real public source text"
+    assert row["raw_text"] == "真实公开来源文本"
 ```
 
 Also add a guard test:
@@ -138,7 +162,12 @@ Also add a guard test:
 ```python
 def test_normalization_rejects_missing_text():
     with pytest.raises(ValueError):
-        normalize_public_sample_row({"doc_id": "bad"}, dataset_id="cfpb_complaints")
+        normalize_public_sample_row({"doc_id": "bad"}, dataset_id="un_parallel_en_zh", language="en")
+
+
+def test_normalization_rejects_unsupported_language():
+    with pytest.raises(ValueError):
+        normalize_public_sample_row({"doc_id": "bad", "raw_text": "bonjour"}, dataset_id="un_parallel_en_zh", language="fr")
 ```
 
 **Step 2: Run tests to verify they fail**
@@ -168,6 +197,7 @@ class PublicSampleDataSource:
     name: str
     homepage_url: str
     download_url: str | None
+    languages: tuple[str, ...]
     license_name: str
     public_access_note: str
     redistribution_note: str
@@ -176,24 +206,36 @@ class PublicSampleDataSource:
 
 PUBLIC_SAMPLE_DATA_SOURCES = [
     PublicSampleDataSource(
-        source_id="cfpb_complaints",
-        name="CFPB Consumer Complaint Database",
-        homepage_url="https://www.consumerfinance.gov/data-research/consumer-complaints/",
-        download_url="https://files.consumerfinance.gov/ccdb/complaints.csv.zip",
-        license_name="Public U.S. federal government data",
-        public_access_note="CFPB publishes complaint data for download/API after privacy review.",
-        redistribution_note="Package only published complaint rows and preserve CFPB attribution.",
-        citation="Consumer Financial Protection Bureau Consumer Complaint Database.",
+        source_id="un_parallel_en_zh",
+        name="United Nations Parallel Corpus v1.0",
+        homepage_url="https://www.un.org/dgacm/en/node/5471",
+        download_url="https://www.un.org/dgacm/en/content/uncorpus/download",
+        languages=("en", "zh"),
+        license_name="Public domain UN official records and parliamentary documents",
+        public_access_note="UN describes the corpus as public-domain official records and other parliamentary documents.",
+        redistribution_note="Package only normalized text rows with UN corpus attribution and language metadata.",
+        citation="United Nations Parallel Corpus v1.0.",
     ),
     ...
 ]
+
+
+PUBLIC_SAMPLE_DATA_SOURCE_BY_ID = {source.source_id: source for source in PUBLIC_SAMPLE_DATA_SOURCES}
+
+
+def source_supports_language(dataset_id: str, language: str) -> bool:
+    source = PUBLIC_SAMPLE_DATA_SOURCE_BY_ID.get(dataset_id)
+    return bool(source and language in source.languages)
 ```
 
 Include registry entries for:
 
-- `cfpb_complaints`
+- `un_parallel_en_zh`
+- `wikimedia_enwiki`
+- `wikimedia_zhwiki`
 - `openalex_works`
-- `patentsview`
+- `cfpb_complaints_optional` only as English enrichment with a matched Chinese row source
+- `patentsview_optional` only as English enrichment with a matched Chinese row source
 - `20_newsgroups_optional` only if redistribution terms are reviewed and documented
 
 Do not include a source if its redistribution terms are unknown and cannot be documented.
@@ -205,6 +247,7 @@ Add:
 ```python
 REQUIRED_SAMPLE_ROW_FIELDS = {
     "doc_id",
+    "language",
     "title",
     "raw_text",
     "year",
@@ -219,6 +262,7 @@ def normalize_public_sample_row(
     row: dict[str, Any],
     *,
     dataset_id: str,
+    language: str,
     source_record_id: str | None = None,
     source_url: str | None = None,
     source_profile: str = "generic",
@@ -228,8 +272,9 @@ def normalize_public_sample_row(
 
 Rules:
 
-- never generate replacement text if source text is missing
+- never fabricate replacement text if source text is missing
 - require non-empty `raw_text`
+- require `language in {"en", "zh"}` and verify the dataset source supports that language
 - preserve original title/text/metadata where available
 - write attribution into `extra_metadata`
 - set `source_profile` according to the scenario, not by inventing a dataset
@@ -264,28 +309,75 @@ git commit -m "feat: add public sample dataset source registry"
 Add:
 
 ```python
+from collections import Counter
+from typing import Any
+
+
+def _row(language: str, idx: int) -> dict[str, Any]:
+    return normalize_public_sample_row(
+        {
+            "doc_id": f"{language}-{idx}",
+            "title": f"Real {language} source title {idx}",
+            "raw_text": "Real public source text" if language == "en" else "真实公开来源文本",
+            "year": 2024,
+        },
+        dataset_id="wikimedia_enwiki" if language == "en" else "wikimedia_zhwiki",
+        language=language,
+        source_record_id=f"{language}-{idx}",
+        source_url="https://dumps.wikimedia.org/",
+    )
+
+
 def test_cache_loader_reads_real_rows_with_attribution(tmp_path):
     cache_dir = tmp_path / "public-sample-cache"
     write_normalized_sample_cache(
         cache_dir,
-        "cfpb_complaints",
+        "un_parallel_en_zh",
         [
             normalize_public_sample_row(
-                {"doc_id": "complaint-1", "title": "A real complaint", "raw_text": "Real CFPB complaint narrative", "year": 2024},
-                dataset_id="cfpb_complaints",
-                source_record_id="complaint-1",
-                source_url="https://www.consumerfinance.gov/data-research/consumer-complaints/",
-            )
+                {"doc_id": "un-en-1", "title": "A real UN document", "raw_text": "Real English UN text", "year": 2014},
+                dataset_id="un_parallel_en_zh",
+                language="en",
+                source_record_id="un-en-1",
+                source_url="https://www.un.org/dgacm/en/node/5471",
+            ),
+            normalize_public_sample_row(
+                {"doc_id": "un-zh-1", "title": "真实联合国文件", "raw_text": "真实中文联合国文本", "year": 2014},
+                dataset_id="un_parallel_en_zh",
+                language="zh",
+                source_record_id="un-zh-1",
+                source_url="https://www.un.org/dgacm/en/node/5471",
+            ),
         ],
     )
-    rows = read_normalized_sample_cache(cache_dir, "cfpb_complaints", limit=1)
-    assert rows[0]["extra_metadata"]["source_dataset_id"] == "cfpb_complaints"
-    assert rows[0]["raw_text"] == "Real CFPB complaint narrative"
+    rows = read_normalized_sample_cache(cache_dir, "un_parallel_en_zh", limit=2)
+    assert {row["language"] for row in rows} == {"en", "zh"}
+    assert rows[0]["extra_metadata"]["source_dataset_id"] == "un_parallel_en_zh"
+
+
+def test_cache_loader_reads_language_balanced_rows(tmp_path):
+    cache_dir = tmp_path / "public-sample-cache"
+    write_normalized_sample_cache(cache_dir, "wikimedia_enwiki", [_row("en", idx) for idx in range(4)])
+    write_normalized_sample_cache(cache_dir, "wikimedia_zhwiki", [_row("zh", idx) for idx in range(4)])
+    rows = read_language_balanced_sample_rows(
+        cache_dir,
+        [
+            {"dataset_id": "wikimedia_enwiki", "language": "en", "selector": "sample_01_basic", "ratio": 0.5},
+            {"dataset_id": "wikimedia_zhwiki", "language": "zh", "selector": "sample_01_basic", "ratio": 0.5},
+        ],
+        total_count=6,
+    )
+    assert Counter(row["language"] for row in rows) == {"en": 3, "zh": 3}
 
 
 def test_cache_loader_fails_when_real_rows_are_missing(tmp_path):
     with pytest.raises(FileNotFoundError):
-        read_normalized_sample_cache(tmp_path, "cfpb_complaints", limit=10)
+        read_normalized_sample_cache(tmp_path, "un_parallel_en_zh", limit=10)
+
+
+def test_language_balanced_loader_rejects_odd_row_counts(tmp_path):
+    with pytest.raises(ValueError):
+        read_language_balanced_sample_rows(tmp_path, [], total_count=101)
 ```
 
 **Step 2: Run tests to verify they fail**
@@ -307,10 +399,11 @@ def sample_data_cache_root() -> Path: ...
 def normalized_cache_path(cache_root: Path, dataset_id: str) -> Path: ...
 def write_normalized_sample_cache(cache_root: Path, dataset_id: str, rows: list[dict[str, Any]]) -> Path: ...
 def read_normalized_sample_cache(cache_root: Path, dataset_id: str, *, limit: int | None = None, selector: str | None = None) -> list[dict[str, Any]]: ...
+def read_language_balanced_sample_rows(cache_root: Path, sources: list[dict[str, Any]], *, total_count: int) -> list[dict[str, Any]]: ...
 def ensure_public_sample_cache_available(required_dataset_ids: Iterable[str]) -> None: ...
 ```
 
-Use `.jsonl.gz` for normalized cache files. The cache rows are derived from real public records only.
+Use `.jsonl.gz` for normalized cache files. The cache rows are derived from real public records only. `read_language_balanced_sample_rows` must require exactly two language groups, split `total_count` evenly, and fail loudly if either language cannot provide enough rows.
 
 **Step 4: Add acquisition script**
 
@@ -318,14 +411,16 @@ Create `scripts/fetch-public-sample-data.ps1` that calls a Python module or inli
 
 - download or read source data for approved public datasets
 - normalize selected fields into TextFlow rows
+- normalize and persist `language` as `en` or `zh`
+- enforce `LimitPerLanguage` for default sample caches
 - preserve source attribution fields
 - write `.jsonl.gz` cache files
-- write a `manifest.json` with dataset id, URL, license note, row count, SHA256, created timestamp
+- write a `manifest.json` with dataset id, URL, license note, row count by language, SHA256, created timestamp
 
 The script may support:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\fetch-public-sample-data.ps1 -Dataset cfpb_complaints -Limit 20000
+powershell -ExecutionPolicy Bypass -File .\scripts\fetch-public-sample-data.ps1 -Dataset un_parallel_en_zh -Language en,zh -LimitPerLanguage 10000
 powershell -ExecutionPolicy Bypass -File .\scripts\fetch-public-sample-data.ps1 -All
 ```
 
@@ -366,6 +461,7 @@ def test_builtin_sample_specs_cover_nine_scenarios():
     assert [spec["order"] for spec in BUILTIN_SAMPLE_PROJECTS] == list(range(1, 10))
     assert all(spec["default_row_count"] >= 10_000 for spec in BUILTIN_SAMPLE_PROJECTS)
     assert all(spec["source_datasets"] for spec in BUILTIN_SAMPLE_PROJECTS)
+    assert all(spec["language_balance"] == {"en": 0.5, "zh": 0.5} for spec in BUILTIN_SAMPLE_PROJECTS)
 
 
 def test_builtin_sample_specs_include_guidance_and_coverage():
@@ -375,6 +471,13 @@ def test_builtin_sample_specs_include_guidance_and_coverage():
         assert spec["covered_nodes"]
         assert spec["difficulty"] in {"基础", "进阶", "高级"}
         assert spec["public_data_only"] is True
+        assert {source["language"] for source in spec["sources"]} == {"en", "zh"}
+
+
+def test_sample_row_count_rejects_odd_override(monkeypatch):
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "101")
+    with pytest.raises(ValueError):
+        _sample_row_count(BUILTIN_SAMPLE_PROJECTS[0])
 ```
 
 **Step 2: Run tests to verify they fail**
@@ -409,10 +512,12 @@ Each spec must include:
     "covered_nodes": ["corpus_input", "clean_text", ...],
     "covered_settings": ["strip_html", "normalize_numbers", ...],
     "public_data_only": True,
-    "source_datasets": ["cfpb_complaints"],
+    "language_balance": {"en": 0.5, "zh": 0.5},
+    "source_datasets": ["wikimedia_enwiki", "wikimedia_zhwiki"],
     "source_profile": "generic",
     "sources": [
-        {"filename": "basic_preprocessing.csv", "format": "csv", "dataset_id": "cfpb_complaints", "selector": "sample_01_basic", "ratio": 1.0},
+        {"filename": "basic_preprocessing_en.csv", "format": "csv", "dataset_id": "wikimedia_enwiki", "language": "en", "selector": "sample_01_basic", "ratio": 0.5},
+        {"filename": "basic_preprocessing_zh.csv", "format": "csv", "dataset_id": "wikimedia_zhwiki", "language": "zh", "selector": "sample_01_basic", "ratio": 0.5},
     ],
     "workflow_name": "...",
     "import_template_overrides": {...},
@@ -423,17 +528,17 @@ Each spec must include:
 }
 ```
 
-Every spec must map to real public datasets:
+Every spec must map to real public datasets and keep a 1:1 English/Chinese split:
 
-- sample 01: `cfpb_complaints`
-- sample 02: `cfpb_complaints`
-- sample 03: `openalex_works`
-- sample 04: `openalex_works` + `patentsview`
-- sample 05: `cfpb_complaints`
-- sample 06: `openalex_works` + `patentsview`
-- sample 07: `cfpb_complaints`
-- sample 08: `cfpb_complaints`
-- sample 09: `cfpb_complaints` + `openalex_works`
+- sample 01: `wikimedia_enwiki` + `wikimedia_zhwiki`
+- sample 02: `un_parallel_en_zh` with `language=en` and `language=zh`
+- sample 03: `openalex_works` filtered to `language=en` and `language=zh`
+- sample 04: `openalex_works` filtered to `language=en` and `language=zh`; optional `patentsview_optional` rows require equal Chinese technology rows from `openalex_works`
+- sample 05: `un_parallel_en_zh` with `language=en` and `language=zh`
+- sample 06: `wikimedia_enwiki` + `wikimedia_zhwiki` plus balanced `openalex_works` slices
+- sample 07: `openalex_works` filtered to `language=en` and `language=zh`
+- sample 08: `wikimedia_enwiki` + `wikimedia_zhwiki`
+- sample 09: `un_parallel_en_zh` plus balanced `openalex_works` slices
 
 Do not use optional sources in default samples unless their redistribution terms are reviewed and documented in the manifest.
 
@@ -445,11 +550,15 @@ Add:
 def _sample_row_count(spec: dict[str, Any]) -> int:
     override = os.getenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT")
     if override:
-        return max(1, int(override))
-    return int(spec.get("default_row_count") or 10_000)
+        row_count = int(override)
+    else:
+        row_count = int(spec.get("default_row_count") or 10_000)
+    if row_count < 2 or row_count % 2:
+        raise ValueError("Sample row count must be an even number so en/zh rows stay 1:1")
+    return row_count
 ```
 
-Use this only at generation time. Do not lower `default_row_count`.
+Use this only at sample creation time. Do not lower `default_row_count`.
 
 **Step 5: Add multi-source support**
 
@@ -469,7 +578,7 @@ Support formats:
 
 Use split ratios for sample 06. For `txt`, write one document per line or one file per small batch only if current importer supports it. If importer only treats `.txt` as one document, use `.txt` to demonstrate TXT import and keep most rows in CSV/XLSX/JSON.
 
-All written rows must come from cached public-data records. If a selector cannot provide enough real rows, fail loudly with a message naming the dataset and requested row count.
+All written rows must come from cached public-data records. If a selector cannot provide enough real rows for either language, fail loudly with a message naming the dataset, language, and requested row count. Do not silently replace missing Chinese rows with English rows or vice versa.
 
 **Step 6: Run tests**
 
@@ -611,6 +720,8 @@ def test_created_sample_projects_persist_guidance_metadata(monkeypatch, isolated
         assert sample["guided_steps"]
         assert sample["default_row_count"] >= 10_000
         assert sample["public_row_count"] == 120
+        assert sample["language_balance"] == {"en": 0.5, "zh": 0.5}
+        assert sample["language_counts"] == {"en": 60, "zh": 60}
 ```
 
 Add:
@@ -650,6 +761,8 @@ manifest["settings"]["sample_project"] = {
     "covered_settings": deepcopy(spec["covered_settings"]),
     "default_row_count": spec["default_row_count"],
     "public_row_count": row_count,
+    "language_balance": deepcopy(spec["language_balance"]),
+    "language_counts": {"en": row_count // 2, "zh": row_count // 2},
     "estimated_runtime": spec.get("estimated_runtime", ""),
     "dataset": deepcopy(spec.get("dataset", {})),
 }
@@ -688,7 +801,7 @@ git add services/python-engine/app/sample_projects.py services/python-engine/tes
 git commit -m "feat: add guidance metadata to scenario samples"
 ```
 
-## Task 6: Smoke-Test Sample Project Generation and Workflow Runs
+## Task 6: Smoke-Test Sample Project Creation and Workflow Runs
 
 **Files:**
 - Modify: `services/python-engine/tests/test_sample_projects.py`
@@ -698,6 +811,9 @@ git commit -m "feat: add guidance metadata to scenario samples"
 Add:
 
 ```python
+from collections import Counter
+
+
 def test_create_builtin_sample_projects_creates_all_projects_with_large_defaults(monkeypatch, isolated_workspace):
     monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "150")
     created = create_builtin_sample_projects()
@@ -706,6 +822,8 @@ def test_create_builtin_sample_projects_creates_all_projects_with_large_defaults
         _manifest, corpus = load_project(project_dir)
         assert len(corpus) >= 150
         assert manifest["settings"]["sample_project"]["default_row_count"] >= 10_000
+        assert Counter(row["language"] for row in corpus) == {"en": len(corpus) // 2, "zh": len(corpus) // 2}
+        assert all(row["language"] in {"en", "zh"} for row in corpus)
 ```
 
 Add a run smoke test for representative scenarios:
@@ -761,7 +879,7 @@ Expected: PASS.
 
 ```bash
 git add services/python-engine/tests/test_sample_projects.py services/python-engine/app/sample_projects.py
-git commit -m "test: cover scenario sample project generation"
+git commit -m "test: cover scenario sample project creation"
 ```
 
 ## Task 7: Update Example Documentation
@@ -779,7 +897,9 @@ Create `docs/examples.md` with:
 
 - why samples are large
 - which real public datasets power each sample
+- each sample's exact English/Chinese row split
 - how public source rows are downloaded, normalized, cached, and attributed
+- how `language` is detected or taken from source metadata
 - list of all nine samples
 - what each sample teaches
 - which output to open first
@@ -794,7 +914,7 @@ Add a short section:
 ```markdown
 ## Built-In Scenario Samples
 
-On first launch, TextFlow creates nine backend-built sample projects from real public datasets. Each official sample has at least 10,000 public-source documents and demonstrates a real workflow scenario from preprocessing to advanced gates.
+On first launch, TextFlow creates nine backend-built sample projects from real public datasets. Each official sample has at least 10,000 public-source documents, split exactly 1:1 between English and Chinese rows, and demonstrates a real workflow scenario from preprocessing to advanced gates.
 
 See `docs/examples.md`.
 ```
@@ -803,9 +923,9 @@ See `docs/examples.md`.
 
 Update:
 
-- `docs/current-status.md`: sample projects are now scenario-based large projects backed by real public datasets.
+- `docs/current-status.md`: sample projects are now scenario-based large projects backed by real public datasets with 1:1 English/Chinese rows.
 - `docs/product-scope.md`: sample projects cover V1 features and advanced workflow surfaces.
-- `docs/development.md`: document `TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT` for tests/dev.
+- `docs/development.md`: document `TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT` for tests/dev and require even row counts to preserve language balance.
 
 **Step 4: Run markdown sanity checks**
 
@@ -987,6 +1107,8 @@ The work is done when:
 - first-launch backend bootstrap creates nine sample projects
 - all nine samples are visible as normal projects; no frontend hiding or special filtering
 - every official sample defaults to at least `10_000` real public-source rows
+- every official sample has exactly 50% English rows and 50% Chinese rows
+- every sample row has `language` set to `en` or `zh`
 - no sample text or metadata is synthetic
 - every sample row keeps dataset attribution and source record metadata where available
 - packaged builds can create sample projects offline from the bundled/cache public-data subset
@@ -1009,7 +1131,7 @@ Open a new Codex session in this repository and paste:
 1. 跑文档里指定的定向测试
 2. 如果改了 TypeScript，再跑 npm run test --workspace apps/desktop 和 npm run lint
 3. 简短汇报当前任务完成情况和下一任务
-4. 不要跳过文档、测试、样例生成和打包验证
+4. 不要跳过文档、测试、样例创建和打包验证
 
 如果发现计划中的文件路径需要微调，可以做最小必要调整，但必须先说明原因，再继续执行。
 ```
