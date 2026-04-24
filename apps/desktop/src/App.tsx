@@ -3,19 +3,19 @@ import type { PageId } from "@textflow/shared-types";
 import { useTaskProgress, useWorkspace } from "./store/workspaceStore";
 import { PageView, pageMeta } from "./screens";
 
-const primaryPages: PageId[] = ["home", "data", "dictionaries", "pipeline", "results", "settings"];
+const primaryPages: PageId[] = ["home", "project", "data", "dictionaries", "workflow", "analysis", "results", "settings"];
 
 export function App() {
   const {
     state: { activePage, snapshot, loading, statusLine, uiScale },
     setActivePage,
-    runPipeline,
+    runWorkflow,
     exportProject
   } = useWorkspace();
   const progress = useTaskProgress();
 
   const project = snapshot.current_project;
-  const isWorkflowPage = activePage === "pipeline";
+  const isWorkflowPage = activePage === "workflow";
   const workflowRunDetail = progress.detail?.kind === "workflow_run" ? progress.detail : undefined;
   const currentNodeLabel = workflowRunDetail?.current_node_label
     ?? (progress.detail?.kind === "node" ? progress.detail.node_label : undefined);
@@ -91,7 +91,7 @@ export function App() {
               <button type="button" className="toolbar-button ghost" onClick={() => setActivePage("home")}>
                 回到开始
               </button>
-              <button type="button" className="toolbar-button" onClick={() => void runPipeline()} disabled={loading || !project}>
+              <button type="button" className="toolbar-button" onClick={() => void runWorkflow()} disabled={loading || !project}>
                 开始处理
               </button>
               <button

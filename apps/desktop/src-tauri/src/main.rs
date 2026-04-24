@@ -659,6 +659,150 @@ async fn compare_runs(
 }
 
 #[tauri::command]
+async fn save_ingestion_spec(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    spec: Value,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "save-ingestion-spec",
+        json!({
+            "project_id": project_id,
+            "spec": spec
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn list_ingestion_specs(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+) -> Result<Value, String> {
+    engine_request(&app, &state, "list-ingestion-specs", json!({ "project_id": project_id })).await
+}
+
+#[tauri::command]
+async fn create_corpus_view(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    view: Value,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "create-corpus-view",
+        json!({
+            "project_id": project_id,
+            "view": view
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn update_corpus_view(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    view: Value,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "update-corpus-view",
+        json!({
+            "project_id": project_id,
+            "view": view
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn delete_corpus_view(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    view_id: String,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "delete-corpus-view",
+        json!({
+            "project_id": project_id,
+            "view_id": view_id
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn load_artifact_preview(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    artifact_id: String,
+    limit: Option<u64>,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "load-artifact-preview",
+        json!({
+            "project_id": project_id,
+            "artifact_id": artifact_id,
+            "limit": limit
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn load_artifact_payload(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    artifact_id: String,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "load-artifact-payload",
+        json!({
+            "project_id": project_id,
+            "artifact_id": artifact_id
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn list_run_artifacts(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    project_id: String,
+    run_id: Option<String>,
+) -> Result<Value, String> {
+    engine_request(
+        &app,
+        &state,
+        "list-run-artifacts",
+        json!({
+            "project_id": project_id,
+            "run_id": run_id
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
 async fn export_project(
     app: tauri::AppHandle,
     state: tauri::State<'_, EngineState>,
@@ -948,6 +1092,14 @@ fn main() {
             list_experiment_specs,
             run_experiment_matrix,
             compare_runs,
+            save_ingestion_spec,
+            list_ingestion_specs,
+            create_corpus_view,
+            update_corpus_view,
+            delete_corpus_view,
+            load_artifact_preview,
+            load_artifact_payload,
+            list_run_artifacts,
             export_project,
             export_project_backup,
             save_project,

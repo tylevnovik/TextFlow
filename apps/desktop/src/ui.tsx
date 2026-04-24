@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type {
   AuditRow,
   CorpusItem,
@@ -60,6 +60,15 @@ export function StatCard({
   );
 }
 
+export function MiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="mini-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 export function Meta({ label, value }: { label: string; value: string }) {
   return (
     <div className="meta-item">
@@ -71,10 +80,12 @@ export function Meta({ label, value }: { label: string; value: string }) {
 
 export function Table({
   columns,
-  rows
+  rows,
+  rowKey
 }: {
   columns: string[];
   rows: Array<object>;
+  rowKey?: string | ((row: object, index: number) => string);
 }) {
   return (
     <div className="table-wrap">
@@ -88,7 +99,13 @@ export function Table({
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={`${index}-${columns.map((column) => String((row as Record<string, unknown>)[column] ?? "")).join("-")}`}>
+            <tr
+              key={typeof rowKey === "function"
+                ? rowKey(row, index)
+                : rowKey
+                  ? String((row as Record<string, unknown>)[rowKey] ?? index)
+                  : `${index}`}
+            >
               {columns.map((column) => (
                 <td key={column}>{String((row as Record<string, unknown>)[column] ?? "—")}</td>
               ))}
@@ -97,6 +114,50 @@ export function Table({
         </tbody>
       </table>
     </div>
+  );
+}
+
+export function PaginatedTable({
+  columns,
+  rows,
+  pageSize = 25,
+  rowKey
+}: {
+  columns: string[];
+  rows: Array<object>;
+  pageSize?: number;
+  rowKey?: string | ((row: object, index: number) => string);
+}) {
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+
+  useEffect(() => {
+    setPage(1);
+  }, [rows.length, pageSize]);
+
+  const safePage = Math.min(page, totalPages);
+  const visibleRows = useMemo(
+    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [pageSize, rows, safePage]
+  );
+
+  return (
+    <>
+      <Table columns={columns} rows={visibleRows} rowKey={rowKey} />
+      <div className="button-row dictionary-page-nav">
+        <span className="helper-note">
+          当前显示第 {safePage} / {totalPages} 页，
+          第 {rows.length ? (safePage - 1) * pageSize + 1 : 0} - {Math.min(safePage * pageSize, rows.length)} 条，
+          每页 {pageSize} 条。
+        </span>
+        <button type="button" className="toolbar-button ghost" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={safePage <= 1}>
+          上一页
+        </button>
+        <button type="button" className="toolbar-button ghost" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={safePage >= totalPages}>
+          下一页
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -181,9 +242,23 @@ export function DictionaryTable({ sheet }: { sheet: DictionarySheet }) {
 }
 
 export function FrequencyTable({ rows }: { rows: FrequencyRow[] }) {
+  const [page, setPage] = useState(1);
+  const pageSize = 24;
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const visibleRows = useMemo(
+    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [rows, safePage]
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [rows.length]);
+
   return (
-    <div className="rank-list">
-      {rows.map((row) => (
+    <>
+      <div className="rank-list">
+        {visibleRows.map((row) => (
         <article className="rank-row" key={row.term}>
           <div>
             <h4>{row.term}</h4>
@@ -193,8 +268,18 @@ export function FrequencyTable({ rows }: { rows: FrequencyRow[] }) {
           </div>
           <strong>{row.avg_per_doc.toFixed(1)}</strong>
         </article>
-      ))}
-    </div>
+        ))}
+      </div>
+      <div className="button-row dictionary-page-nav">
+        <span className="helper-note">当前显示第 {safePage} / {totalPages} 页，每页 {pageSize} 条。</span>
+        <button type="button" className="toolbar-button ghost" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={safePage <= 1}>
+          上一页
+        </button>
+        <button type="button" className="toolbar-button ghost" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={safePage >= totalPages}>
+          下一页
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -230,23 +315,95 @@ export function LineChart({ values, labels }: { values: number[]; labels: string
 }
 
 export function ScatterChart({ rows }: { rows: DocumentClusterRow[] }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [hoveredRow, setHoveredRow] = useState<DocumentClusterRow | null>(null);
+  const width = 320;
+  const height = 240;
+  const padding = 24;
+  const colors = ["#d6a84f", "#264653", "#2a9d8f", "#c65d3b", "#6d597a"];
+
+  const plottedRows = useMemo(() => {
+    if (!rows.length) {
+      return [];
+    }
+    const xs = rows.map((row) => row.x);
+    const ys = rows.map((row) => row.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const scaleX = (value: number) => padding + ((value - minX) / Math.max(maxX - minX, 1e-6)) * (width - padding * 2);
+    const scaleY = (value: number) => height - padding - ((value - minY) / Math.max(maxY - minY, 1e-6)) * (height - padding * 2);
+    return rows.map((row) => ({
+      ...row,
+      px: scaleX(row.x),
+      py: scaleY(row.y)
+    }));
+  }, [rows]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = "#f5efe2";
+    context.fillRect(0, 0, width, height);
+    context.strokeStyle = "#b9ad93";
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(padding, height / 2);
+    context.lineTo(width - padding, height / 2);
+    context.moveTo(width / 2, padding);
+    context.lineTo(width / 2, height - padding);
+    context.stroke();
+
+    plottedRows.forEach((row) => {
+      context.beginPath();
+      context.fillStyle = colors[row.cluster_id % colors.length] ?? colors[0];
+      context.arc(row.px, row.py, hoveredRow?.doc_id === row.doc_id ? 7 : 5, 0, Math.PI * 2);
+      context.fill();
+    });
+  }, [colors, hoveredRow?.doc_id, plottedRows]);
+
+  const handlePointerMove = (event: ReactMouseEvent<HTMLCanvasElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * width;
+    const y = ((event.clientY - rect.top) / rect.height) * height;
+    let candidate: DocumentClusterRow | null = null;
+    let minDistance = 12;
+    plottedRows.forEach((row) => {
+      const distance = Math.hypot(row.px - x, row.py - y);
+      if (distance <= minDistance) {
+        minDistance = distance;
+        candidate = row;
+      }
+    });
+    setHoveredRow(candidate);
+  };
+
   return (
-    <svg viewBox="0 0 320 240" className="chart-svg" role="img" aria-label="document clusters">
-      <line x1="20" y1="120" x2="300" y2="120" />
-      <line x1="160" y1="20" x2="160" y2="220" />
-      {rows.map((row) => {
-        const x = 160 + row.x * 100;
-        const y = 120 - row.y * 100;
-        return (
-          <g key={row.doc_id}>
-            <circle cx={x} cy={y} r="8" className={`cluster-${row.cluster_id % 3}`} />
-            <text x={x} y={y - 14} textAnchor="middle">
-              {row.doc_id}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+    <div className="scatter-card">
+      <canvas
+        ref={canvasRef}
+        width={width}
+        height={height}
+        className="chart-canvas"
+        role="img"
+        aria-label="document clusters"
+        onMouseMove={handlePointerMove}
+        onMouseLeave={() => setHoveredRow(null)}
+      />
+      <p className="chart-caption">
+        {hoveredRow
+          ? `${hoveredRow.doc_id} · 簇 ${hoveredRow.cluster_id} · ${hoveredRow.title}`
+          : "移动到点上可查看文档信息。"}
+      </p>
+    </div>
   );
 }
 
@@ -257,22 +414,46 @@ export function KeywordPanel({
   featureTerms: FeatureTermRow[];
   keywords: Array<{ keyword: string; score: number; scope: string }>;
 }) {
+  const [featurePage, setFeaturePage] = useState(1);
+  const featurePageSize = 48;
+  const totalFeaturePages = Math.max(1, Math.ceil(featureTerms.length / featurePageSize));
+  const safeFeaturePage = Math.min(featurePage, totalFeaturePages);
+  const visibleFeatureTerms = useMemo(
+    () => featureTerms.slice((safeFeaturePage - 1) * featurePageSize, safeFeaturePage * featurePageSize),
+    [featureTerms, safeFeaturePage]
+  );
+
+  useEffect(() => {
+    setFeaturePage(1);
+  }, [featureTerms.length]);
+
   return (
     <>
       <div className="pill-cloud">
-        {featureTerms.map((term) => (
+        {visibleFeatureTerms.map((term) => (
           <span key={term.term} className={`pill ${term.selected ? "selected" : ""}`}>
             {term.term} · {term.score.toFixed(2)}
           </span>
         ))}
       </div>
-      <Table
+      <div className="button-row dictionary-page-nav">
+        <span className="helper-note">特征词第 {safeFeaturePage} / {totalFeaturePages} 页，每页 {featurePageSize} 条。</span>
+        <button type="button" className="toolbar-button ghost" onClick={() => setFeaturePage((current) => Math.max(1, current - 1))} disabled={safeFeaturePage <= 1}>
+          上一页
+        </button>
+        <button type="button" className="toolbar-button ghost" onClick={() => setFeaturePage((current) => Math.min(totalFeaturePages, current + 1))} disabled={safeFeaturePage >= totalFeaturePages}>
+          下一页
+        </button>
+      </div>
+      <PaginatedTable
         columns={["scope", "keyword", "score"]}
         rows={keywords.map((row) => ({
           scope: row.scope,
           keyword: row.keyword,
           score: row.score.toFixed(2)
         }))}
+        rowKey={(row) => `${(row as { scope: string; keyword: string }).scope}-${(row as { scope: string; keyword: string }).keyword}`}
+        pageSize={18}
       />
     </>
   );
@@ -283,9 +464,23 @@ export function TopicPanel({
 }: {
   rows: Array<{ institution: string; topic_label: string; cooccurrence_count: number; representative_terms: string[] }>;
 }) {
+  const [page, setPage] = useState(1);
+  const pageSize = 18;
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const visibleRows = useMemo(
+    () => rows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [rows, safePage]
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [rows.length]);
+
   return (
-    <div className="stack-list">
-      {rows.map((row) => (
+    <>
+      <div className="stack-list">
+        {visibleRows.map((row) => (
         <article className="topic-card" key={`${row.institution}-${row.topic_label}`}>
           <div className="run-head">
             <strong>{row.institution}</strong>
@@ -294,14 +489,24 @@ export function TopicPanel({
           <h4>{row.topic_label}</h4>
           <p>{row.representative_terms.join(" / ")}</p>
         </article>
-      ))}
-    </div>
+        ))}
+      </div>
+      <div className="button-row dictionary-page-nav">
+        <span className="helper-note">当前显示第 {safePage} / {totalPages} 页，每页 {pageSize} 条。</span>
+        <button type="button" className="toolbar-button ghost" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={safePage <= 1}>
+          上一页
+        </button>
+        <button type="button" className="toolbar-button ghost" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={safePage >= totalPages}>
+          下一页
+        </button>
+      </div>
+    </>
   );
 }
 
 export function AuditTable({ rows }: { rows: AuditRow[] }) {
   return (
-    <Table
+    <PaginatedTable
       columns={["doc_id", "source_term", "target_term", "rule_type", "action"]}
       rows={rows.map((row) => ({
         doc_id: row.doc_id,
@@ -310,6 +515,8 @@ export function AuditTable({ rows }: { rows: AuditRow[] }) {
         rule_type: row.rule_type,
         action: row.action
       }))}
+      rowKey={(row, index) => `${(row as { doc_id: string; source_term: string }).doc_id}-${(row as { doc_id: string; source_term: string }).source_term}-${index}`}
+      pageSize={20}
     />
   );
 }

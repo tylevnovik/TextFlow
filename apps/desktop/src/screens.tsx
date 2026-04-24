@@ -26,9 +26,12 @@ import type {
 } from "@textflow/shared-types";
 import { sourceProfileImportTemplates, sourceProfiles } from "@textflow/shared-types";
 import type { ImportProjectFilesResponse } from "./bridge/desktopBridge";
+import { ArtifactBrowser } from "./features/artifacts/ArtifactBrowser";
 import { ExperimentPanel } from "./features/experiments/ExperimentPanel";
+import { ResourceBrowser } from "./features/resources/ResourceBrowser";
 import { ReviewQueuePanel } from "./features/review/ReviewQueuePanel";
 import { coerceReviewTasks } from "./features/review/reviewTypes";
+import { RunHistoryPanel } from "./features/results/RunHistoryPanel";
 import { RunDiffPanel } from "./features/results/RunDiffPanel";
 import { useTaskProgress, useWorkspace } from "./store/workspaceStore";
 import {
@@ -1479,7 +1482,10 @@ function HomePage() {
 
 function ProjectPage() {
   const {
-    state: { snapshot }
+    state: { snapshot, loading },
+    createCorpusView,
+    saveIngestionSpec,
+    setActivePage
   } = useWorkspace();
   const project = snapshot.current_project;
 
@@ -1538,6 +1544,19 @@ function ProjectPage() {
           </div>
         </Panel>
       </div>
+
+      <ResourceBrowser
+        project={project}
+        corpus={snapshot.corpus}
+        loading={loading}
+        onOpenCorpusView={() => setActivePage("data")}
+        onCreateCorpusView={async (view) => {
+          await createCorpusView(view);
+        }}
+        onSaveIngestionSpec={async (spec) => {
+          await saveIngestionSpec(spec);
+        }}
+      />
 
       <Panel title="项目源文件清单">
         <Table
@@ -4506,6 +4525,7 @@ function ResultsPage() {
     compareRuns,
     exportProject,
     exportProjectBackup,
+    loadArtifactPreview,
     openPath,
     revealPath,
     resolveReviewTask,
@@ -4536,8 +4556,8 @@ function ResultsPage() {
   const visibleExport = lastExport?.project_id === project.id ? lastExport : null;
   const exportDirPath = visibleExport?.export_dir ?? fallbackExportDir;
   const exportDirLabel = visibleExport?.relative_export_dir ?? project.paths.exports_dir;
-  const recentRuns = project.run_history.slice().reverse().slice(0, 24);
   const reviewTasks = coerceReviewTasks(project);
+  const artifactRecords = project.artifact_records ?? [];
   const generatedFiles = projectRootPath
     ? project.results.report_files.map((relativePath) => ({
         path: joinFsPath(projectRootPath, relativePath),
@@ -4610,27 +4630,34 @@ function ResultsPage() {
       </Panel>
 
         <div className="two-column">
-          <Panel title="历史运行记录">
-            <div className="stack-list">
-              {recentRuns.map((run) => (
-              <article key={run.run_id} className="run-card">
-                <div className="run-head">
-                  <strong>{run.run_id}</strong>
-                  <span className={`badge ${run.status}`}>{run.status}</span>
-                </div>
-                <p>{run.params_snapshot_path}</p>
-                  <p className="muted">{run.run_scope_summary ?? "处理对象：项目内全部资料"}</p>
-                <ul className="micro-list">
-                  {run.artifacts.map((artifact) => (
-                    <li key={`${run.run_id}-${artifact.step}`}>{artifact.step}: {artifact.output_files.length} 个文件</li>
-                  ))}
-                </ul>
-              </article>
-            ))}
-            </div>
-          </Panel>
-          <Panel title={visibleExport ? "最近一次导出的文件" : "已生成文件"}>
-            <div className="artifact-list">
+          <RunHistoryPanel
+            runs={project.run_history}
+            reviewTasks={reviewTasks}
+            experiments={experiments}
+            loading={loading}
+            onCompareRuns={async (leftRunId, rightRunId) => {
+              await compareRuns(leftRunId, rightRunId);
+            }}
+          />
+          <ArtifactBrowser
+            artifacts={artifactRecords}
+            loading={loading}
+            onLoadPreview={async (artifactId) => {
+              const preview = await loadArtifactPreview(artifactId);
+              if (!preview) {
+                throw new Error("产物预览加载失败");
+              }
+              return preview;
+            }}
+            onOpenArtifact={(artifact) => {
+              if (projectRootPath) {
+                void openPath(joinFsPath(projectRootPath, artifact.path));
+              }
+            }}
+          />
+        </div>
+        <Panel title={visibleExport ? "最近一次导出的文件" : "已生成文件"}>
+          <div className="artifact-list">
             {(visibleExport?.files.length ? visibleExport.files : generatedFiles).map((file) => (
               <article key={file.path} className="project-card artifact-row">
                 <div>
@@ -4653,9 +4680,8 @@ function ResultsPage() {
                 <span className="muted">先运行一次导出，这里会显示文件列表，并支持打开或定位。</span>
               </div>
             )}
-            </div>
-          </Panel>
-        </div>
+          </div>
+        </Panel>
         <ReviewQueuePanel
           tasks={reviewTasks}
           loading={loading}

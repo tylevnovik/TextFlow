@@ -1,9 +1,12 @@
 import type {
+  ArtifactRecord,
   CorpusItem,
+  CorpusView,
   DictionaryKind,
   DictionaryTableResource,
   ExperimentSpec,
   ExportFormat,
+  IngestionSpec,
   WorkflowNodeRuntimeState,
   WorkflowRunProgressDetail,
   ProjectManifest,
@@ -64,6 +67,44 @@ export interface UpdateCorpusDocumentResponse {
   document_count: number;
   source_files?: ProjectManifest["source_files"];
   project_updated_at?: string;
+}
+
+export interface SaveIngestionSpecResponse {
+  spec: IngestionSpec;
+  project?: ProjectManifest;
+  project_updated_at?: string;
+}
+
+export interface ListIngestionSpecsResponse {
+  project_id: string;
+  specs: IngestionSpec[];
+}
+
+export interface CorpusViewMutationResponse {
+  view: CorpusView;
+  project?: ProjectManifest;
+  project_updated_at?: string;
+}
+
+export interface DeleteCorpusViewResponse {
+  view_id: string;
+  removed?: CorpusView;
+  project?: ProjectManifest;
+  project_updated_at?: string;
+}
+
+export interface ArtifactPreviewResponse {
+  artifact_id: string;
+  columns?: string[];
+  rows: Array<Record<string, unknown>>;
+  row_count?: number;
+  preview_rows?: number;
+}
+
+export interface ListRunArtifactsResponse {
+  project_id: string;
+  run_id?: string;
+  artifacts: ArtifactRecord[];
 }
 
 export interface ImportDictionaryTableResponse {
@@ -181,6 +222,13 @@ interface DesktopBridge {
   exportProjectBackup(projectId: string, path?: string): Promise<ExportProjectBackupResponse>;
   updateCorpusDocument(projectId: string, document: CorpusItem): Promise<UpdateCorpusDocumentResponse>;
   deleteCorpusDocument(projectId: string, docId: string): Promise<DeleteCorpusDocumentResponse>;
+  saveIngestionSpec(projectId: string, spec: Partial<IngestionSpec>): Promise<SaveIngestionSpecResponse>;
+  listIngestionSpecs(projectId: string): Promise<ListIngestionSpecsResponse>;
+  createCorpusView(projectId: string, view: Partial<CorpusView>): Promise<CorpusViewMutationResponse>;
+  updateCorpusView(projectId: string, view: Partial<CorpusView> & { id: string }): Promise<CorpusViewMutationResponse>;
+  deleteCorpusView(projectId: string, viewId: string): Promise<DeleteCorpusViewResponse>;
+  loadArtifactPreview(projectId: string, artifactId: string, limit?: number): Promise<ArtifactPreviewResponse>;
+  listRunArtifacts(projectId: string, runId?: string): Promise<ListRunArtifactsResponse>;
   importDictionaryTable(projectId: string, kind: DictionaryKind, path: string): Promise<ImportDictionaryTableResponse>;
   exportDictionaryTable(projectId: string, kind: DictionaryKind, tableId: string, path: string): Promise<{ kind: DictionaryKind; table_id: string; path: string }>;
   createReviewTask(projectId: string, input: CreateReviewTaskInput): Promise<CreateReviewTaskResponse>;
@@ -437,6 +485,145 @@ export const desktopBridge: DesktopBridge = {
     return {
       doc_id: docId,
       document_count: Math.max(0, demoWorkspace.corpus.length - 1)
+    };
+  },
+
+  async saveIngestionSpec(projectId, spec) {
+    const result = await tryInvoke<SaveIngestionSpecResponse | IngestionSpec>("save_ingestion_spec", { projectId, spec });
+    if (result !== null) {
+      return "spec" in result ? result : { spec: result };
+    }
+    await delay(120);
+    const project = demoWorkspace.current_project!;
+    const specId = spec.id ?? `ingest-${Date.now()}`;
+    const saved: IngestionSpec = {
+      id: specId,
+      name: spec.name ?? "当前导入规格",
+      source_profile: spec.source_profile ?? project.import_template.source_profile,
+      field_mappings: spec.field_mappings ?? [],
+      text_build: spec.text_build ?? {},
+      dedupe_rules: spec.dedupe_rules ?? {}
+    };
+    const existingIndex = project.ingestion_specs.findIndex((item) => item.id === specId);
+    if (existingIndex >= 0) {
+      project.ingestion_specs[existingIndex] = saved;
+    } else {
+      project.ingestion_specs.push(saved);
+    }
+    project.updated_at = new Date().toISOString();
+    return {
+      spec: saved,
+      project,
+      project_updated_at: project.updated_at
+    };
+  },
+
+  async listIngestionSpecs(projectId) {
+    const result = await tryInvoke<ListIngestionSpecsResponse | IngestionSpec[]>("list_ingestion_specs", { projectId });
+    if (result !== null) {
+      return Array.isArray(result) ? { project_id: projectId, specs: result } : result;
+    }
+    await delay(80);
+    return {
+      project_id: projectId,
+      specs: demoWorkspace.current_project!.ingestion_specs
+    };
+  },
+
+  async createCorpusView(projectId, view) {
+    const result = await tryInvoke<CorpusViewMutationResponse | CorpusView>("create_corpus_view", { projectId, view });
+    if (result !== null) {
+      return "view" in result ? result : { view: result };
+    }
+    await delay(120);
+    const project = demoWorkspace.current_project!;
+    const created: CorpusView = {
+      id: view.id ?? `view-${Date.now()}`,
+      name: view.name ?? "当前语料视图",
+      resource_ids: view.resource_ids ?? project.corpus_resources.map((resource) => resource.id),
+      filter_spec: view.filter_spec ?? {},
+      doc_ids: view.doc_ids ?? demoWorkspace.corpus.map((doc) => doc.doc_id)
+    };
+    project.corpus_views.push(created);
+    project.updated_at = new Date().toISOString();
+    return {
+      view: created,
+      project,
+      project_updated_at: project.updated_at
+    };
+  },
+
+  async updateCorpusView(projectId, view) {
+    const result = await tryInvoke<CorpusViewMutationResponse | CorpusView>("update_corpus_view", { projectId, view });
+    if (result !== null) {
+      return "view" in result ? result : { view: result };
+    }
+    await delay(120);
+    const project = demoWorkspace.current_project!;
+    const existing = project.corpus_views.find((item) => item.id === view.id);
+    if (!existing) {
+      throw new Error(`Corpus view ${view.id} not found`);
+    }
+    const updated: CorpusView = { ...existing, ...view };
+    project.corpus_views = project.corpus_views.map((item) => item.id === view.id ? updated : item);
+    project.updated_at = new Date().toISOString();
+    return {
+      view: updated,
+      project,
+      project_updated_at: project.updated_at
+    };
+  },
+
+  async deleteCorpusView(projectId, viewId) {
+    const result = await tryInvoke<DeleteCorpusViewResponse | CorpusView>("delete_corpus_view", { projectId, viewId });
+    if (result !== null) {
+      return "view_id" in result ? result : { view_id: viewId, removed: result };
+    }
+    await delay(100);
+    const project = demoWorkspace.current_project!;
+    const removed = project.corpus_views.find((view) => view.id === viewId);
+    project.corpus_views = project.corpus_views.filter((view) => view.id !== viewId);
+    project.updated_at = new Date().toISOString();
+    return {
+      view_id: viewId,
+      removed,
+      project,
+      project_updated_at: project.updated_at
+    };
+  },
+
+  async loadArtifactPreview(projectId, artifactId, limit = 50) {
+    const result = await tryInvoke<ArtifactPreviewResponse>("load_artifact_preview", { projectId, artifactId, limit });
+    if (result !== null) {
+      return result;
+    }
+    await delay(130);
+    const artifact = demoWorkspace.current_project!.artifact_records.find((item) => item.artifact_id === artifactId);
+    return {
+      artifact_id: artifactId,
+      columns: ["artifact_id", "kind", "path", "row_count"],
+      rows: artifact ? [{
+        artifact_id: artifact.artifact_id,
+        kind: artifact.kind,
+        path: artifact.path,
+        row_count: artifact.row_count ?? 0
+      }] : [],
+      row_count: artifact?.row_count ?? 0
+    };
+  },
+
+  async listRunArtifacts(projectId, runId) {
+    const result = await tryInvoke<ListRunArtifactsResponse | ArtifactRecord[]>("list_run_artifacts", { projectId, runId });
+    if (result !== null) {
+      return Array.isArray(result) ? { project_id: projectId, run_id: runId, artifacts: result } : result;
+    }
+    await delay(90);
+    const artifacts = demoWorkspace.current_project!.artifact_records
+      .filter((artifact) => !runId || artifact.run_id === runId);
+    return {
+      project_id: projectId,
+      run_id: runId,
+      artifacts
     };
   },
 

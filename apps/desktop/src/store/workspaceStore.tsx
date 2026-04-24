@@ -9,11 +9,13 @@ import {
   type PropsWithChildren
 } from "react";
 import type {
+  CorpusView,
   DictionaryTableResource,
   CorpusItem,
   DictionaryKind,
   ExportFormat,
   ExperimentSpec,
+  IngestionSpec,
   PageId,
   ProjectManifest,
   ProjectSummary,
@@ -21,15 +23,20 @@ import type {
   WorkspaceSnapshot
 } from "@textflow/shared-types";
 import type {
+  ArtifactPreviewResponse,
+  CorpusViewMutationResponse,
   DeleteCorpusDocumentResponse,
+  DeleteCorpusViewResponse,
   DeleteProjectResponse,
   EngineProgressEvent,
   ExportProjectResponse,
   ExportProjectBackupResponse,
   ImportProjectFilesResponse,
+  ListReviewTasksResponse,
   ResolveReviewTaskResponse,
   RunDiffSummary,
   RunExperimentMatrixResponse,
+  SaveIngestionSpecResponse,
   SaveExperimentSpecResponse
 } from "../bridge/desktopBridge";
 import { desktopBridge } from "../bridge/desktopBridge";
@@ -106,6 +113,12 @@ interface WorkspaceContextValue {
   importProjectPackage: (path: string) => Promise<void>;
   saveProject: (project: ProjectManifest, options?: SaveProjectOptions) => Promise<boolean>;
   runWorkflow: () => Promise<RunRecord | null>;
+  saveIngestionSpec: (spec: Partial<IngestionSpec>) => Promise<SaveIngestionSpecResponse | null>;
+  createCorpusView: (view: Partial<CorpusView>) => Promise<CorpusViewMutationResponse | null>;
+  updateCorpusView: (view: Partial<CorpusView> & { id: string }) => Promise<CorpusViewMutationResponse | null>;
+  deleteCorpusView: (viewId: string) => Promise<DeleteCorpusViewResponse | null>;
+  loadArtifactPreview: (artifactId: string, limit?: number) => Promise<ArtifactPreviewResponse | null>;
+  listReviewTasks: (status?: string) => Promise<ListReviewTasksResponse | null>;
   saveExperimentSpec: (experiment: Partial<ExperimentSpec>) => Promise<SaveExperimentSpecResponse | null>;
   runExperimentMatrix: (experimentId: string) => Promise<RunExperimentMatrixResponse | null>;
   compareRuns: (leftRunId: string, rightRunId: string) => Promise<RunDiffSummary | null>;
@@ -245,6 +258,50 @@ function formatErrorMessage(error: unknown): string {
   } catch {
     return "未知错误";
   }
+}
+
+function projectWithIngestionSpec(
+  project: ProjectManifest,
+  spec: IngestionSpec,
+  updatedAt?: string
+): ProjectManifest {
+  const existingIndex = project.ingestion_specs.findIndex((item) => item.id === spec.id);
+  const ingestionSpecs = existingIndex >= 0
+    ? project.ingestion_specs.map((item, index) => index === existingIndex ? spec : item)
+    : [...project.ingestion_specs, spec];
+  return {
+    ...project,
+    updated_at: updatedAt ?? project.updated_at,
+    ingestion_specs: ingestionSpecs
+  };
+}
+
+function projectWithCorpusView(
+  project: ProjectManifest,
+  view: CorpusView,
+  updatedAt?: string
+): ProjectManifest {
+  const existingIndex = project.corpus_views.findIndex((item) => item.id === view.id);
+  const corpusViews = existingIndex >= 0
+    ? project.corpus_views.map((item, index) => index === existingIndex ? view : item)
+    : [...project.corpus_views, view];
+  return {
+    ...project,
+    updated_at: updatedAt ?? project.updated_at,
+    corpus_views: corpusViews
+  };
+}
+
+function projectWithoutCorpusView(
+  project: ProjectManifest,
+  viewId: string,
+  updatedAt?: string
+): ProjectManifest {
+  return {
+    ...project,
+    updated_at: updatedAt ?? project.updated_at,
+    corpus_views: project.corpus_views.filter((view) => view.id !== viewId)
+  };
 }
 
 function buildProjectSummary(
@@ -776,6 +833,187 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         return response.run;
       } catch (error) {
         failAction("运行流程", error);
+        return null;
+      }
+    },
+    saveIngestionSpec: async (spec) => {
+      const project = state.snapshot.current_project;
+      if (!project) {
+        dispatch({ type: "setStatus", statusLine: "请先创建或打开项目，再保存导入规格。" });
+        return null;
+      }
+      dispatch({ type: "setLoading", loading: true, statusLine: "正在保存导入规格..." });
+      updateProgress({
+        action: "save-ingestion-spec",
+        status: "running",
+        value: 0.04,
+        message: "正在保存导入规格..."
+      });
+      try {
+        const result = await desktopBridge.saveIngestionSpec(project.id, spec);
+        const nextProject = result.project ?? projectWithIngestionSpec(project, result.spec, result.project_updated_at);
+        setLastActionAt("保存导入规格");
+        dispatch({
+          type: "applyLocalPatch",
+          project: nextProject,
+          projectUpdatedAt: result.project_updated_at,
+          loading: false,
+          statusLine: "导入规格已保存"
+        });
+        updateProgress({
+          action: "save-ingestion-spec",
+          status: "completed",
+          value: 1,
+          message: "导入规格已保存"
+        });
+        return result;
+      } catch (error) {
+        failAction("保存导入规格", error);
+        return null;
+      }
+    },
+    createCorpusView: async (view) => {
+      const project = state.snapshot.current_project;
+      if (!project) {
+        dispatch({ type: "setStatus", statusLine: "请先创建或打开项目，再创建语料视图。" });
+        return null;
+      }
+      dispatch({ type: "setLoading", loading: true, statusLine: "正在创建语料视图..." });
+      updateProgress({
+        action: "create-corpus-view",
+        status: "running",
+        value: 0.04,
+        message: "正在创建语料视图..."
+      });
+      try {
+        const result = await desktopBridge.createCorpusView(project.id, view);
+        const nextProject = result.project ?? projectWithCorpusView(project, result.view, result.project_updated_at);
+        setLastActionAt("创建语料视图");
+        dispatch({
+          type: "applyLocalPatch",
+          project: nextProject,
+          projectUpdatedAt: result.project_updated_at,
+          loading: false,
+          statusLine: "语料视图已创建"
+        });
+        updateProgress({
+          action: "create-corpus-view",
+          status: "completed",
+          value: 1,
+          message: "语料视图已创建"
+        });
+        return result;
+      } catch (error) {
+        failAction("创建语料视图", error);
+        return null;
+      }
+    },
+    updateCorpusView: async (view) => {
+      const project = state.snapshot.current_project;
+      if (!project) {
+        dispatch({ type: "setStatus", statusLine: "请先创建或打开项目，再更新语料视图。" });
+        return null;
+      }
+      dispatch({ type: "setLoading", loading: true, statusLine: "正在更新语料视图..." });
+      updateProgress({
+        action: "update-corpus-view",
+        status: "running",
+        value: 0.04,
+        message: "正在更新语料视图..."
+      });
+      try {
+        const result = await desktopBridge.updateCorpusView(project.id, view);
+        const nextProject = result.project ?? projectWithCorpusView(project, result.view, result.project_updated_at);
+        setLastActionAt("更新语料视图");
+        dispatch({
+          type: "applyLocalPatch",
+          project: nextProject,
+          projectUpdatedAt: result.project_updated_at,
+          loading: false,
+          statusLine: "语料视图已更新"
+        });
+        updateProgress({
+          action: "update-corpus-view",
+          status: "completed",
+          value: 1,
+          message: "语料视图已更新"
+        });
+        return result;
+      } catch (error) {
+        failAction("更新语料视图", error);
+        return null;
+      }
+    },
+    deleteCorpusView: async (viewId) => {
+      const project = state.snapshot.current_project;
+      if (!project) {
+        dispatch({ type: "setStatus", statusLine: "请先创建或打开项目，再删除语料视图。" });
+        return null;
+      }
+      dispatch({ type: "setLoading", loading: true, statusLine: "正在删除语料视图..." });
+      updateProgress({
+        action: "delete-corpus-view",
+        status: "running",
+        value: 0.04,
+        message: "正在删除语料视图..."
+      });
+      try {
+        const result = await desktopBridge.deleteCorpusView(project.id, viewId);
+        const nextProject = result.project ?? projectWithoutCorpusView(project, viewId, result.project_updated_at);
+        setLastActionAt("删除语料视图");
+        dispatch({
+          type: "applyLocalPatch",
+          project: nextProject,
+          projectUpdatedAt: result.project_updated_at,
+          loading: false,
+          statusLine: "语料视图已删除"
+        });
+        updateProgress({
+          action: "delete-corpus-view",
+          status: "completed",
+          value: 1,
+          message: "语料视图已删除"
+        });
+        return result;
+      } catch (error) {
+        failAction("删除语料视图", error);
+        return null;
+      }
+    },
+    loadArtifactPreview: async (artifactId, limit) => {
+      const projectId = state.snapshot.current_project?.id;
+      if (!projectId) {
+        dispatch({ type: "setStatus", statusLine: "请先创建或打开项目，再读取产物预览。" });
+        return null;
+      }
+      try {
+        const preview = await desktopBridge.loadArtifactPreview(projectId, artifactId, limit);
+        dispatch({ type: "setStatus", statusLine: `产物预览已加载：${artifactId}` });
+        return preview;
+      } catch (error) {
+        failAction("读取产物预览", error);
+        return null;
+      }
+    },
+    listReviewTasks: async (status) => {
+      const project = state.snapshot.current_project;
+      if (!project) {
+        dispatch({ type: "setStatus", statusLine: "请先创建或打开项目，再读取复核任务。" });
+        return null;
+      }
+      try {
+        const result = await desktopBridge.listReviewTasks(project.id, status);
+        dispatch({
+          type: "applyLocalPatch",
+          project: {
+            ...project,
+            review_tasks: result.tasks as ProjectManifest["review_tasks"]
+          },
+          statusLine: "复核任务已加载"
+        });
+        return result;
+      } catch (error) {
+        failAction("读取复核任务", error);
         return null;
       }
     },
