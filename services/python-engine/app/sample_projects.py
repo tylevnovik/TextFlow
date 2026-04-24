@@ -4,6 +4,8 @@ import hashlib
 import json
 import math
 import os
+import re
+import shutil
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -11,10 +13,10 @@ from typing import Any
 import pandas as pd
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
-from .defaults import default_import_template, make_dictionary_entry, utc_now_iso
+from .defaults import default_import_template, default_project_manifest, make_dictionary_entry, utc_now_iso
 from .experiment_store import save_experiment_spec
 from .node_definitions import build_builtin_node_definitions
-from .project_store import create_project, save_project
+from .project_store import create_project, list_project_dirs, load_project, project_relative_root, save_project
 from .review_store import create_review_task
 from .sample_dataset_cache import ensure_public_sample_cache_available, read_normalized_sample_cache, sample_data_cache_root
 
@@ -282,6 +284,72 @@ BUILTIN_SAMPLE_PROJECTS: list[dict[str, Any]] = [
         "experiment_specs": [],
     },
 ]
+
+BUILTIN_SAMPLE_PROJECT_BY_SLUG = {
+    str(spec["slug"]): spec for spec in BUILTIN_SAMPLE_PROJECTS
+}
+BUILTIN_SAMPLE_PROJECT_BY_NAME = {
+    str(spec["name"]): spec for spec in BUILTIN_SAMPLE_PROJECTS
+}
+SYNTHETIC_SAMPLE_DOC_ID_RE = re.compile(
+    r"^(?:un_parallel_en_zh|wikimedia_enwiki|wikimedia_zhwiki|openalex_works)-(?:en|zh)-\d+$"
+)
+SYNTHETIC_SAMPLE_TITLE_RE = re.compile(
+    r"^(?:un_parallel_en_zh|wikimedia_enwiki|wikimedia_zhwiki|openalex_works) (?:en|zh) title \d+$"
+)
+SYNTHETIC_SAMPLE_EN_TEXT_RE = re.compile(
+    r"^Public (?:un_parallel_en_zh|wikimedia_enwiki|wikimedia_zhwiki|openalex_works) document \d+ discusses "
+)
+SYNTHETIC_SAMPLE_ZH_TEXT_RE = re.compile(
+    r"^公开数据 (?:un_parallel_en_zh|wikimedia_enwiki|wikimedia_zhwiki|openalex_works) 文档 \d+ 讨论 "
+)
+
+
+def _builtin_sample_spec_for_manifest(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    settings = manifest.get("settings") if isinstance(manifest.get("settings"), dict) else {}
+    sample_project = settings.get("sample_project") if isinstance(settings.get("sample_project"), dict) else {}
+    slug = str(sample_project.get("slug") or "").strip()
+    if slug:
+        spec = BUILTIN_SAMPLE_PROJECT_BY_SLUG.get(slug)
+        if spec is not None:
+            return spec
+    name = str(manifest.get("name") or "").strip()
+    if not name:
+        return None
+    return BUILTIN_SAMPLE_PROJECT_BY_NAME.get(name)
+
+
+def _is_synthetic_placeholder_row(row: dict[str, Any]) -> bool:
+    doc_id = str(row.get("doc_id") or row.get("id") or "")
+    title = str(row.get("title") or "")
+    raw_text = str(row.get("raw_text") or "")
+    if SYNTHETIC_SAMPLE_EN_TEXT_RE.match(raw_text) or SYNTHETIC_SAMPLE_ZH_TEXT_RE.match(raw_text):
+        return True
+    return bool(
+        SYNTHETIC_SAMPLE_DOC_ID_RE.match(doc_id)
+        and SYNTHETIC_SAMPLE_TITLE_RE.match(title)
+    )
+
+
+def _builtin_sample_project_requires_refresh(
+    manifest: dict[str, Any],
+    corpus: list[dict[str, Any]],
+    spec: dict[str, Any],
+) -> bool:
+    if str(manifest.get("description") or "") != str(spec["description"]):
+        return True
+
+    settings = manifest.get("settings") if isinstance(manifest.get("settings"), dict) else {}
+    sample_project = settings.get("sample_project") if isinstance(settings.get("sample_project"), dict) else None
+    if not isinstance(sample_project, dict):
+        return True
+    if str(sample_project.get("slug") or "") != str(spec["slug"]):
+        return True
+    if list(sample_project.get("source_datasets") or []) != list(spec["source_datasets"]):
+        return True
+    if not corpus:
+        return True
+    return any(_is_synthetic_placeholder_row(row) for row in corpus[:12])
 
 
 def _append_dictionary_terms(manifest: dict[str, Any], dictionary_terms: dict[str, list[tuple[str, str | None]]]) -> None:
@@ -1130,6 +1198,27 @@ def _sample_seed_dir(project_dir: Path) -> Path:
     return seed_dir
 
 
+def _clear_directory_contents(path: Path) -> None:
+    if not path.exists():
+        return
+    for child in path.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def _reset_builtin_sample_project_storage(project_dir: Path) -> None:
+    for relative_path in [
+        "metadata/sample_seed",
+        "runs",
+        "cache",
+        "exports",
+        "corpus/imported",
+    ]:
+        _clear_directory_contents(project_dir / relative_path)
+
+
 def _source_file_record(project_dir: Path, path: Path, row_count: int) -> dict[str, Any]:
     relative_path = path.relative_to(project_dir).as_posix()
     digest = hashlib.md5(relative_path.encode("utf-8")).hexdigest()[:8]
@@ -1215,45 +1304,110 @@ def _write_sample_sources(project_dir: Path, spec: dict[str, Any], row_count: in
     return written_paths
 
 
+def _build_builtin_sample_manifest(
+    project_dir: Path,
+    spec: dict[str, Any],
+    row_count: int,
+    existing_manifest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    manifest = default_project_manifest(
+        str(spec["name"]),
+        str(spec["description"]),
+        project_relative_root(project_dir),
+    )
+    if existing_manifest is not None:
+        manifest["id"] = str(existing_manifest.get("id") or manifest["id"])
+        manifest["created_at"] = str(existing_manifest.get("created_at") or manifest["created_at"])
+        existing_settings = existing_manifest.get("settings") if isinstance(existing_manifest.get("settings"), dict) else {}
+        for key in [
+            "default_language",
+            "preferred_theme",
+            "enable_auto_save",
+            "enable_update_check",
+            "default_export_formats",
+        ]:
+            if key in existing_settings:
+                manifest["settings"][key] = deepcopy(existing_settings[key])
+
+    manifest["import_template"] = default_import_template(str(spec["source_profile"]))
+    manifest["import_template"] = {
+        **manifest["import_template"],
+        **deepcopy(spec.get("import_template_overrides") or {}),
+    }
+    manifest["settings"]["sample_project"] = {
+        "order": spec["order"],
+        "slug": spec["slug"],
+        "difficulty": spec["difficulty"],
+        "goal": spec["goal"],
+        "workflow_name": spec["workflow_name"],
+        "guided_steps": deepcopy(spec["guided_steps"]),
+        "covered_nodes": deepcopy(spec["covered_nodes"]),
+        "covered_settings": deepcopy(spec["covered_settings"]),
+        "default_row_count": spec["default_row_count"],
+        "public_row_count": row_count,
+        "public_data_only": True,
+        "language_balance": deepcopy(spec["language_balance"]),
+        "language_counts": {"en": row_count // 2, "zh": row_count // 2},
+        "estimated_runtime": str(spec.get("estimated_runtime") or ""),
+        "dataset": deepcopy(spec.get("dataset") or {"source_datasets": deepcopy(spec["source_datasets"])}),
+        "source_datasets": deepcopy(spec["source_datasets"]),
+    }
+    manifest["review_tasks"] = deepcopy(spec.get("review_tasks") or [])
+    manifest["experiment_specs"] = deepcopy(spec.get("experiment_specs") or [])
+    _append_dictionary_terms(manifest, deepcopy(spec.get("dictionary_terms") or {}))
+    _configure_workflow_for_spec(manifest, spec)
+    return manifest
+
+
+def _materialize_builtin_sample_project(
+    project_dir: Path,
+    spec: dict[str, Any],
+    *,
+    existing_manifest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    row_count = _sample_row_count(spec)
+    manifest = _build_builtin_sample_manifest(project_dir, spec, row_count, existing_manifest)
+    _reset_builtin_sample_project_storage(project_dir)
+    _written_paths, corpus, source_files = _materialize_sample_sources(project_dir, spec, row_count)
+    manifest["source_files"] = source_files
+    _seed_review_and_experiment_surfaces(manifest, spec, corpus)
+    save_project(project_dir, manifest, corpus)
+    return manifest
+
+
 def create_builtin_sample_projects() -> list[tuple[Path, dict[str, Any]]]:
     created: list[tuple[Path, dict[str, Any]]] = []
 
     for spec in BUILTIN_SAMPLE_PROJECTS:
-        row_count = _sample_row_count(spec)
         project_dir, manifest = create_project(str(spec["name"]), str(spec["description"]))
-        manifest["import_template"] = default_import_template(str(spec["source_profile"]))
-        manifest["import_template"] = {
-            **manifest["import_template"],
-            **deepcopy(spec.get("import_template_overrides") or {}),
-        }
-        manifest.setdefault("settings", {})
-        manifest["settings"]["sample_project"] = {
-            "order": spec["order"],
-            "slug": spec["slug"],
-            "difficulty": spec["difficulty"],
-            "goal": spec["goal"],
-            "workflow_name": spec["workflow_name"],
-            "guided_steps": deepcopy(spec["guided_steps"]),
-            "covered_nodes": deepcopy(spec["covered_nodes"]),
-            "covered_settings": deepcopy(spec["covered_settings"]),
-            "default_row_count": spec["default_row_count"],
-            "public_row_count": row_count,
-            "public_data_only": True,
-            "language_balance": deepcopy(spec["language_balance"]),
-            "language_counts": {"en": row_count // 2, "zh": row_count // 2},
-            "estimated_runtime": str(spec.get("estimated_runtime") or ""),
-            "dataset": deepcopy(spec.get("dataset") or {"source_datasets": deepcopy(spec["source_datasets"])}),
-            "source_datasets": deepcopy(spec["source_datasets"]),
-        }
-        manifest["review_tasks"] = deepcopy(spec.get("review_tasks") or [])
-        manifest["experiment_specs"] = deepcopy(spec.get("experiment_specs") or [])
-        _append_dictionary_terms(manifest, deepcopy(spec.get("dictionary_terms") or {}))
-        _configure_workflow_for_spec(manifest, spec)
-
-        _written_paths, corpus, source_files = _materialize_sample_sources(project_dir, spec, row_count)
-        manifest["source_files"] = source_files
-        _seed_review_and_experiment_surfaces(manifest, spec, corpus)
-        save_project(project_dir, manifest, corpus)
-        created.append((project_dir, manifest))
+        created.append((project_dir, _materialize_builtin_sample_project(project_dir, spec, existing_manifest=manifest)))
 
     return created
+
+
+def reconcile_builtin_sample_projects(*, create_missing: bool = True) -> list[tuple[Path, dict[str, Any]]]:
+    reconciled: list[tuple[Path, dict[str, Any]]] = []
+    existing_by_slug: dict[str, list[tuple[Path, dict[str, Any], list[dict[str, Any]]]]] = {}
+
+    for project_dir in list_project_dirs():
+        manifest, corpus = load_project(project_dir)
+        spec = _builtin_sample_spec_for_manifest(manifest)
+        if spec is None:
+            continue
+        existing_by_slug.setdefault(str(spec["slug"]), []).append((project_dir, manifest, corpus))
+
+    for spec in BUILTIN_SAMPLE_PROJECTS:
+        matches = existing_by_slug.get(str(spec["slug"]), [])
+        if not matches and create_missing:
+            project_dir, manifest = create_project(str(spec["name"]), str(spec["description"]))
+            reconciled.append((project_dir, _materialize_builtin_sample_project(project_dir, spec, existing_manifest=manifest)))
+            continue
+        if not matches:
+            continue
+
+        for project_dir, manifest, corpus in matches:
+            if _builtin_sample_project_requires_refresh(manifest, corpus, spec):
+                manifest = _materialize_builtin_sample_project(project_dir, spec, existing_manifest=manifest)
+            reconciled.append((project_dir, manifest))
+
+    return reconciled

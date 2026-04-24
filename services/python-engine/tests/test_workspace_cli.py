@@ -32,8 +32,8 @@ from app.cli import (
 from app.defaults import compile_runtime_profile_from_workflow, default_runtime_profile, normalize_workflow_edges
 from app.node_registry import build_node_registry
 from app.project_store import CORPUS_FILENAME, PROJECT_FILENAME, create_project, find_project_dir, load_project, load_workspace_snapshot, load_workspace_state, save_project, workspace_state_path
-from app.sample_projects import BUILTIN_SAMPLE_PROJECTS, FIRST_BUILTIN_SAMPLE_PROJECT_NAME
-from tests.test_sample_projects import _populate_public_sample_cache
+from app.sample_projects import BUILTIN_SAMPLE_PROJECTS, FIRST_BUILTIN_SAMPLE_PROJECT_NAME, _is_synthetic_placeholder_row
+from tests.test_sample_projects import _placeholder_row, _populate_public_sample_cache
 
 
 @pytest.fixture(scope="session")
@@ -122,6 +122,33 @@ def test_bootstrap_project_guides_first_run(isolated_workspace):
     assert snapshot["node_definitions"]
     assert any(node["type"] == "corpus_input" for node in snapshot["node_definitions"])
     assert any(node["type"] == "save_html_report" for node in snapshot["node_definitions"])
+
+
+def test_load_workspace_refreshes_placeholder_builtin_sample(monkeypatch, scratch_dir):
+    workspace = scratch_dir / "workspace-placeholder-refresh"
+    workspace.mkdir(parents=True, exist_ok=True)
+    cache_root = scratch_dir / "workspace-placeholder-cache"
+    monkeypatch.setenv("TEXTFLOW_WORKSPACE_ROOT", str(workspace))
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
+    _populate_public_sample_cache(monkeypatch, cache_root)
+
+    project_dir, manifest = create_project(FIRST_BUILTIN_SAMPLE_PROJECT_NAME, "legacy placeholder sample")
+    legacy_corpus = [
+        _placeholder_row("wikimedia_enwiki", "en", idx)
+        for idx in range(60)
+    ] + [
+        _placeholder_row("wikimedia_zhwiki", "zh", idx)
+        for idx in range(60)
+    ]
+    manifest["settings"]["sample_project"] = {"slug": "sample-01-basic-preprocessing"}
+    save_project(project_dir, manifest, legacy_corpus)
+
+    snapshot = action_load_workspace()
+    refreshed_dir = find_project_dir(snapshot["current_project"]["id"])
+    assert refreshed_dir is not None
+    refreshed_manifest, refreshed_corpus = load_project(project_dir)
+    assert refreshed_manifest["description"] == BUILTIN_SAMPLE_PROJECTS[0]["description"]
+    assert not any(_is_synthetic_placeholder_row(row) for row in refreshed_corpus[:8])
 
 
 def test_workspace_snapshot_loads_python_node_plugins(isolated_workspace, scratch_dir, monkeypatch):

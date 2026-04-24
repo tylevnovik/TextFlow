@@ -45,7 +45,7 @@ from .project_store import (
     save_project,
     write_json,
 )
-from .sample_projects import FIRST_BUILTIN_SAMPLE_PROJECT_NAME, create_builtin_sample_projects
+from .sample_projects import FIRST_BUILTIN_SAMPLE_PROJECT_NAME, reconcile_builtin_sample_projects
 
 ProgressCallback = Callable[[float, str, dict[str, Any] | None], None]
 
@@ -134,20 +134,38 @@ def parse_payload() -> dict[str, Any]:
 
 
 def ensure_bootstrap_project() -> None:
-    if list_project_dirs():
+    project_dirs = list_project_dirs()
+    workspace_state = load_workspace_state()
+    if workspace_state.get("bootstrap_completed"):
+        created = reconcile_builtin_sample_projects(create_missing=False)
+        if workspace_state.get("current_project_id") is None:
+            starter_manifest = next(
+                (manifest for _project_dir, manifest in created if manifest.get("name") == FIRST_BUILTIN_SAMPLE_PROJECT_NAME),
+                created[0][1] if created else None,
+            )
+            if starter_manifest is not None:
+                remember_project(starter_manifest["id"], set_current=True)
         mark_workspace_bootstrapped()
         return
 
-    workspace_state = load_workspace_state()
-    if workspace_state.get("bootstrap_completed"):
+    if project_dirs:
+        created = reconcile_builtin_sample_projects(create_missing=False)
+        if workspace_state.get("current_project_id") is None:
+            starter_manifest = next(
+                (manifest for _project_dir, manifest in created if manifest.get("name") == FIRST_BUILTIN_SAMPLE_PROJECT_NAME),
+                created[0][1] if created else None,
+            )
+            if starter_manifest is not None:
+                remember_project(starter_manifest["id"], set_current=True)
+        mark_workspace_bootstrapped()
         return
 
-    created = create_builtin_sample_projects()
+    created = reconcile_builtin_sample_projects(create_missing=True)
     starter_manifest = next(
         (manifest for _project_dir, manifest in created if manifest.get("name") == FIRST_BUILTIN_SAMPLE_PROJECT_NAME),
         created[0][1] if created else None,
     )
-    if starter_manifest is not None:
+    if starter_manifest is not None and workspace_state.get("current_project_id") is None:
         remember_project(starter_manifest["id"], set_current=True)
     mark_workspace_bootstrapped()
 

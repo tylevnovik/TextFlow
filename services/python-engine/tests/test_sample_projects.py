@@ -1,19 +1,32 @@
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from app.node_definitions import build_builtin_node_definitions
-from app.sample_dataset_cache import write_normalized_sample_cache
+from app.sample_dataset_cache import read_normalized_sample_cache, write_normalized_sample_cache
 from app.sample_dataset_sources import normalize_public_sample_row
-from app.sample_projects import BUILTIN_SAMPLE_PROJECTS, _sample_row_count, _write_rows_to_source_file, create_builtin_sample_projects
-from app.project_store import load_project
+from app.sample_projects import (
+    BUILTIN_SAMPLE_PROJECTS,
+    FIRST_BUILTIN_SAMPLE_PROJECT_NAME,
+    _is_synthetic_placeholder_row,
+    _sample_row_count,
+    _write_rows_to_source_file,
+    create_builtin_sample_projects,
+    reconcile_builtin_sample_projects,
+)
+from app.project_store import create_project, load_project, save_project
 from app.workflow_runner import run_project_workflow
 
 
-def _cache_row(dataset_id: str, language: str, idx: int) -> dict[str, object]:
+def _bundled_public_sample_cache_root() -> Path:
+    return Path(__file__).resolve().parents[1] / "app" / "public_sample_cache"
+
+
+def _placeholder_row(dataset_id: str, language: str, idx: int) -> dict[str, object]:
     source_url_map = {
         "un_parallel_en_zh": "https://www.un.org/dgacm/en/node/5471",
         "wikimedia_enwiki": "https://dumps.wikimedia.org/enwiki/latest/",
@@ -50,33 +63,55 @@ def _cache_row(dataset_id: str, language: str, idx: int) -> dict[str, object]:
     )
 
 
+def _copy_bundled_real_cache_rows(
+    cache_root: Path,
+    dataset_id: str,
+    *,
+    row_count_by_language: dict[str, int],
+) -> None:
+    bundled_root = _bundled_public_sample_cache_root()
+    source_rows = read_normalized_sample_cache(bundled_root, dataset_id)
+    selected_rows: list[dict[str, object]] = []
+    for language, requested_count in row_count_by_language.items():
+        language_rows = [
+            row
+            for row in source_rows
+            if str(row.get("language") or "") == language
+        ]
+        if len(language_rows) < requested_count:
+            raise AssertionError(
+                f"Bundled real cache does not have enough rows for dataset={dataset_id} language={language}: "
+                f"requested={requested_count} available={len(language_rows)}"
+            )
+        selected_rows.extend(language_rows[:requested_count])
+    write_normalized_sample_cache(cache_root, dataset_id, selected_rows)
+
+
 def _populate_public_sample_cache(monkeypatch, tmp_path) -> None:
     cache_root = tmp_path / "public-sample-cache"
     cache_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("TEXTFLOW_PUBLIC_SAMPLE_CACHE_ROOT", str(cache_root))
 
     row_count = 240
-    write_normalized_sample_cache(
+    _copy_bundled_real_cache_rows(
         cache_root,
         "un_parallel_en_zh",
-        [_cache_row("un_parallel_en_zh", "en", idx) for idx in range(row_count)]
-        + [_cache_row("un_parallel_en_zh", "zh", idx) for idx in range(row_count)],
+        row_count_by_language={"en": row_count, "zh": row_count},
     )
-    write_normalized_sample_cache(
+    _copy_bundled_real_cache_rows(
         cache_root,
         "wikimedia_enwiki",
-        [_cache_row("wikimedia_enwiki", "en", idx) for idx in range(row_count)],
+        row_count_by_language={"en": row_count},
     )
-    write_normalized_sample_cache(
+    _copy_bundled_real_cache_rows(
         cache_root,
         "wikimedia_zhwiki",
-        [_cache_row("wikimedia_zhwiki", "zh", idx) for idx in range(row_count)],
+        row_count_by_language={"zh": row_count},
     )
-    write_normalized_sample_cache(
+    _copy_bundled_real_cache_rows(
         cache_root,
         "openalex_works",
-        [_cache_row("openalex_works", "en", idx) for idx in range(row_count)]
-        + [_cache_row("openalex_works", "zh", idx) for idx in range(row_count)],
+        row_count_by_language={"en": row_count, "zh": row_count},
     )
 
 
@@ -162,6 +197,7 @@ def test_create_builtin_sample_projects_creates_all_projects_with_large_defaults
         assert manifest["settings"]["sample_project"]["default_row_count"] >= 10_000
         assert Counter(row["language"] for row in corpus) == {"en": len(corpus) // 2, "zh": len(corpus) // 2}
         assert all(row["language"] in {"en", "zh"} for row in corpus)
+        assert not any(_is_synthetic_placeholder_row(row) for row in corpus[:8])
 
 
 @pytest.mark.parametrize(
@@ -183,6 +219,30 @@ def test_representative_sample_workflows_run(monkeypatch, isolated_workspace, tm
     manifest, corpus, run = run_project_workflow(project_dir, manifest, corpus)
     assert run["status"] == "completed"
     assert run["artifacts"]
+
+
+def test_reconcile_builtin_sample_projects_refreshes_placeholder_corpus(monkeypatch, isolated_workspace, tmp_path):
+    _populate_public_sample_cache(monkeypatch, tmp_path)
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
+    project_dir, manifest = create_project(FIRST_BUILTIN_SAMPLE_PROJECT_NAME, "legacy placeholder sample")
+
+    legacy_corpus = [
+        _placeholder_row("wikimedia_enwiki", "en", idx)
+        for idx in range(60)
+    ] + [
+        _placeholder_row("wikimedia_zhwiki", "zh", idx)
+        for idx in range(60)
+    ]
+    manifest["settings"]["sample_project"] = {"slug": "sample-01-basic-preprocessing"}
+    save_project(project_dir, manifest, legacy_corpus)
+
+    reconcile_builtin_sample_projects()
+
+    refreshed_manifest, refreshed_corpus = load_project(project_dir)
+    assert refreshed_manifest["description"] == BUILTIN_SAMPLE_PROJECTS[0]["description"]
+    assert refreshed_manifest["settings"]["sample_project"]["source_datasets"] == ["wikimedia_enwiki", "wikimedia_zhwiki"]
+    assert Counter(row["language"] for row in refreshed_corpus) == {"en": 60, "zh": 60}
+    assert not any(_is_synthetic_placeholder_row(row) for row in refreshed_corpus[:8])
 
 
 def test_xlsx_seed_export_sanitizes_illegal_excel_characters(tmp_path):
