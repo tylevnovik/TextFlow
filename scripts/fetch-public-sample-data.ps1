@@ -1,11 +1,11 @@
-$ErrorActionPreference = "Stop"
-
 param(
   [string[]]$Dataset,
   [string[]]$Language = @("en", "zh"),
   [int]$LimitPerLanguage = 10000,
   [switch]$All
 )
+
+$ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $engineRoot = Join-Path $projectRoot "services\python-engine"
@@ -56,6 +56,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import os
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -63,7 +64,7 @@ from datetime import datetime, timezone
 from app.sample_dataset_cache import normalized_cache_path, sample_data_cache_root
 from app.sample_dataset_sources import PUBLIC_SAMPLE_DATA_SOURCE_BY_ID
 
-payload = json.loads(sys.argv[1])
+payload = json.loads(os.environ["TEXTFLOW_PUBLIC_SAMPLE_PAYLOAD"])
 datasets = payload["datasets"]
 languages = set(payload["languages"])
 limit_per_language = int(payload["limit_per_language"])
@@ -116,7 +117,10 @@ manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), enc
 print(manifest_path)
 '@
 
-& $venvPython -c $script $payload
-if ($LASTEXITCODE -ne 0) {
+$env:TEXTFLOW_PUBLIC_SAMPLE_PAYLOAD = $payload
+$script | & $venvPython -
+$exitCode = $LASTEXITCODE
+Remove-Item Env:TEXTFLOW_PUBLIC_SAMPLE_PAYLOAD -ErrorAction SilentlyContinue
+if ($exitCode -ne 0) {
   throw "Failed to prepare public sample data manifest."
 }

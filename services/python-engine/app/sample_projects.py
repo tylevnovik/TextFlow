@@ -404,6 +404,91 @@ def _add_note_and_group(workflow: dict[str, Any], *, group_title: str, note_text
     workflow["nodes"].append(_new_registry_node("note", f"note-{group_title}", {"text": note_text}, x=x + 24, y=y + 28))
 
 
+def _configure_workflow(
+    manifest: dict[str, Any],
+    *,
+    workflow_name: str,
+    keep_node_types: set[str],
+    node_config_overrides: dict[str, dict[str, Any]] | None = None,
+) -> None:
+    workflow = manifest["workflow_definitions"][0]
+    workflow["source"] = "manual"
+    workflow["name"] = workflow_name
+    _keep_only_nodes(workflow, set(keep_node_types))
+    workflow["edges"] = []
+
+    if "group" in keep_node_types or "note" in keep_node_types:
+        _add_note_and_group(
+            workflow,
+            group_title=workflow_name,
+            note_text="兼容旧 benchmark 的自动工作流。",
+        )
+
+    for node_type, config in (node_config_overrides or {}).items():
+        try:
+            _apply_node_config(workflow, node_type, config)
+        except KeyError:
+            continue
+
+    node_ids = {
+        str(node.get("node_type") or ""): str(node.get("node_id") or "")
+        for node in workflow.get("nodes", [])
+        if isinstance(node, dict) and str(node.get("node_type") or "") and str(node.get("node_id") or "")
+    }
+
+    def connect_by_type(from_type: str, from_port: str, to_type: str, to_port: str) -> None:
+        from_node = node_ids.get(from_type)
+        to_node = node_ids.get(to_type)
+        if not from_node or not to_node:
+            return
+        _connect(workflow, from_node, from_port, to_node, to_port)
+
+    connect_by_type("corpus_input", "corpus", "clean_text", "corpus_in")
+    connect_by_type("clean_text", "clean_corpus", "normalize_text", "corpus_in")
+    connect_by_type("normalize_text", "normalized_corpus", "tokenize", "corpus_in")
+    connect_by_type("tokenize", "token_corpus", "apply_dictionary_rules", "token_corpus_in")
+    connect_by_type("dictionary_input", "dictionary_set", "apply_dictionary_rules", "dictionary_set_in")
+    connect_by_type("apply_dictionary_rules", "token_corpus", "filter_terms", "token_corpus_in")
+
+    analysis_targets = [
+        "frequency_statistics",
+        "cooccurrence_analysis",
+        "feature_term_selection",
+        "keyword_extraction",
+        "document_clustering",
+    ]
+    for target in analysis_targets:
+        connect_by_type("filter_terms", "filtered_token_corpus", target, "token_corpus_in")
+
+    connect_by_type("feature_term_selection", "feature_term_table", "keyword_clustering", "feature_term_table_in")
+
+    for node_type, output_port in [
+        ("frequency_statistics", "frequency_table"),
+        ("cooccurrence_analysis", "cooccurrence_table"),
+        ("feature_term_selection", "feature_term_table"),
+        ("keyword_extraction", "keyword_table"),
+        ("keyword_clustering", "keyword_cluster_table"),
+        ("document_clustering", "document_cluster_table"),
+    ]:
+        connect_by_type(node_type, output_port, "save_csv", "table_in")
+
+    for node_type, output_port in [
+        ("cooccurrence_analysis", "cooccurrence_table"),
+        ("keyword_clustering", "keyword_cluster_table"),
+        ("document_clustering", "document_cluster_table"),
+    ]:
+        connect_by_type(node_type, output_port, "save_png", "render_in")
+
+    for node_type, output_port in [
+        ("frequency_statistics", "frequency_table"),
+        ("cooccurrence_analysis", "cooccurrence_table"),
+        ("keyword_extraction", "keyword_table"),
+        ("keyword_clustering", "keyword_cluster_table"),
+    ]:
+        connect_by_type(node_type, output_port, "save_html_report", "report_in")
+    connect_by_type("apply_dictionary_rules", "audit_table", "save_html_report", "report_in")
+
+
 def _configure_basic_preprocessing_workflow(workflow: dict[str, Any]) -> None:
     workflow["source"] = "manual"
     workflow["name"] = "基础文本预处理工作流"

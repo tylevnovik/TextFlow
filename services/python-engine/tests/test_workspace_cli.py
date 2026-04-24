@@ -32,14 +32,19 @@ from app.cli import (
 from app.defaults import compile_runtime_profile_from_workflow, default_runtime_profile, normalize_workflow_edges
 from app.node_registry import build_node_registry
 from app.project_store import CORPUS_FILENAME, PROJECT_FILENAME, create_project, find_project_dir, load_project, load_workspace_snapshot, load_workspace_state, save_project, workspace_state_path
+from app.sample_projects import BUILTIN_SAMPLE_PROJECTS, FIRST_BUILTIN_SAMPLE_PROJECT_NAME
+from tests.test_sample_projects import _populate_public_sample_cache
 
 
 @pytest.fixture(scope="session")
 def workspace_cli_template(tmp_path_factory):
     workspace = tmp_path_factory.mktemp("workspace-cli-template")
+    public_sample_cache = tmp_path_factory.mktemp("workspace-cli-public-sample-cache")
     env = pytest.MonkeyPatch()
     try:
         env.setenv("TEXTFLOW_WORKSPACE_ROOT", str(workspace))
+        env.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
+        _populate_public_sample_cache(env, public_sample_cache)
         action_load_workspace()
     finally:
         env.undo()
@@ -98,20 +103,18 @@ def test_workspace_snapshot_only_fully_loads_current_project(isolated_workspace,
 
 def test_bootstrap_project_guides_first_run(isolated_workspace):
     snapshot = action_load_workspace()
-    sample_names = {project["name"] for project in snapshot["recent_projects"] if "示例项目" in project["name"]}
+    expected_sample_names = {str(spec["name"]) for spec in BUILTIN_SAMPLE_PROJECTS}
+    sample_names = {project["name"] for project in snapshot["recent_projects"] if project["name"] in expected_sample_names}
 
-    assert snapshot["current_project"]["name"] == "示例项目 - 学术摘要机构主题"
-    assert len(sample_names) == 3
-    assert {
-        "示例项目 - 学术摘要机构主题",
-        "示例项目 - 新闻组主题聚类",
-        "示例项目 - 短信词频与共现",
-    }.issubset(sample_names)
-    assert "OpenAlex" in snapshot["current_project"]["description"]
+    assert snapshot["current_project"]["name"] == FIRST_BUILTIN_SAMPLE_PROJECT_NAME
+    assert len(sample_names) == len(BUILTIN_SAMPLE_PROJECTS)
+    assert sample_names == expected_sample_names
+    assert snapshot["current_project"]["description"] == str(BUILTIN_SAMPLE_PROJECTS[0]["description"])
     assert len(snapshot["corpus"]) >= 6
     assert snapshot["selected_run"] is None
     assert snapshot["current_project"]["results"]["frequency_table"] == []
     assert snapshot["current_project"]["run_history"] == []
+    assert snapshot["current_project"]["settings"]["sample_project"]["language_counts"] == {"en": 60, "zh": 60}
     assert any(
         len(str(item.get("raw_text") or "")) > len(str(item.get("title") or ""))
         for item in snapshot["corpus"]
@@ -262,7 +265,7 @@ def test_project_storage_compacts_builtin_dictionary_entries_and_rehydrates_on_l
 
 def test_workspace_snapshot_backfills_legacy_project_summary_counts(isolated_workspace):
     snapshot = action_load_workspace()
-    sample_project = next(project for project in snapshot["recent_projects"] if "示例项目" in project["name"])
+    sample_project = next(project for project in snapshot["recent_projects"] if project["name"] == FIRST_BUILTIN_SAMPLE_PROJECT_NAME)
     project_dir = find_project_dir(sample_project["id"])
     assert project_dir is not None
 
@@ -757,7 +760,8 @@ def test_delete_project_removes_workspace_entry_and_files(isolated_workspace):
 
 def test_bootstrap_project_is_not_recreated_after_manual_delete(isolated_workspace):
     snapshot = action_load_workspace()
-    bootstrap_ids = [project["id"] for project in snapshot["recent_projects"] if "示例项目" in project["name"]]
+    expected_sample_names = {str(spec["name"]) for spec in BUILTIN_SAMPLE_PROJECTS}
+    bootstrap_ids = [project["id"] for project in snapshot["recent_projects"] if project["name"] in expected_sample_names]
 
     for project_id in bootstrap_ids:
         action_delete_project({"project_id": project_id})

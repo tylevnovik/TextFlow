@@ -1,0 +1,64 @@
+{
+  "created_at": "2026-04-24T11:51:49.588911+00:00",
+  "limit_per_language": 10000,
+  "datasets": [
+    {
+      "dataset_id": "un_parallel_en_zh",
+      "name": "United Nations Parallel Corpus v1.0",
+      "homepage_url": "https://www.un.org/dgacm/en/node/5471",
+      "download_url": "https://www.un.org/dgacm/en/content/uncorpus/download",
+      "license_name": "Public domain UN official records and parliamentary documents",
+      "public_access_note": "UN describes the corpus as public-domain official records and other parliamentary documents.",
+      "redistribution_note": "Package normalized subsets with source attribution, language metadata, and source record identifiers where available.",
+      "row_count_by_language": {
+        "en": 10000,
+        "zh": 10000
+      },
+      "sha256": "c72bac006c5fe4fbacc32dd62adc5b02862736eb5e7e592b31092876fc853269",
+      "cache_file": "un_parallel_en_zh.jsonl.gz"
+    },
+    {
+      "dataset_id": "wikimedia_enwiki",
+      "name": "English Wikipedia article dump",
+      "homepage_url": "https://dumps.wikimedia.org/enwiki/latest/",
+      "download_url": "https://dumps.wikimedia.org/enwiki/latest/",
+      "license_name": "CC BY-SA 4.0 and GFDL",
+      "public_access_note": "Wikimedia publishes reusable text dumps with attribution and share-alike obligations.",
+      "redistribution_note": "Persist article-derived subsets with page/source attribution and retain license metadata in the cache manifest.",
+      "row_count_by_language": {
+        "en": 10000
+      },
+      "sha256": "81d228bf71b8186a6e1332cfa0a79aa4980f4f2317a3b0b36c3806d2cf43b57b",
+      "cache_file": "wikimedia_enwiki.jsonl.gz"
+    },
+    {
+      "dataset_id": "wikimedia_zhwiki",
+      "name": "Chinese Wikipedia article dump",
+      "homepage_url": "https://dumps.wikimedia.org/zhwiki/latest/",
+      "download_url": "https://dumps.wikimedia.org/zhwiki/latest/",
+      "license_name": "CC BY-SA 4.0 and GFDL",
+      "public_access_note": "Wikimedia publishes reusable text dumps with attribution and share-alike obligations.",
+      "redistribution_note": "Persist article-derived subsets with page/source attribution and retain license metadata in the cache manifest.",
+      "row_count_by_language": {
+        "zh": 10000
+      },
+      "sha256": "8fb834f75b84b159d99eeb80573d572f5fd15d51c666a39f6eef00c9ccfe1071",
+      "cache_file": "wikimedia_zhwiki.jsonl.gz"
+    },
+    {
+      "dataset_id": "openalex_works",
+      "name": "OpenAlex Works",
+      "homepage_url": "https://developers.openalex.org/",
+      "download_url": "https://docs.openalex.org/download-all-data/openalex-snapshot",
+      "license_name": "CC0 1.0 / No Rights Reserved",
+      "public_access_note": "OpenAlex documents the dataset as free to use under CC0.",
+      "redistribution_note": "Store normalized work records with OpenAlex identifiers, language metadata, and source URLs.",
+      "row_count_by_language": {
+        "en": 10000,
+        "zh": 10000
+      },
+      "sha256": "208c942068627a8dd9c38abbfee2118235d50cd8ea4bf32213c345d6568aa9e1",
+      "cache_file": "openalex_works.jsonl.gz"
+    }
+  ]
+}
