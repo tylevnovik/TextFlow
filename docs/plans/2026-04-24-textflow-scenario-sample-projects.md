@@ -2,24 +2,39 @@
 
 > **For Codex:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task.
 
-**Goal:** Replace the current small capability-demo samples with nine deterministic, large, scenario-based built-in sample projects that teach real TextFlow workflows and cover nearly all non-legacy nodes and settings.
+**Goal:** Replace the current small capability-demo samples with nine large, scenario-based built-in sample projects backed only by real public datasets, so users can learn real TextFlow workflows while covering nearly all non-legacy nodes and settings.
 
-**Architecture:** Built-in sample projects must remain backend-owned. The Python sidecar generates deterministic sample corpora at workspace bootstrap, writes normal `.tfproj` projects, and stores scenario guidance in project `settings.sample_project`. The frontend static `demoProject.ts` remains only a non-Tauri fallback/test fixture and must not become the source of real sample data.
+**Architecture:** Built-in sample projects must remain backend-owned. The Python sidecar creates normal `.tfproj` projects from packaged or cached normalized subsets of real public datasets and stores source attribution plus scenario guidance in `settings.sample_project`. The frontend static `demoProject.ts` remains only a non-Tauri fallback/test fixture and must not become the source of real sample data.
 
-**Tech Stack:** Python 3.11 sidecar, pandas/openpyxl for generated sample files, existing TextFlow project store/workflow runtime, pytest for engine tests, Markdown docs.
+**Tech Stack:** Python 3.11 sidecar, pandas/openpyxl for public sample files, existing TextFlow project store/workflow runtime, pytest for engine tests, Markdown docs.
 
 ---
 
 ## Non-Negotiable Decisions
 
 - Create all nine sample projects during backend workspace bootstrap; do not hide advanced samples by default.
-- Each official sample project must have a default generated corpus size of at least `10_000` documents.
-- Do not commit large generated CSV/XLSX/JSON data to the repository.
-- Use deterministic generators with fixed seeds so generated samples are reproducible.
+- Each official sample project must have a default corpus size of at least `10_000` documents.
+- Use only real public datasets; do not synthesize text rows, institutions, abstracts, reviews, complaints, patents, filings, labels, or metadata.
+- Every sample row must be traceable to a public source dataset through `source_dataset_id`, `source_url`, `source_license`, and `source_record_id` where available.
+- If a public dataset must be subsetted for size, select a deterministic subset from real records only; do not fill gaps with generated text.
+- Package normalized public-data subsets for offline first launch, or fetch/cache them during build; runtime bootstrap must not require internet.
 - Keep normal Tauri app behavior backend-driven through Python sidecar projects.
 - Do not bulk-expand `apps/desktop/src/data/demoProject.ts`; it is only a mock/test fixture.
 - Do not teach or cover legacy nodes: `load_project_corpus`, `filter_corpus`, `project_dictionary_set`, `analyze_corpus`, `export_results`.
-- If a sample needs faster development/test generation, use an environment override such as `TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT`; production defaults must stay at `>= 10_000`.
+- If a sample needs faster development/test generation, use an environment override such as `TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT` to read fewer real records from the local public-data cache; production defaults must stay at `>= 10_000`.
+
+## Approved Public Data Sources
+
+The implementation may use these public sources. If a source becomes unavailable, replace it with another real public dataset and update this table before implementation.
+
+| Dataset ID | Source | Public Access / License Notes | Intended Samples |
+| --- | --- | --- | --- |
+| `cfpb_complaints` | [CFPB Consumer Complaint Database](https://www.consumerfinance.gov/data-research/consumer-complaints/) | CFPB says all published complaint data is freely available to use, analyze, and build on; narratives are published only after consumer consent and CFPB privacy steps. | 01, 02, 05, 07, 08, 09 |
+| `openalex_works` | [OpenAlex Works API or snapshot](https://developers.openalex.org/) | OpenAlex documents its complete dataset as free under CC0 / No Rights Reserved. | 03, 04, 06, 09 |
+| `patentsview` | [USPTO PatentsView](https://www.uspto.gov/ip-policy/economic-research/patentsview) and [PatentsView data downloads](https://patentsview.org/downloads/data-downloads) | USPTO describes PatentsView as a public, research-grade patent-data resource with API, query builder, visualization, and bulk download access. | 04, 06 |
+| `20_newsgroups_optional` | [UCI KDD 20 Newsgroups](https://kdd.ics.uci.edu/databases/20newsgroups/20newsgroups.html) | Public research dataset hosted by UCI KDD; use only as an optional substitute if redistribution terms are reviewed and documented in the manifest. | optional substitute only |
+
+Default sample execution must use `cfpb_complaints`, `openalex_works`, and `patentsview`. Do not use AG News, Yelp, Amazon reviews, or other datasets with unclear redistribution terms unless their license is reviewed and documented in this plan before implementation.
 
 ## Target Sample Projects
 
@@ -79,41 +94,51 @@
 | `note` | 01-09 |
 | `group` | 01-09 |
 
-## Task 1: Add Deterministic Large Sample Data Generators
+## Task 1: Add Public Dataset Source Registry and Normalization
 
 **Files:**
-- Create: `services/python-engine/app/sample_dataset_generators.py`
-- Create: `services/python-engine/tests/test_sample_dataset_generators.py`
+- Create: `services/python-engine/app/sample_dataset_sources.py`
+- Create: `services/python-engine/tests/test_sample_dataset_sources.py`
 
-**Step 1: Write failing generator tests**
+**Step 1: Write failing source registry tests**
 
 Add tests:
 
 ```python
-def test_generators_emit_requested_row_count_and_required_fields():
-    rows = generate_preprocessing_rows(250, seed=11)
-    assert len(rows) == 250
-    assert {"doc_id", "title", "raw_text", "year", "source", "institution", "category_or_tag", "keyword_field"} <= rows[0].keys()
+def test_public_source_registry_contains_only_real_public_sources():
+    source_ids = {source.source_id for source in PUBLIC_SAMPLE_DATA_SOURCES}
+    assert {"cfpb_complaints", "openalex_works", "patentsview"} <= source_ids
+    for source in PUBLIC_SAMPLE_DATA_SOURCES:
+        assert source.name
+        assert source.homepage_url.startswith("https://")
+        assert source.license_name
+        assert source.public_access_note
+        assert source.redistribution_note
 
 
-def test_generators_are_deterministic():
-    assert generate_academic_rows(25, seed=7) == generate_academic_rows(25, seed=7)
+def test_normalized_public_row_requires_source_attribution():
+    row = normalize_public_sample_row(
+        {
+            "doc_id": "source-1",
+            "title": "Example title",
+            "raw_text": "Real public source text",
+            "year": 2024,
+        },
+        dataset_id="cfpb_complaints",
+        source_record_id="source-1",
+        source_url="https://www.consumerfinance.gov/data-research/consumer-complaints/",
+    )
+    assert row["extra_metadata"]["source_dataset_id"] == "cfpb_complaints"
+    assert row["extra_metadata"]["source_record_id"] == "source-1"
+    assert row["raw_text"] == "Real public source text"
 ```
 
-Also test all public generators:
+Also add a guard test:
 
 ```python
-ALL_GENERATORS = [
-    generate_preprocessing_rows,
-    generate_feedback_dictionary_rows,
-    generate_academic_rows,
-    generate_institution_topic_rows,
-    generate_review_experiment_rows,
-    generate_multisource_rows,
-    generate_group_compare_rows,
-    generate_split_join_rows,
-    generate_gate_control_rows,
-]
+def test_normalization_rejects_missing_text():
+    with pytest.raises(ValueError):
+        normalize_public_sample_row({"doc_id": "bad"}, dataset_id="cfpb_complaints")
 ```
 
 **Step 2: Run tests to verify they fail**
@@ -121,92 +146,211 @@ ALL_GENERATORS = [
 Run:
 
 ```powershell
-& .\services\python-engine\.venv\Scripts\python.exe -m pytest services\python-engine\tests\test_sample_dataset_generators.py -q
+& .\services\python-engine\.venv\Scripts\python.exe -m pytest services\python-engine\tests\test_sample_dataset_sources.py -q
 ```
 
-Expected: FAIL because `sample_dataset_generators.py` does not exist.
+Expected: FAIL because `sample_dataset_sources.py` does not exist.
 
-**Step 3: Implement generator module**
+**Step 3: Implement public source registry**
 
-Create deterministic generator helpers:
+Create `sample_dataset_sources.py` with:
 
 ```python
 from __future__ import annotations
 
-from random import Random
-from typing import Any, Callable
-
-Row = dict[str, Any]
+from dataclasses import dataclass
+from typing import Any
 
 
-def _row(
-    *,
-    doc_id: str,
-    title: str,
-    raw_text: str,
-    year: int,
-    source: str,
-    institution: str,
-    category_or_tag: str,
-    keyword_field: str,
-    source_profile: str = "generic",
-    extra_metadata: dict[str, Any] | None = None,
-) -> Row:
-    return {
-        "doc_id": doc_id,
-        "title": title,
-        "raw_text": raw_text,
-        "year": year,
-        "source": source,
-        "author": "",
-        "institution": institution,
-        "country_or_region": "CN",
-        "category_or_tag": category_or_tag,
-        "keyword_field": keyword_field,
-        "source_profile": source_profile,
-        "extra_metadata": extra_metadata or {},
-    }
+@dataclass(frozen=True)
+class PublicSampleDataSource:
+    source_id: str
+    name: str
+    homepage_url: str
+    download_url: str | None
+    license_name: str
+    public_access_note: str
+    redistribution_note: str
+    citation: str
+
+
+PUBLIC_SAMPLE_DATA_SOURCES = [
+    PublicSampleDataSource(
+        source_id="cfpb_complaints",
+        name="CFPB Consumer Complaint Database",
+        homepage_url="https://www.consumerfinance.gov/data-research/consumer-complaints/",
+        download_url="https://files.consumerfinance.gov/ccdb/complaints.csv.zip",
+        license_name="Public U.S. federal government data",
+        public_access_note="CFPB publishes complaint data for download/API after privacy review.",
+        redistribution_note="Package only published complaint rows and preserve CFPB attribution.",
+        citation="Consumer Financial Protection Bureau Consumer Complaint Database.",
+    ),
+    ...
+]
 ```
 
-Implement each generator by cycling domain-specific templates with `Random(seed)` variation. Keep text realistic enough to produce meaningful tokens and metadata distributions:
+Include registry entries for:
 
-- `generate_preprocessing_rows(count: int, seed: int = 101)`
-- `generate_feedback_dictionary_rows(count: int, seed: int = 102)`
-- `generate_academic_rows(count: int, seed: int = 103)`
-- `generate_institution_topic_rows(count: int, seed: int = 104)`
-- `generate_review_experiment_rows(count: int, seed: int = 105)`
-- `generate_multisource_rows(count: int, seed: int = 106)`
-- `generate_group_compare_rows(count: int, seed: int = 107)`
-- `generate_split_join_rows(count: int, seed: int = 108)`
-- `generate_gate_control_rows(count: int, seed: int = 109)`
+- `cfpb_complaints`
+- `openalex_works`
+- `patentsview`
+- `20_newsgroups_optional` only if redistribution terms are reviewed and documented
 
-Use content families such as:
+Do not include a source if its redistribution terms are unknown and cannot be documented.
 
-- customer feedback / app reviews
-- literature abstracts
-- patents and technology intelligence
-- institution research portfolios
-- product lines and time periods
-- quality gate metrics
+**Step 4: Implement row normalization**
 
-**Step 4: Run tests to verify they pass**
+Add:
+
+```python
+REQUIRED_SAMPLE_ROW_FIELDS = {
+    "doc_id",
+    "title",
+    "raw_text",
+    "year",
+    "source",
+    "institution",
+    "category_or_tag",
+    "keyword_field",
+}
+
+
+def normalize_public_sample_row(
+    row: dict[str, Any],
+    *,
+    dataset_id: str,
+    source_record_id: str | None = None,
+    source_url: str | None = None,
+    source_profile: str = "generic",
+) -> dict[str, Any]:
+    ...
+```
+
+Rules:
+
+- never generate replacement text if source text is missing
+- require non-empty `raw_text`
+- preserve original title/text/metadata where available
+- write attribution into `extra_metadata`
+- set `source_profile` according to the scenario, not by inventing a dataset
+
+**Step 5: Run tests to verify they pass**
 
 Run:
 
 ```powershell
-& .\services\python-engine\.venv\Scripts\python.exe -m pytest services\python-engine\tests\test_sample_dataset_generators.py -q
+& .\services\python-engine\.venv\Scripts\python.exe -m pytest services\python-engine\tests\test_sample_dataset_sources.py -q
 ```
 
 Expected: PASS.
 
-**Step 5: Commit**
+**Step 6: Commit**
 
 ```bash
-git add services/python-engine/app/sample_dataset_generators.py services/python-engine/tests/test_sample_dataset_generators.py
-git commit -m "feat: add deterministic large sample data generators"
+git add services/python-engine/app/sample_dataset_sources.py services/python-engine/tests/test_sample_dataset_sources.py
+git commit -m "feat: add public sample dataset source registry"
 ```
 
-## Task 2: Refactor Built-In Sample Project Specs
+## Task 2: Add Public Dataset Acquisition and Local Cache Builder
+
+**Files:**
+- Create: `services/python-engine/app/sample_dataset_cache.py`
+- Create: `services/python-engine/tests/test_sample_dataset_cache.py`
+- Create: `scripts/fetch-public-sample-data.ps1`
+- Modify: `scripts/build-python-sidecar.ps1`
+
+**Step 1: Write failing cache tests**
+
+Add:
+
+```python
+def test_cache_loader_reads_real_rows_with_attribution(tmp_path):
+    cache_dir = tmp_path / "public-sample-cache"
+    write_normalized_sample_cache(
+        cache_dir,
+        "cfpb_complaints",
+        [
+            normalize_public_sample_row(
+                {"doc_id": "complaint-1", "title": "A real complaint", "raw_text": "Real CFPB complaint narrative", "year": 2024},
+                dataset_id="cfpb_complaints",
+                source_record_id="complaint-1",
+                source_url="https://www.consumerfinance.gov/data-research/consumer-complaints/",
+            )
+        ],
+    )
+    rows = read_normalized_sample_cache(cache_dir, "cfpb_complaints", limit=1)
+    assert rows[0]["extra_metadata"]["source_dataset_id"] == "cfpb_complaints"
+    assert rows[0]["raw_text"] == "Real CFPB complaint narrative"
+
+
+def test_cache_loader_fails_when_real_rows_are_missing(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        read_normalized_sample_cache(tmp_path, "cfpb_complaints", limit=10)
+```
+
+**Step 2: Run tests to verify they fail**
+
+Run:
+
+```powershell
+& .\services\python-engine\.venv\Scripts\python.exe -m pytest services\python-engine\tests\test_sample_dataset_cache.py -q
+```
+
+Expected: FAIL because cache module does not exist.
+
+**Step 3: Implement cache module**
+
+Implement:
+
+```python
+def sample_data_cache_root() -> Path: ...
+def normalized_cache_path(cache_root: Path, dataset_id: str) -> Path: ...
+def write_normalized_sample_cache(cache_root: Path, dataset_id: str, rows: list[dict[str, Any]]) -> Path: ...
+def read_normalized_sample_cache(cache_root: Path, dataset_id: str, *, limit: int | None = None, selector: str | None = None) -> list[dict[str, Any]]: ...
+def ensure_public_sample_cache_available(required_dataset_ids: Iterable[str]) -> None: ...
+```
+
+Use `.jsonl.gz` for normalized cache files. The cache rows are derived from real public records only.
+
+**Step 4: Add acquisition script**
+
+Create `scripts/fetch-public-sample-data.ps1` that calls a Python module or inline Python entry point to:
+
+- download or read source data for approved public datasets
+- normalize selected fields into TextFlow rows
+- preserve source attribution fields
+- write `.jsonl.gz` cache files
+- write a `manifest.json` with dataset id, URL, license note, row count, SHA256, created timestamp
+
+The script may support:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\fetch-public-sample-data.ps1 -Dataset cfpb_complaints -Limit 20000
+powershell -ExecutionPolicy Bypass -File .\scripts\fetch-public-sample-data.ps1 -All
+```
+
+**Step 5: Package cache with sidecar**
+
+Update `scripts/build-python-sidecar.ps1` only if needed so packaged builds include the normalized public sample cache. The packaged app must not require internet on first launch.
+
+**Step 6: Run cache tests**
+
+Run:
+
+```powershell
+& .\services\python-engine\.venv\Scripts\python.exe -m pytest services\python-engine\tests\test_sample_dataset_cache.py -q
+```
+
+Expected: PASS.
+
+**Step 7: Commit**
+
+```bash
+git add services/python-engine/app/sample_dataset_cache.py services/python-engine/tests/test_sample_dataset_cache.py scripts/fetch-public-sample-data.ps1 scripts/build-python-sidecar.ps1
+git commit -m "feat: add public sample dataset cache builder"
+```
+
+## Task 3: Refactor Built-In Sample Project Specs
 
 **Files:**
 - Modify: `services/python-engine/app/sample_projects.py`
@@ -221,6 +365,7 @@ def test_builtin_sample_specs_cover_nine_scenarios():
     assert len(BUILTIN_SAMPLE_PROJECTS) == 9
     assert [spec["order"] for spec in BUILTIN_SAMPLE_PROJECTS] == list(range(1, 10))
     assert all(spec["default_row_count"] >= 10_000 for spec in BUILTIN_SAMPLE_PROJECTS)
+    assert all(spec["source_datasets"] for spec in BUILTIN_SAMPLE_PROJECTS)
 
 
 def test_builtin_sample_specs_include_guidance_and_coverage():
@@ -229,6 +374,7 @@ def test_builtin_sample_specs_include_guidance_and_coverage():
         assert spec["guided_steps"]
         assert spec["covered_nodes"]
         assert spec["difficulty"] in {"基础", "进阶", "高级"}
+        assert spec["public_data_only"] is True
 ```
 
 **Step 2: Run tests to verify they fail**
@@ -241,9 +387,9 @@ Run:
 
 Expected: FAIL because current specs are only three small samples.
 
-**Step 3: Add scenario spec structure**
+**Step 3: Add public-data scenario spec structure**
 
-In `sample_projects.py`, replace the current row lists with generator-backed specs. Keep `FIRST_BUILTIN_SAMPLE_PROJECT_NAME`, but update it to:
+In `sample_projects.py`, replace the current small inline row lists with public-dataset-backed specs. Keep `FIRST_BUILTIN_SAMPLE_PROJECT_NAME`, but update it to:
 
 ```python
 FIRST_BUILTIN_SAMPLE_PROJECT_NAME = "示例 01 - 基础文本预处理"
@@ -262,9 +408,11 @@ Each spec must include:
     "guided_steps": ["...", "..."],
     "covered_nodes": ["corpus_input", "clean_text", ...],
     "covered_settings": ["strip_html", "normalize_numbers", ...],
+    "public_data_only": True,
+    "source_datasets": ["cfpb_complaints"],
     "source_profile": "generic",
     "sources": [
-        {"filename": "basic_preprocessing.csv", "format": "csv", "generator": generate_preprocessing_rows, "ratio": 1.0},
+        {"filename": "basic_preprocessing.csv", "format": "csv", "dataset_id": "cfpb_complaints", "selector": "sample_01_basic", "ratio": 1.0},
     ],
     "workflow_name": "...",
     "import_template_overrides": {...},
@@ -274,6 +422,20 @@ Each spec must include:
     "experiment_specs": [],
 }
 ```
+
+Every spec must map to real public datasets:
+
+- sample 01: `cfpb_complaints`
+- sample 02: `cfpb_complaints`
+- sample 03: `openalex_works`
+- sample 04: `openalex_works` + `patentsview`
+- sample 05: `cfpb_complaints`
+- sample 06: `openalex_works` + `patentsview`
+- sample 07: `cfpb_complaints`
+- sample 08: `cfpb_complaints`
+- sample 09: `cfpb_complaints` + `openalex_works`
+
+Do not use optional sources in default samples unless their redistribution terms are reviewed and documented in the manifest.
 
 **Step 4: Add row limit helper**
 
@@ -307,6 +469,8 @@ Support formats:
 
 Use split ratios for sample 06. For `txt`, write one document per line or one file per small batch only if current importer supports it. If importer only treats `.txt` as one document, use `.txt` to demonstrate TXT import and keep most rows in CSV/XLSX/JSON.
 
+All written rows must come from cached public-data records. If a selector cannot provide enough real rows, fail loudly with a message naming the dataset and requested row count.
+
 **Step 6: Run tests**
 
 Run:
@@ -324,7 +488,7 @@ git add services/python-engine/app/sample_projects.py services/python-engine/tes
 git commit -m "feat: define nine scenario sample project specs"
 ```
 
-## Task 3: Build Scenario-Specific Workflows
+## Task 4: Build Scenario-Specific Workflows
 
 **Files:**
 - Modify: `services/python-engine/app/sample_projects.py`
@@ -384,7 +548,7 @@ def _bypass_node_types(workflow: dict[str, Any], node_types: set[str]) -> None: 
 def _keep_only_nodes(workflow: dict[str, Any], node_types: set[str]) -> None: ...
 ```
 
-Use `build_node_registry().definitions_by_type` to copy inputs/outputs from node definitions.
+Use built-in node definitions from `build_builtin_node_definitions()` to copy inputs/outputs from node definitions.
 
 **Step 4: Implement workflow scenario functions**
 
@@ -425,7 +589,7 @@ git add services/python-engine/app/sample_projects.py services/python-engine/tes
 git commit -m "feat: add scenario workflows for built-in samples"
 ```
 
-## Task 4: Add Project Guidance Metadata, Reviews, and Experiments
+## Task 5: Add Project Guidance Metadata, Reviews, and Experiments
 
 **Files:**
 - Modify: `services/python-engine/app/sample_projects.py`
@@ -436,7 +600,7 @@ git commit -m "feat: add scenario workflows for built-in samples"
 Add:
 
 ```python
-def test_generated_sample_projects_persist_guidance_metadata(monkeypatch, isolated_workspace):
+def test_created_sample_projects_persist_guidance_metadata(monkeypatch, isolated_workspace):
     monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
     created = create_builtin_sample_projects()
     for _project_dir, manifest in created:
@@ -446,7 +610,7 @@ def test_generated_sample_projects_persist_guidance_metadata(monkeypatch, isolat
         assert sample["goal"]
         assert sample["guided_steps"]
         assert sample["default_row_count"] >= 10_000
-        assert sample["generated_row_count"] == 120
+        assert sample["public_row_count"] == 120
 ```
 
 Add:
@@ -468,7 +632,7 @@ Run:
 & .\services\python-engine\.venv\Scripts\python.exe -m pytest services\python-engine\tests\test_sample_projects.py -q
 ```
 
-Expected: FAIL until metadata/review/experiment fields are generated.
+Expected: FAIL until metadata/review/experiment fields are persisted.
 
 **Step 3: Persist guidance metadata**
 
@@ -485,7 +649,7 @@ manifest["settings"]["sample_project"] = {
     "covered_nodes": deepcopy(spec["covered_nodes"]),
     "covered_settings": deepcopy(spec["covered_settings"]),
     "default_row_count": spec["default_row_count"],
-    "generated_row_count": row_count,
+    "public_row_count": row_count,
     "estimated_runtime": spec.get("estimated_runtime", ""),
     "dataset": deepcopy(spec.get("dataset", {})),
 }
@@ -524,17 +688,17 @@ git add services/python-engine/app/sample_projects.py services/python-engine/tes
 git commit -m "feat: add guidance metadata to scenario samples"
 ```
 
-## Task 5: Smoke-Test Sample Project Generation and Workflow Runs
+## Task 6: Smoke-Test Sample Project Generation and Workflow Runs
 
 **Files:**
 - Modify: `services/python-engine/tests/test_sample_projects.py`
 
-**Step 1: Write failing generation/run smoke tests**
+**Step 1: Write failing creation/run smoke tests**
 
 Add:
 
 ```python
-def test_create_builtin_sample_projects_generates_all_projects_with_large_defaults(monkeypatch, isolated_workspace):
+def test_create_builtin_sample_projects_creates_all_projects_with_large_defaults(monkeypatch, isolated_workspace):
     monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "150")
     created = create_builtin_sample_projects()
     assert len(created) == 9
@@ -588,7 +752,7 @@ If any sample workflow fails:
 Run:
 
 ```powershell
-& .\services\python-engine\.venv\Scripts\python.exe -m pytest services\python-engine\tests\test_sample_dataset_generators.py services\python-engine\tests\test_sample_projects.py -q
+& .\services\python-engine\.venv\Scripts\python.exe -m pytest services\python-engine\tests\test_sample_dataset_sources.py services\python-engine\tests\test_sample_dataset_cache.py services\python-engine\tests\test_sample_projects.py -q
 ```
 
 Expected: PASS.
@@ -600,7 +764,7 @@ git add services/python-engine/tests/test_sample_projects.py services/python-eng
 git commit -m "test: cover scenario sample project generation"
 ```
 
-## Task 6: Update Example Documentation
+## Task 7: Update Example Documentation
 
 **Files:**
 - Create: `docs/examples.md`
@@ -614,12 +778,13 @@ git commit -m "test: cover scenario sample project generation"
 Create `docs/examples.md` with:
 
 - why samples are large
-- how samples are generated
+- which real public datasets power each sample
+- how public source rows are downloaded, normalized, cached, and attributed
 - list of all nine samples
 - what each sample teaches
 - which output to open first
 - expected runtime level
-- warning that generated sample data is synthetic/deterministic
+- warning that sample text is real public data and may contain noisy or historically dated language from the source datasets
 - note that frontend `demoProject.ts` is only mock/test fallback
 
 **Step 2: Update README**
@@ -629,7 +794,7 @@ Add a short section:
 ```markdown
 ## Built-In Scenario Samples
 
-On first launch, TextFlow creates nine backend-generated sample projects. Each official sample has at least 10,000 generated documents and demonstrates a real workflow scenario from preprocessing to advanced gates.
+On first launch, TextFlow creates nine backend-built sample projects from real public datasets. Each official sample has at least 10,000 public-source documents and demonstrates a real workflow scenario from preprocessing to advanced gates.
 
 See `docs/examples.md`.
 ```
@@ -638,7 +803,7 @@ See `docs/examples.md`.
 
 Update:
 
-- `docs/current-status.md`: sample projects are now scenario-based large generated projects.
+- `docs/current-status.md`: sample projects are now scenario-based large projects backed by real public datasets.
 - `docs/product-scope.md`: sample projects cover V1 features and advanced workflow surfaces.
 - `docs/development.md`: document `TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT` for tests/dev.
 
@@ -659,7 +824,7 @@ git add docs/examples.md README.md docs/current-status.md docs/product-scope.md 
 git commit -m "docs: add scenario sample project guide"
 ```
 
-## Task 7: Clarify Frontend Mock Data Boundary
+## Task 8: Clarify Frontend Mock Data Boundary
 
 **Files:**
 - Modify: `apps/desktop/src/data/demoProject.ts`
@@ -671,9 +836,9 @@ At the top of `demoProject.ts`, add a concise comment:
 
 ```ts
 // This file is a lightweight non-Tauri fallback and component-test fixture.
-// Official built-in sample projects are generated by the Python sidecar in
+// Official built-in sample projects are created by the Python sidecar in
 // services/python-engine/app/sample_projects.py.
-// Do not mirror large generated sample corpora here.
+// Do not mirror large public sample corpora here.
 ```
 
 Near the `demoWorkspace` fallback use in `desktopBridge.ts`, add a concise comment:
@@ -702,7 +867,7 @@ git add apps/desktop/src/data/demoProject.ts apps/desktop/src/bridge/desktopBrid
 git commit -m "docs: clarify frontend demo data boundary"
 ```
 
-## Task 8: Full Engine Verification
+## Task 9: Full Engine Verification
 
 **Files:**
 - No planned source edits unless verification uncovers bugs.
@@ -712,7 +877,7 @@ git commit -m "docs: clarify frontend demo data boundary"
 Run:
 
 ```powershell
-& .\services\python-engine\.venv\Scripts\python.exe -m pytest services\python-engine\tests\test_sample_dataset_generators.py services\python-engine\tests\test_sample_projects.py -q
+& .\services\python-engine\.venv\Scripts\python.exe -m pytest services\python-engine\tests\test_sample_dataset_sources.py services\python-engine\tests\test_sample_dataset_cache.py services\python-engine\tests\test_sample_projects.py -q
 ```
 
 Expected: PASS.
@@ -762,7 +927,7 @@ Expected:
 
 If no fixes were needed, do not create an empty commit.
 
-## Task 9: Final Packaging Verification
+## Task 10: Final Packaging Verification
 
 **Files:**
 - No planned source edits unless packaging uncovers bugs.
@@ -821,8 +986,10 @@ The work is done when:
 
 - first-launch backend bootstrap creates nine sample projects
 - all nine samples are visible as normal projects; no frontend hiding or special filtering
-- every official sample defaults to at least `10_000` generated rows
-- generated sample data is deterministic and not committed as bulk data
+- every official sample defaults to at least `10_000` real public-source rows
+- no sample text or metadata is synthetic
+- every sample row keeps dataset attribution and source record metadata where available
+- packaged builds can create sample projects offline from the bundled/cache public-data subset
 - every non-legacy node appears in at least one sample workflow
 - sample 05 includes review and experiment surfaces
 - sample 09 includes controlled flow primitives
