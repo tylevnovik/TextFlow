@@ -178,6 +178,7 @@ export interface ArtifactRecord {
   path: string;
   preview_path?: string;
   row_count?: number;
+  preview_rows?: number;
 }
 
 export interface ReviewTask {
@@ -510,6 +511,8 @@ export interface StepArtifactSummary {
   cache_hit: boolean;
 }
 
+export type RunArtifactSummary = StepArtifactSummary | ArtifactRecord;
+
 export interface NodeRunSummary {
   node_id: string;
   node_type: WorkflowNodeType;
@@ -591,7 +594,7 @@ export interface RunRecord {
   warnings: string[];
   errors: string[];
   logs: RunLogEntry[];
-  artifacts: StepArtifactSummary[];
+  artifacts: RunArtifactSummary[];
   node_runs?: NodeRunSummary[];
   params_snapshot_path: string;
   processed_document_count: number;

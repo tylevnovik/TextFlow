@@ -35,6 +35,28 @@ WORKSPACE_ENV_VAR = "TEXTFLOW_WORKSPACE_ROOT"
 PROJECT_TEMPLATES_DIRNAME = "project_templates"
 IMPORT_TEMPLATES_DIRNAME = "import_templates"
 PROJECT_PACKAGE_EXTENSION = ".tfproj"
+RESULT_PREVIEW_DEFAULT_LIMIT = 500
+RESULT_PREVIEW_LIMITS = {
+    "audit_table": 100,
+}
+PERSISTED_CORPUS_FIELDS = (
+    "id",
+    "doc_id",
+    "source_profile",
+    "language",
+    "title",
+    "raw_text",
+    "year",
+    "source",
+    "author",
+    "institution",
+    "country_or_region",
+    "category_or_tag",
+    "keyword_field",
+    "extra_metadata",
+    "status",
+    "raw_hash",
+)
 
 
 def default_user_workspace_root() -> Path:
@@ -97,6 +119,7 @@ def default_workspace_state() -> dict[str, Any]:
         "current_project_id": None,
         "recent_project_ids": [],
         "bootstrap_completed": False,
+        "builtin_samples_revision": 0,
     }
 
 
@@ -113,6 +136,10 @@ def normalize_workspace_state(state: dict[str, Any] | None) -> dict[str, Any]:
         if project_id
     ]
     normalized["bootstrap_completed"] = bool(state.get("bootstrap_completed", False))
+    try:
+        normalized["builtin_samples_revision"] = max(int(state.get("builtin_samples_revision", 0) or 0), 0)
+    except (TypeError, ValueError):
+        normalized["builtin_samples_revision"] = 0
     return normalized
 
 
@@ -147,9 +174,11 @@ def remove_project_from_workspace(project_id: str) -> dict[str, Any]:
     return state
 
 
-def mark_workspace_bootstrapped() -> dict[str, Any]:
+def mark_workspace_bootstrapped(*, builtin_samples_revision: int | None = None) -> dict[str, Any]:
     state = load_workspace_state()
     state["bootstrap_completed"] = True
+    if builtin_samples_revision is not None:
+        state["builtin_samples_revision"] = max(int(builtin_samples_revision), 0)
     save_workspace_state(state)
     return state
 
@@ -215,6 +244,61 @@ def write_json(path: Path, data: Any) -> bool:
 
 def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _result_preview_limit(result_key: str) -> int | None:
+    override = os.getenv("TEXTFLOW_RESULT_PREVIEW_LIMIT")
+    if override:
+        try:
+            return max(int(override), 0)
+        except ValueError:
+            return RESULT_PREVIEW_LIMITS.get(result_key, RESULT_PREVIEW_DEFAULT_LIMIT)
+    return RESULT_PREVIEW_LIMITS.get(result_key, RESULT_PREVIEW_DEFAULT_LIMIT)
+
+
+def compact_results_bundle(results: dict[str, Any] | None) -> dict[str, Any]:
+    baseline = empty_result_bundle()
+    if not isinstance(results, dict):
+        return baseline
+
+    compacted: dict[str, Any] = {}
+    ordered_keys = [*baseline.keys(), *[key for key in results.keys() if key not in baseline]]
+    for result_key in ordered_keys:
+        value = results.get(result_key, baseline.get(result_key, []))
+        if result_key == "report_files":
+            compacted[result_key] = [str(item) for item in value] if isinstance(value, list) else []
+            continue
+        if isinstance(value, list):
+            limit = _result_preview_limit(result_key)
+            compacted[result_key] = deepcopy(value if limit is None else value[:limit])
+            continue
+        compacted[result_key] = deepcopy(value)
+    return compacted
+
+
+def compact_corpus_for_storage(corpus: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compacted: list[dict[str, Any]] = []
+    for item in corpus:
+        compacted_row = {
+            key: deepcopy(item.get(key))
+            for key in PERSISTED_CORPUS_FIELDS
+            if key in item
+        }
+        compacted_row.setdefault("id", str(item.get("id") or item.get("doc_id") or ""))
+        compacted_row.setdefault("doc_id", str(item.get("doc_id") or item.get("id") or ""))
+        compacted_row.setdefault("source_profile", str(item.get("source_profile") or "generic"))
+        compacted_row.setdefault("language", str(item.get("language") or ""))
+        compacted_row.setdefault("title", str(item.get("title") or compacted_row["doc_id"]))
+        compacted_row.setdefault("raw_text", str(item.get("raw_text") or ""))
+        compacted_row["clean_text"] = ""
+        compacted_row["normalized_text"] = ""
+        compacted_row["tokens"] = []
+        compacted_row["phrase_hits"] = []
+        compacted_row["filtered_tokens"] = []
+        compacted_row["extra_metadata"] = deepcopy(item.get("extra_metadata") if isinstance(item.get("extra_metadata"), dict) else {})
+        compacted_row["status"] = str(item.get("status") or ("ready" if compacted_row["raw_text"].strip() else "warning"))
+        compacted.append(compacted_row)
+    return compacted
 
 
 def project_relative_root(project_dir: Path) -> str:
@@ -323,7 +407,25 @@ def normalize_dictionary_set_record(dictionary_set: dict[str, Any] | None) -> di
         baseline_entries: list[dict[str, Any]],
         provided_entries: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        merged_entries = [deepcopy(entry) for entry in baseline_entries if isinstance(entry, dict)]
+        def normalize_entry_payload(
+            payload: dict[str, Any],
+            *,
+            baseline_entry: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            baseline = baseline_entry if isinstance(baseline_entry, dict) else {}
+            raw_tags = payload.get("tags") if "tags" in payload else baseline.get("tags", [])
+            notes_value = payload.get("notes") if "notes" in payload else baseline.get("notes", "")
+            return {
+                "id": payload.get("id") or baseline.get("id"),
+                "source": str(payload.get("source") or baseline.get("source") or ""),
+                "target": payload["target"] if "target" in payload else baseline.get("target"),
+                "tags": [str(tag) for tag in raw_tags if str(tag).strip()],
+                "enabled": bool(payload.get("enabled", baseline.get("enabled", True))),
+                "hits": int(payload.get("hits", baseline.get("hits", 0)) or 0),
+                "notes": str(notes_value or ""),
+            }
+
+        merged_entries = [normalize_entry_payload(entry) for entry in baseline_entries if isinstance(entry, dict)]
         signature_to_index = {
             entry_signature(entry, f"baseline::{index}"): index
             for index, entry in enumerate(merged_entries)
@@ -331,19 +433,17 @@ def normalize_dictionary_set_record(dictionary_set: dict[str, Any] | None) -> di
         for index, entry in enumerate(provided_entries):
             if not isinstance(entry, dict):
                 continue
-            normalized_entry = deepcopy(entry)
+            normalized_entry = normalize_entry_payload(entry)
             signature = entry_signature(normalized_entry, f"provided::{index}")
             existing_index = signature_to_index.get(signature)
             if existing_index is None:
                 signature_to_index[signature] = len(merged_entries)
                 merged_entries.append(normalized_entry)
                 continue
-            baseline_entry = merged_entries[existing_index]
-            merged_entries[existing_index] = {
-                **baseline_entry,
-                **normalized_entry,
-                "id": normalized_entry.get("id") or baseline_entry.get("id"),
-            }
+            merged_entries[existing_index] = normalize_entry_payload(
+                entry,
+                baseline_entry=merged_entries[existing_index],
+            )
         return merged_entries
 
     def normalize_table_payload(
@@ -352,20 +452,25 @@ def normalize_dictionary_set_record(dictionary_set: dict[str, Any] | None) -> di
         *,
         fallback_id: str,
         fallback_name: str,
+        baseline_table: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        table = deepcopy(payload)
-        table["id"] = str(table.get("id") or fallback_id)
+        baseline = baseline_table if isinstance(baseline_table, dict) else {}
+        table: dict[str, Any] = {}
+        table["id"] = str(payload.get("id") or baseline.get("id") or fallback_id)
         table["kind"] = kind
-        table["name"] = str(table.get("name") or fallback_name)
-        table["version"] = str(table.get("version") or "2.0.0")
-        table["description"] = str(table.get("description") or "")
-        source_url = table.get("source_url")
+        table["name"] = str(payload.get("name") or baseline.get("name") or fallback_name)
+        table["version"] = str(payload.get("version") or baseline.get("version") or "2.0.0")
+        table["description"] = str(payload.get("description") or baseline.get("description") or "")
+        source_url = payload.get("source_url") if "source_url" in payload else baseline.get("source_url")
         table["source_url"] = str(source_url) if source_url else None
-        table["built_in"] = bool(table.get("built_in", False))
-        table["editable"] = bool(table.get("editable", not table["built_in"]))
-        table["enabled"] = bool(table.get("enabled", True))
-        table["tags"] = [str(tag) for tag in table.get("tags", []) if str(tag).strip()]
-        table["entries"] = merge_sheet_entries([], table.get("entries", []) if isinstance(table.get("entries"), list) else [])
+        table["built_in"] = bool(payload.get("built_in", baseline.get("built_in", False)))
+        table["editable"] = bool(payload.get("editable", baseline.get("editable", not table["built_in"])))
+        table["enabled"] = bool(payload.get("enabled", baseline.get("enabled", True)))
+        raw_tags = payload.get("tags") if "tags" in payload else baseline.get("tags", [])
+        table["tags"] = [str(tag) for tag in raw_tags if str(tag).strip()]
+        provided_entries = payload.get("entries", []) if isinstance(payload.get("entries"), list) else []
+        baseline_entries = baseline.get("entries", []) if isinstance(baseline.get("entries"), list) else []
+        table["entries"] = merge_sheet_entries(baseline_entries, provided_entries)
         return table
 
     def merge_table_lists(
@@ -376,9 +481,10 @@ def normalize_dictionary_set_record(dictionary_set: dict[str, Any] | None) -> di
         merged_tables = [
             normalize_table_payload(
                 kind,
-                table,
+                {},
                 fallback_id=f"{kind}-baseline-{index}",
                 fallback_name=str(table.get("name") or f"{kind} {index + 1}"),
+                baseline_table=table,
             )
             for index, table in enumerate(baseline_tables)
             if isinstance(table, dict)
@@ -403,21 +509,12 @@ def normalize_dictionary_set_record(dictionary_set: dict[str, Any] | None) -> di
                 continue
 
             baseline_table = merged_tables[existing_index]
-            merged_table = {
-                **baseline_table,
-                **deepcopy(payload),
-                "id": table_id,
-                "kind": kind,
-            }
-            merged_table["entries"] = merge_sheet_entries(
-                baseline_table.get("entries", []) if isinstance(baseline_table.get("entries"), list) else [],
-                payload.get("entries", []) if isinstance(payload.get("entries"), list) else [],
-            )
             merged_tables[existing_index] = normalize_table_payload(
                 kind,
-                merged_table,
+                payload,
                 fallback_id=table_id,
-                fallback_name=str(merged_table.get("name") or baseline_table.get("name") or f"{kind} 资源"),
+                fallback_name=str(payload.get("name") or baseline_table.get("name") or f"{kind} 资源"),
+                baseline_table=baseline_table,
             )
         return merged_tables
 
@@ -469,29 +566,47 @@ def normalize_dictionary_set_record(dictionary_set: dict[str, Any] | None) -> di
         dictionary_set["bound_to_project"] = bool(dictionary_set.get("bound_to_project", baseline.get("bound_to_project", True)))
         return dictionary_set
 
-    normalized = deepcopy(baseline)
+    normalized = {
+        "id": str(dictionary_set.get("id") or baseline.get("id") or "dict-default"),
+        "name": str(dictionary_set.get("name") or baseline.get("name") or "默认词表集"),
+        "version": str(dictionary_set.get("version") or baseline.get("version") or "2.0.0"),
+        "bound_to_project": bool(dictionary_set.get("bound_to_project", baseline.get("bound_to_project", True))),
+        "collections": {},
+    }
     for key, value in dictionary_set.items():
-        if key not in {"sheets", "collections"}:
-            normalized[key] = value
+        if key not in {"id", "name", "version", "bound_to_project", "sheets", "collections"}:
+            normalized[key] = deepcopy(value)
 
     provided_collections = dictionary_set.get("collections", {})
+    baseline_collections = baseline.get("collections", {}) if isinstance(baseline.get("collections"), dict) else {}
+    for kind, baseline_collection in baseline_collections.items():
+        payload = provided_collections.get(kind) if isinstance(provided_collections, dict) else None
+        merged_collection = {
+            "kind": kind,
+            "name": str((payload or {}).get("name") or baseline_collection.get("name") or ""),
+            "description": str((payload or {}).get("description") or baseline_collection.get("description") or ""),
+            "tables": merge_table_lists(
+                kind,
+                baseline_collection.get("tables", []) if isinstance(baseline_collection.get("tables"), list) else [],
+                payload.get("tables", []) if isinstance(payload, dict) and isinstance(payload.get("tables"), list) else [],
+            ),
+        }
+        if isinstance(payload, dict):
+            for field, value in payload.items():
+                if field in {"kind", "name", "description", "tables"}:
+                    continue
+                merged_collection[field] = deepcopy(value)
+        normalized["collections"][kind] = merged_collection
+
     if isinstance(provided_collections, dict):
         for kind, payload in provided_collections.items():
-            if kind in normalized["collections"] and isinstance(payload, dict):
-                merged_collection = deepcopy(normalized["collections"][kind])
-                for field, value in payload.items():
-                    if field == "tables" and isinstance(value, list):
-                        merged_collection["tables"] = merge_table_lists(kind, merged_collection.get("tables", []), value)
-                        continue
-                    merged_collection[field] = value
-                normalized["collections"][kind] = merged_collection
+            if kind in normalized["collections"] or not isinstance(payload, dict):
                 continue
-            if isinstance(payload, dict):
-                normalized["collections"][kind] = {
-                    **deepcopy(payload),
-                    "kind": kind,
-                    "tables": merge_table_lists(kind, [], payload.get("tables", []) if isinstance(payload.get("tables"), list) else []),
-                }
+            normalized["collections"][kind] = {
+                **{field: deepcopy(value) for field, value in payload.items() if field != "tables"},
+                "kind": kind,
+                "tables": merge_table_lists(kind, [], payload.get("tables", []) if isinstance(payload.get("tables"), list) else []),
+            }
 
     provided_sheets = dictionary_set.get("sheets", {})
     if isinstance(provided_sheets, dict):
@@ -697,11 +812,16 @@ def write_project_payload(
         project_relative_root(project_dir),
         include_dictionary_set=False,
     )
-    storage_manifest = {
-        key: deepcopy(manifest[key]) if key in manifest else deepcopy(value)
-        for key, value in baseline_manifest.items()
-        if key != "dictionary_set"
-    }
+    storage_manifest: dict[str, Any] = {}
+    for key, value in baseline_manifest.items():
+        if key == "dictionary_set":
+            continue
+        if key == "results":
+            storage_manifest[key] = compact_results_bundle(
+                manifest.get("results") if "results" in manifest else value
+            )
+            continue
+        storage_manifest[key] = deepcopy(manifest[key]) if key in manifest else deepcopy(value)
     storage_manifest["dictionary_set"] = serialize_dictionary_set_for_storage(manifest.get("dictionary_set"))
     storage_manifest["incremental_state"] = deepcopy(
         manifest.get("incremental_state") if isinstance(manifest.get("incremental_state"), dict) else {}
@@ -713,7 +833,7 @@ def write_project_payload(
     if normalized_dirty is None or "manifest" in normalized_dirty:
         write_json(project_dir / PROJECT_FILENAME, storage_manifest)
     if normalized_dirty is None or "corpus" in normalized_dirty:
-        write_json(project_dir / CORPUS_FILENAME, corpus)
+        write_json(project_dir / CORPUS_FILENAME, compact_corpus_for_storage(corpus))
     if normalized_dirty is None or "import_template" in normalized_dirty:
         write_json(project_dir / "metadata/import_template.json", manifest["import_template"])
     if normalized_dirty is None or "dictionary_set" in normalized_dirty:

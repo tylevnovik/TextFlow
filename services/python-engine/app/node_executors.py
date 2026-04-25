@@ -4,6 +4,7 @@ from collections import defaultdict
 from copy import deepcopy
 import math
 import random
+import re
 from typing import Any
 
 from .node_definitions import build_builtin_node_definitions
@@ -314,7 +315,11 @@ def _selected_table_ids(config: dict[str, Any]) -> list[str]:
         selected = [str(item).strip() for item in raw_ids if str(item).strip()]
         if selected:
             return selected
-    return [item.strip() for item in str(config.get("selected_table_ids_text") or "").split(",") if item.strip()]
+    return [
+        item.strip()
+        for item in re.split(r"[\r\n,]+", str(config.get("selected_table_ids_text") or ""))
+        if item.strip()
+    ]
 
 
 def _overlay_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -361,8 +366,11 @@ def _rebuild_dictionary_sheets(dictionary_set: dict[str, Any]) -> dict[str, Any]
 
 def execute_select_dictionary_tables(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     dictionary_set = deepcopy(_active_dictionary_set(context, inputs))
-    selected_ids = set(_selected_table_ids(node.get("config") if isinstance(node.get("config"), dict) else {}))
-    if not selected_ids:
+    selected_tokens = {
+        item.casefold()
+        for item in _selected_table_ids(node.get("config") if isinstance(node.get("config"), dict) else {})
+    }
+    if not selected_tokens:
         active_dictionary_set = _set_active_dictionary_set(context, dictionary_set)
         return {"dictionary_set": active_dictionary_set}
     collections = dictionary_set.get("collections") if isinstance(dictionary_set.get("collections"), dict) else {}
@@ -374,7 +382,11 @@ def execute_select_dictionary_tables(context: Any, node: dict[str, Any], inputs:
             collection["tables"] = [
                 deepcopy(table)
                 for table in tables
-                if isinstance(table, dict) and str(table.get("id") or "").strip() in selected_ids
+                if isinstance(table, dict)
+                and (
+                    str(table.get("id") or "").strip().casefold() in selected_tokens
+                    or str(table.get("kind") or kind).strip().casefold() in selected_tokens
+                )
             ]
     active_dictionary_set = _set_active_dictionary_set(context, _rebuild_dictionary_sheets(dictionary_set))
     return {"dictionary_set": active_dictionary_set}
@@ -898,6 +910,7 @@ def execute_normalize_text(context: Any, node: dict[str, Any], inputs: dict[str,
             str(item.get("clean_text") or ""),
             context.manifest["dictionary_set"],
             params,
+            collect_audit=bool(getattr(context, "audit_enabled", True)),
         )
         item["normalized_text"] = normalized
         for audit in audit_rows:
@@ -945,6 +958,7 @@ def execute_apply_dictionary_rules(context: Any, node: dict[str, Any], inputs: d
             dictionary_set,
             params,
             runtime_state=runtime_state,
+            collect_audit=bool(getattr(context, "audit_enabled", True)),
         )
         item["tokens"] = mapped_tokens
         node_audits.extend(audits)

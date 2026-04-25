@@ -23,6 +23,7 @@ from app.cli import (
     action_load_import_template,
     action_load_workspace,
     action_open_project,
+    action_run_workflow,
     action_save_import_template,
     action_save_project,
     action_save_project_template,
@@ -31,8 +32,13 @@ from app.cli import (
 )
 from app.defaults import compile_runtime_profile_from_workflow, default_runtime_profile, normalize_workflow_edges
 from app.node_registry import build_node_registry
-from app.project_store import CORPUS_FILENAME, PROJECT_FILENAME, create_project, find_project_dir, load_project, load_workspace_snapshot, load_workspace_state, save_project, workspace_state_path
-from app.sample_projects import BUILTIN_SAMPLE_PROJECTS, FIRST_BUILTIN_SAMPLE_PROJECT_NAME, _is_synthetic_placeholder_row
+from app.project_store import CORPUS_FILENAME, PROJECT_FILENAME, RESULT_PREVIEW_DEFAULT_LIMIT, create_project, find_project_dir, load_project, load_workspace_snapshot, load_workspace_state, save_project, workspace_state_path
+from app.sample_projects import (
+    BUILTIN_SAMPLE_PROJECT_DATA_REVISION,
+    BUILTIN_SAMPLE_PROJECTS,
+    FIRST_BUILTIN_SAMPLE_PROJECT_NAME,
+    _is_synthetic_placeholder_row,
+)
 from tests.test_sample_projects import _placeholder_row, _populate_public_sample_cache
 
 
@@ -124,6 +130,64 @@ def test_bootstrap_project_guides_first_run(isolated_workspace):
     assert any(node["type"] == "save_html_report" for node in snapshot["node_definitions"])
 
 
+def test_save_project_compacts_large_result_tables_on_disk(isolated_workspace):
+    project_dir, manifest = create_project("结果压缩项目", "compact results")
+    corpus = [{
+        "id": "DOC-001",
+        "doc_id": "DOC-001",
+        "source_profile": "generic",
+        "title": "压缩测试",
+        "raw_text": "Alpha beta gamma",
+        "clean_text": "alpha beta gamma",
+        "normalized_text": "alpha beta gamma",
+        "tokens": ["alpha", "beta", "gamma"],
+        "phrase_hits": ["alpha beta"],
+        "filtered_tokens": ["alpha", "beta"],
+        "extra_metadata": {"source_dataset_id": "fixture"},
+        "status": "ready",
+    }]
+    manifest["results"]["frequency_table"] = [
+        {"term": f"term-{index}", "tf": index, "df": 1, "ratio": 0.1, "word_length": 4, "avg_per_doc": 1.0}
+        for index in range(RESULT_PREVIEW_DEFAULT_LIMIT + 25)
+    ]
+    manifest["results"]["audit_table"] = [
+        {
+            "doc_id": f"DOC-{index}",
+            "source_term": f"source-{index}",
+            "target_term": f"target-{index}",
+            "rule_type": "standard_terms",
+            "rule_source": "standard_terms.json",
+            "rule_key": f"key-{index}",
+            "action": "replace",
+        }
+        for index in range(160)
+    ]
+    save_project(project_dir, manifest, corpus, already_normalized=True)
+
+    stored_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
+    stored_corpus = json.loads((project_dir / CORPUS_FILENAME).read_text(encoding="utf-8"))
+
+    assert len(stored_manifest["results"]["frequency_table"]) == RESULT_PREVIEW_DEFAULT_LIMIT
+    assert len(stored_manifest["results"]["audit_table"]) == 100
+    assert stored_corpus[0]["clean_text"] == ""
+    assert stored_corpus[0]["normalized_text"] == ""
+    assert stored_corpus[0]["tokens"] == []
+    assert stored_corpus[0]["filtered_tokens"] == []
+
+
+def test_action_run_workflow_returns_compact_project_results(isolated_workspace):
+    snapshot = action_load_workspace()
+    sample = next(project for project in snapshot["recent_projects"] if project["name"] == "示例 02 - 词表治理与词频统计")
+
+    result = action_run_workflow({"project_id": sample["id"]})
+    project_dir = find_project_dir(sample["id"])
+    assert project_dir is not None
+    stored_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
+
+    assert len(result["project"]["results"]["cooccurrence_table"]) <= RESULT_PREVIEW_DEFAULT_LIMIT
+    assert len(stored_manifest["results"]["cooccurrence_table"]) == len(result["project"]["results"]["cooccurrence_table"])
+
+
 def test_load_workspace_refreshes_placeholder_builtin_sample(monkeypatch, scratch_dir):
     workspace = scratch_dir / "workspace-placeholder-refresh"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -148,7 +212,39 @@ def test_load_workspace_refreshes_placeholder_builtin_sample(monkeypatch, scratc
     assert refreshed_dir is not None
     refreshed_manifest, refreshed_corpus = load_project(project_dir)
     assert refreshed_manifest["description"] == BUILTIN_SAMPLE_PROJECTS[0]["description"]
+    assert refreshed_manifest["settings"]["sample_project"]["data_revision"] == BUILTIN_SAMPLE_PROJECT_DATA_REVISION
+    assert load_workspace_state()["builtin_samples_revision"] == BUILTIN_SAMPLE_PROJECT_DATA_REVISION
     assert not any(_is_synthetic_placeholder_row(row) for row in refreshed_corpus[:8])
+
+
+def test_bootstrap_skips_reconcile_once_builtin_sample_revision_is_current(isolated_workspace, monkeypatch):
+    snapshot = action_load_workspace()
+    current_project_id = snapshot["current_project"]["id"]
+    assert load_workspace_state()["builtin_samples_revision"] == BUILTIN_SAMPLE_PROJECT_DATA_REVISION
+
+    def fail_reconcile(*_args, **_kwargs):
+        raise AssertionError("reconcile_builtin_sample_projects should not run once the workspace revision is current")
+
+    monkeypatch.setattr("app.cli.reconcile_builtin_sample_projects", fail_reconcile)
+
+    refreshed_snapshot = action_load_workspace()
+    reopened_project = action_open_project({"project_id": current_project_id})
+
+    assert refreshed_snapshot["current_project"]["id"] == current_project_id
+    assert reopened_project["id"] == current_project_id
+
+
+def test_open_project_uses_manifest_summary_without_loading_full_project(isolated_workspace, monkeypatch):
+    snapshot = action_load_workspace()
+    project_id = snapshot["current_project"]["id"]
+
+    def fail_load_project_or_fail(_project_id):
+        raise AssertionError("action_open_project should not fully load the project before refresh() reloads the workspace")
+
+    monkeypatch.setattr("app.cli.load_project_or_fail", fail_load_project_or_fail)
+
+    summary = action_open_project({"project_id": project_id})
+    assert summary["id"] == project_id
 
 
 def test_workspace_snapshot_loads_python_node_plugins(isolated_workspace, scratch_dir, monkeypatch):

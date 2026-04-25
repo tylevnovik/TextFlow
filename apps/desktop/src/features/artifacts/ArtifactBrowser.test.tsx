@@ -70,4 +70,28 @@ describe("RunHistoryPanel", () => {
     expect(screen.getByText(/Keyword variants/i)).toBeInTheDocument();
     expect(screen.getByText(/baseline/i)).toBeInTheDocument();
   });
+
+  it("renders real artifact handles without assuming step summaries", () => {
+    const run = {
+      ...createSimulatedRun(),
+      run_id: "run-real-artifacts",
+      artifacts: [
+        {
+          artifact_id: "artifact-html-report",
+          run_id: "run-real-artifacts",
+          node_id: "node-save-html",
+          kind: "export",
+          path: "runs/run-real-artifacts/report/report.html",
+          preview_path: "",
+          row_count: 1
+        }
+      ]
+    } as RunRecord;
+
+    render(<RunHistoryPanel runs={[run]} reviewTasks={[]} experiments={[]} />);
+
+    expect(screen.getByText("run-real-artifacts")).toBeInTheDocument();
+    expect(screen.getByText(/node-save-html/i)).toBeInTheDocument();
+    expect(screen.getByText(/runs\/run-real-artifacts\/report\/report\.html/i)).toBeInTheDocument();
+  });
 });

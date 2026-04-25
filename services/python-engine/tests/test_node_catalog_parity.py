@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from app.node_executors import execute_legacy_passthrough
 from app.project_store import create_project
 from app.node_definitions import build_builtin_node_definitions
+from app.node_registry import build_node_registry
 from app.workflow_runner import run_project_workflow
 from benchmarks import large_workflow_benchmark
 
@@ -151,6 +153,26 @@ def test_builtin_schema_includes_new_corpus_selection_nodes():
         "bucket_by_time",
     ]:
         assert node_type in definitions
+
+
+def test_non_utility_builtin_nodes_have_explicit_runtime_executors():
+    registry = build_node_registry()
+
+    unresolved_node_types: list[str] = []
+    for definition in build_builtin_node_definitions():
+        node_type = str(definition.get("type") or "")
+        category = str(definition.get("category") or "")
+        runtime = definition.get("runtime") if isinstance(definition.get("runtime"), dict) else {}
+        executor_id = str(runtime.get("executor") or "")
+        executor = registry.executors.get(executor_id)
+
+        if not node_type or not executor_id or executor is None:
+            unresolved_node_types.append(node_type or "<missing-type>")
+            continue
+        if category != "utility" and executor is execute_legacy_passthrough:
+            unresolved_node_types.append(node_type)
+
+    assert unresolved_node_types == []
 
 
 def test_plugin_nodes_can_emit_artifact_handles(tmp_path, monkeypatch):

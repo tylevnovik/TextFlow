@@ -16,6 +16,7 @@ import type {
 } from "@textflow/shared-types";
 import { createSimulatedRun, demoProjectSummary, demoWorkspace } from "../data/demoProject";
 import type { ReviewResolutionInput, ReviewTaskRecord } from "../features/review/reviewTypes";
+import { runArtifactRowCount } from "../runArtifacts";
 
 export interface CreateProjectInput {
   name: string;
@@ -821,8 +822,8 @@ export const desktopBridge: DesktopBridge = {
     const project = demoWorkspace.current_project!;
     const left = project.run_history.find((run) => run.run_id === leftRunId);
     const right = project.run_history.find((run) => run.run_id === rightRunId);
-    const leftRows = left?.artifacts.reduce((total, artifact) => total + artifact.record_count, 0) ?? 0;
-    const rightRows = right?.artifacts.reduce((total, artifact) => total + artifact.record_count, 0) ?? 0;
+    const leftRows = left?.artifacts.reduce((total, artifact) => total + runArtifactRowCount(artifact), 0) ?? 0;
+    const rightRows = right?.artifacts.reduce((total, artifact) => total + runArtifactRowCount(artifact), 0) ?? 0;
     return {
       left_run_id: leftRunId,
       right_run_id: rightRunId,

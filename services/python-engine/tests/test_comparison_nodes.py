@@ -176,6 +176,46 @@ def test_select_dictionary_tables_node_limits_active_tables():
     assert stopword_entries == []
 
 
+def test_select_dictionary_tables_node_accepts_multiline_kind_selection():
+    dictionary_set = _build_dictionary_set()
+    extra_stopword_table = _dictionary_table(
+        "builtin-stopwords-en",
+        "stopwords",
+        [_dictionary_entry("stopword-2", "a")],
+    )
+    dictionary_set["collections"]["stopwords"]["tables"].append(extra_stopword_table)
+    dictionary_set["sheets"]["stopwords"]["entries"].extend(deepcopy(extra_stopword_table["entries"]))
+    context = _context(dictionary_set)
+
+    result = execute_select_dictionary_tables(
+        context,
+        {"config": {"selected_table_ids_text": "standard_terms\nstopwords"}},
+        {"dictionary_set_in": dictionary_set},
+    )
+
+    filtered = result["dictionary_set"]
+    runtime_state = build_dictionary_runtime_state(filtered)
+    tokens, audits = apply_dictionary(
+        "DOC-001",
+        ["the", "gpu", "a", "genai"],
+        filtered,
+        {"apply_standard_terms": True, "apply_stopwords": True, "apply_synonym_map": True},
+        runtime_state=runtime_state,
+    )
+
+    assert [table["id"] for table in filtered["collections"]["standard_terms"]["tables"]] == [
+        "standard-project",
+        "standard-extra",
+    ]
+    assert [table["id"] for table in filtered["collections"]["stopwords"]["tables"]] == [
+        "stopword-project",
+        "builtin-stopwords-en",
+    ]
+    assert filtered["collections"]["synonym_map"]["tables"] == []
+    assert tokens == ["graphics processing unit", "genai"]
+    assert [audit["rule_type"] for audit in audits] == ["stopwords", "standard_terms", "stopwords"]
+
+
 def test_overlay_dictionary_rules_node_applies_runtime_only_patch():
     dictionary_set = _build_dictionary_set()
     dictionary_set["collections"]["standard_terms"]["tables"] = []

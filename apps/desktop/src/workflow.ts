@@ -1,7 +1,7 @@
 import type {
   ExportParameters,
-  PipelineDefinition,
-  PipelineStepId,
+  WorkflowRuntimeProfile,
+  WorkflowStepId,
   ProjectManifest,
   RegisteredWorkflowNodeDefinition,
   WorkflowDefinition,
@@ -11,7 +11,7 @@ import type {
   WorkflowPort,
   WorkflowPortType
 } from "@textflow/shared-types";
-import { compileActiveWorkflowNodesIntoPipeline } from "./workflowNodeCompilers";
+import { compileActiveWorkflowNodesIntoRuntimeProfile } from "./workflowNodeCompilers";
 import {
   analysisResultTypes,
   builtinWorkflowNodeDefinition,
@@ -49,22 +49,140 @@ export interface WorkflowTargetPortCandidate {
   port_type: WorkflowPortType;
 }
 
-function clonePipeline(pipeline: PipelineDefinition): PipelineDefinition {
+export function defaultWorkflowRuntimeProfile(): WorkflowRuntimeProfile {
   return {
-    ...pipeline,
-    enabled_steps: [...pipeline.enabled_steps],
-    execution_order: [...pipeline.execution_order],
-    cleaning: { ...pipeline.cleaning },
-    normalization: { ...pipeline.normalization },
-    tokenization: { ...pipeline.tokenization },
-    dictionary: { ...pipeline.dictionary },
-    filtering: { ...pipeline.filtering },
-    analysis: { ...pipeline.analysis },
-    export: { ...defaultExport(pipeline) },
-    run_scope: defaultRunScope(pipeline),
-    nodes: [...pipeline.nodes],
-    edges: [...pipeline.edges],
-    node_configs: { ...pipeline.node_configs }
+    id: "runtime-default",
+    name: "默认工作流运行视图",
+    enabled_steps: [
+      "ingestion",
+      "cleaning",
+      "normalization",
+      "tokenization",
+      "dictionary_application",
+      "filtering",
+      "analysis",
+      "export"
+    ],
+    cleaning: {
+      strip_html: true,
+      strip_urls: true,
+      strip_email: false,
+      strip_phone: false,
+      normalize_whitespace: true,
+      normalize_punctuation: true,
+      full_half_width_normalize: true,
+      lowercase_english: true,
+      remove_emoji: false,
+      remove_special_chars: false
+    },
+    normalization: {
+      convert_traditional_to_simplified: false,
+      normalize_numbers: false,
+      normalize_time_expr: false,
+      apply_regex_rules: true,
+      regex_rule_priority: "rule_order"
+    },
+    tokenization: {
+      language_mode: "mixed",
+      tokenizer_backend: "default",
+      use_custom_lexicon: true,
+      use_phrase_lexicon: true,
+      preserve_domain_phrases: true,
+      split_hyphenated_terms: true,
+      split_slash_terms: false,
+      normalize_camel_case: true,
+      keep_original_order: true,
+      min_token_length_before_filter: 1
+    },
+    dictionary: {
+      apply_standard_terms: true,
+      apply_synonym_map: true,
+      apply_near_synonym_map: true,
+      apply_stopwords: true,
+      apply_exclusion_terms: true,
+      conflict_resolution: "priority"
+    },
+    filtering: {
+      min_token_length: 2,
+      filter_numeric_tokens: false,
+      min_term_frequency: 1,
+      filter_by_pos: false,
+      keep_single_char_important_terms: true
+    },
+    analysis: {
+      top_n: 200,
+      cooccurrence_window: 5,
+      min_cooccurrence: 2,
+      feature_term_count: 1000,
+      top_k_per_doc: 10,
+      top_k_project: 100,
+      topic_model_k: 4,
+      keyword_cluster_k: 4,
+      document_cluster_k: 4,
+      include_frequency_statistics: true,
+      include_term_document_relations: true,
+      include_term_year_relations: true,
+      include_cooccurrence_analysis: true,
+      include_feature_term_selection: true,
+      include_keyword_extraction: true,
+      include_keyword_clustering: true,
+      include_institution_keyword_analysis: true,
+      include_institution_topic_analysis: true,
+      include_document_clustering: true
+    },
+    export: {
+      export_csv: true,
+      export_xlsx: true,
+      export_png: true,
+      export_html_report: true,
+      include_audit: true,
+      chart_dpi: 320,
+      watermark_enabled: false,
+      watermark_text: "TextFlow Studio"
+    },
+    nodes: [],
+    edges: [],
+    node_configs: {},
+    execution_order: [
+      "ingestion",
+      "cleaning",
+      "normalization",
+      "tokenization",
+      "dictionary_application",
+      "filtering",
+      "analysis",
+      "export"
+    ],
+    run_scope: {
+      mode: "all_documents",
+      source_values: [],
+      institution_values: [],
+      category_values: [],
+      year_from: null,
+      year_to: null,
+      selected_doc_ids: []
+    },
+    recipe_id: "standard_analysis",
+    output_bundle_id: "full_report"
+  };
+}
+
+function cloneRuntimeProfile(runtimeProfile: WorkflowRuntimeProfile): WorkflowRuntimeProfile {
+  return {
+    ...runtimeProfile,
+    enabled_steps: [...runtimeProfile.enabled_steps],
+    execution_order: [...runtimeProfile.execution_order],
+    cleaning: { ...runtimeProfile.cleaning },
+    normalization: { ...runtimeProfile.normalization },
+    tokenization: { ...runtimeProfile.tokenization },
+    dictionary: { ...runtimeProfile.dictionary },
+    filtering: { ...runtimeProfile.filtering },
+    analysis: { ...runtimeProfile.analysis },
+    export: { ...defaultExport(runtimeProfile) },
+    run_scope: defaultRunScope(runtimeProfile),
+    nodes: [...runtimeProfile.nodes],
+    edges: [...runtimeProfile.edges],
+    node_configs: { ...runtimeProfile.node_configs }
   };
 }
 
@@ -146,7 +264,7 @@ function definitionForNode(
 
 function createWorkflowNode(
   nodeType: WorkflowNodeType,
-  pipeline: PipelineDefinition,
+  runtimeProfile: WorkflowRuntimeProfile,
   registeredDefinition?: RegisteredWorkflowNodeDefinition
 ): WorkflowNodeInstance {
   const definition = definitionForNode(nodeType, registeredDefinition);
@@ -158,7 +276,7 @@ function createWorkflowNode(
     size: definition.size ? { ...definition.size } : { w: 230, h: 190 },
     inputs: definition.inputs.map((port) => ({ ...port })),
     outputs: definition.outputs.map((port) => ({ ...port })),
-    config: definition.defaultConfig(pipeline),
+    config: definition.defaultConfig(runtimeProfile),
     ui_state: {
       collapsed: false,
       bypassed: false
@@ -215,18 +333,18 @@ function isLegacyGraph(workflow: WorkflowDefinition): boolean {
 function normalizeConfigNode(
   nodeType: WorkflowNodeType,
   config: Record<string, unknown>,
-  pipeline: PipelineDefinition
+  runtimeProfile: WorkflowRuntimeProfile
 ): Record<string, unknown> {
   const builtinDefinition = builtinWorkflowNodeDefinition(nodeType);
-  const base = builtinDefinition ? builtinDefinition.defaultConfig(pipeline) : {};
+  const base = builtinDefinition ? builtinDefinition.defaultConfig(runtimeProfile) : {};
   return {
     ...base,
     ...config
   };
 }
 
-function filteredNodeTypeSequence(pipeline: PipelineDefinition): WorkflowNodeType[] {
-  const enabledSteps = new Set(pipeline.enabled_steps);
+function filteredNodeTypeSequence(runtimeProfile: WorkflowRuntimeProfile): WorkflowNodeType[] {
+  const enabledSteps = new Set(runtimeProfile.enabled_steps);
   const sequence: WorkflowNodeType[] = ["corpus_input"];
   if (enabledSteps.has("cleaning")) {
     sequence.push("clean_text");
@@ -286,10 +404,10 @@ function makeEdge(fromNode: WorkflowNodeInstance, fromPort: string, toNode: Work
   };
 }
 
-function createStarterWorkflowNodes(pipeline: PipelineDefinition): WorkflowNodeInstance[] {
+function createStarterWorkflowNodes(runtimeProfile: WorkflowRuntimeProfile): WorkflowNodeInstance[] {
   const nodes: WorkflowNodeInstance[] = [];
-  const sequence = filteredNodeTypeSequence(pipeline);
-  const exportConfig = defaultExport(pipeline);
+  const sequence = filteredNodeTypeSequence(runtimeProfile);
+  const exportConfig = defaultExport(runtimeProfile);
   const starterTypes: WorkflowNodeType[] = [
     ...sequence,
     "dictionary_input",
@@ -297,7 +415,7 @@ function createStarterWorkflowNodes(pipeline: PipelineDefinition): WorkflowNodeI
     ...outputStarterNodes(exportConfig)
   ];
   for (const nodeType of starterTypes) {
-    nodes.push(createWorkflowNode(nodeType, pipeline));
+    nodes.push(createWorkflowNode(nodeType, runtimeProfile));
   }
   return nodes;
 }
@@ -306,9 +424,9 @@ function nodeByType(nodes: WorkflowNodeInstance[], nodeType: WorkflowNodeType): 
   return nodes.find((node) => node.node_type === nodeType);
 }
 
-function buildStarterWorkflowEdges(nodes: WorkflowNodeInstance[], pipeline: PipelineDefinition): WorkflowEdge[] {
+function buildStarterWorkflowEdges(nodes: WorkflowNodeInstance[], runtimeProfile: WorkflowRuntimeProfile): WorkflowEdge[] {
   const edges: WorkflowEdge[] = [];
-  const filteredSequence = filteredNodeTypeSequence(pipeline);
+  const filteredSequence = filteredNodeTypeSequence(runtimeProfile);
   for (let index = 0; index < filteredSequence.length - 1; index += 1) {
     const fromNode = nodeByType(nodes, filteredSequence[index]);
     const toNode = nodeByType(nodes, filteredSequence[index + 1]);
@@ -403,17 +521,17 @@ function buildStarterWorkflowEdges(nodes: WorkflowNodeInstance[], pipeline: Pipe
 
 function buildStarterWorkflow(
   workflow: WorkflowDefinition,
-  pipeline: PipelineDefinition
+  runtimeProfile: WorkflowRuntimeProfile
 ): WorkflowDefinition {
   const timestamp = new Date().toISOString();
-  const nodes = createStarterWorkflowNodes(pipeline);
+  const nodes = createStarterWorkflowNodes(runtimeProfile);
   return {
     ...workflow,
     graph_mode: "dag",
     source: workflow.source ?? "template",
     updated_at: timestamp,
     nodes,
-    edges: buildStarterWorkflowEdges(nodes, pipeline),
+    edges: buildStarterWorkflowEdges(nodes, runtimeProfile),
     groups: [],
     viewport: {
       x: 0,
@@ -621,16 +739,16 @@ function activeNodeIdsFromSinks(nodes: WorkflowNodeInstance[], edges: WorkflowEd
   return { active, sinks };
 }
 
-function upgradeLegacyWorkflow(workflow: WorkflowDefinition, pipeline: PipelineDefinition): WorkflowDefinition {
+function upgradeLegacyWorkflow(workflow: WorkflowDefinition, runtimeProfile: WorkflowRuntimeProfile): WorkflowDefinition {
   if (!isLegacyGraph(workflow)) {
     return workflow;
   }
   return buildStarterWorkflow(
     {
       ...workflow,
-      source: workflow.source === "manual" ? "manual" : "migrated_from_pipeline"
+      source: workflow.source === "manual" ? "manual" : "system_default"
     },
-    pipeline
+    runtimeProfile
   );
 }
 
@@ -644,7 +762,7 @@ function resetExportFlags(exportConfig: ExportParameters): ExportParameters {
   };
 }
 
-function classifyOutputBundle(exportConfig: ExportParameters): PipelineDefinition["output_bundle_id"] {
+function classifyOutputBundle(exportConfig: ExportParameters): WorkflowRuntimeProfile["output_bundle_id"] {
   if (exportConfig.export_csv && exportConfig.export_xlsx && exportConfig.export_png && exportConfig.export_html_report && exportConfig.include_audit) {
     return "full_report";
   }
@@ -733,6 +851,17 @@ export function resolveActiveWorkflow(project: ProjectManifest | null | undefine
   );
 }
 
+export function resolveWorkflowRuntimeProfile(
+  project: ProjectManifest | null | undefined,
+  workflow?: WorkflowDefinition | null
+): WorkflowRuntimeProfile {
+  const targetWorkflow = workflow ?? resolveActiveWorkflow(project);
+  if (!targetWorkflow) {
+    return defaultWorkflowRuntimeProfile();
+  }
+  return compileRuntimeProfileFromWorkflow(targetWorkflow, defaultWorkflowRuntimeProfile());
+}
+
 export function workflowOptionalToolboxNodes(): WorkflowNodeType[] {
   return builtinWorkflowOptionalToolboxNodes();
 }
@@ -741,8 +870,8 @@ export function workflowNodeCanRemove(): boolean {
   return true;
 }
 
-export function normalizeWorkflowGraph(workflow: WorkflowDefinition, pipeline: PipelineDefinition): WorkflowDefinition {
-  const upgraded = upgradeLegacyWorkflow(workflow, pipeline);
+export function normalizeWorkflowGraph(workflow: WorkflowDefinition, runtimeProfile: WorkflowRuntimeProfile): WorkflowDefinition {
+  const upgraded = upgradeLegacyWorkflow(workflow, runtimeProfile);
   const nodes = upgraded.nodes.map((node) => {
     const definition = definitionForNode(node.node_type);
     return {
@@ -750,7 +879,7 @@ export function normalizeWorkflowGraph(workflow: WorkflowDefinition, pipeline: P
       label: node.label || definition.label,
       inputs: node.inputs?.length ? node.inputs.map((port) => ({ ...port })) : definition.inputs.map((port) => ({ ...port })),
       outputs: node.outputs?.length ? node.outputs.map((port) => ({ ...port })) : definition.outputs.map((port) => ({ ...port })),
-      config: normalizeConfigNode(node.node_type, node.config ?? {}, pipeline),
+      config: normalizeConfigNode(node.node_type, node.config ?? {}, runtimeProfile),
       runtime_meta: {
         ...node.runtime_meta,
         step_id: definition.stepId,
@@ -777,15 +906,15 @@ export function normalizeWorkflowGraph(workflow: WorkflowDefinition, pipeline: P
 export function addWorkflowNodeByType(
   workflow: WorkflowDefinition,
   nodeType: WorkflowNodeType,
-  pipeline: PipelineDefinition,
+  runtimeProfile: WorkflowRuntimeProfile,
   registeredDefinition?: RegisteredWorkflowNodeDefinition
 ): WorkflowDefinition {
-  const normalized = normalizeWorkflowGraph(workflow, pipeline);
+  const normalized = normalizeWorkflowGraph(workflow, runtimeProfile);
   const definition = definitionForNode(nodeType, registeredDefinition);
   if (definition.singleton && normalized.nodes.some((node) => node.node_type === nodeType)) {
     return normalized;
   }
-  const createdNode = createWorkflowNode(nodeType, pipeline, registeredDefinition);
+  const createdNode = createWorkflowNode(nodeType, runtimeProfile, registeredDefinition);
   const siblingCount = normalized.nodes.filter((node) => node.node_type === nodeType).length;
   const basePosition = defaultPositionForWorkflowNode(createdNode);
   let candidatePosition = {
@@ -833,16 +962,16 @@ export function removeWorkflowNodeById(
 export function removeWorkflowNodeByType(
   workflow: WorkflowDefinition,
   nodeType: WorkflowNodeType,
-  pipeline: PipelineDefinition
+  runtimeProfile: WorkflowRuntimeProfile
 ): WorkflowDefinition {
-  const normalized = normalizeWorkflowGraph(workflow, pipeline);
+  const normalized = normalizeWorkflowGraph(workflow, runtimeProfile);
   const target = normalized.nodes.find((node) => node.node_type === nodeType);
   return target ? removeWorkflowNodeById(normalized, target.node_id) : normalized;
 }
 
-export function restoreWorkflowDefaultEdges(workflow: WorkflowDefinition, pipeline: PipelineDefinition): WorkflowDefinition {
-  const normalized = normalizeWorkflowGraph(workflow, pipeline);
-  const starter = buildStarterWorkflow(normalized, pipeline);
+export function restoreWorkflowDefaultEdges(workflow: WorkflowDefinition, runtimeProfile: WorkflowRuntimeProfile): WorkflowDefinition {
+  const normalized = normalizeWorkflowGraph(workflow, runtimeProfile);
+  const starter = buildStarterWorkflow(normalized, runtimeProfile);
   const nodes = normalized.nodes.map(cloneNode);
   const nodeByTypeMap = new Map(nodes.map((node) => [node.node_type, node]));
   const translatedEdges: WorkflowEdge[] = [];
@@ -870,10 +999,10 @@ export function restoreWorkflowDefaultEdges(workflow: WorkflowDefinition, pipeli
   return updateWorkflowEdges(normalized, normalizeEdgesWithNodes({ ...normalized, edges: translatedEdges }, nodes));
 }
 
-export function workflowNodeStepId(node: WorkflowNodeInstance): PipelineStepId | null {
+export function workflowNodeStepId(node: WorkflowNodeInstance): WorkflowStepId | null {
   const stepId = definitionForNode(node.node_type).stepId;
-  return typeof stepId === "string" && executionOrder.includes(stepId as PipelineStepId)
-    ? (stepId as PipelineStepId)
+  return typeof stepId === "string" && executionOrder.includes(stepId as WorkflowStepId)
+    ? (stepId as WorkflowStepId)
     : null;
 }
 
@@ -1018,12 +1147,15 @@ export function removeWorkflowEdge(workflow: WorkflowDefinition, edgeId: string)
   );
 }
 
-export function compilePipelineFromWorkflow(workflow: WorkflowDefinition, pipeline: PipelineDefinition): PipelineDefinition {
-  const normalized = normalizeWorkflowGraph(workflow, pipeline);
+export function compileRuntimeProfileFromWorkflow(
+  workflow: WorkflowDefinition,
+  runtimeProfile: WorkflowRuntimeProfile = defaultWorkflowRuntimeProfile()
+): WorkflowRuntimeProfile {
+  const normalized = normalizeWorkflowGraph(workflow, runtimeProfile);
   const validation = validateWorkflowGraph(normalized);
   const activeNodeIds = new Set(validation.active_node_ids);
   const activeNodes = normalized.nodes.filter((node) => activeNodeIds.has(node.node_id));
-  const compiled = compileActiveWorkflowNodesIntoPipeline(activeNodes, pipeline);
+  const compiled = compileActiveWorkflowNodesIntoRuntimeProfile(activeNodes, runtimeProfile);
   return {
     ...compiled,
     recipe_id: normalized.meta?.template_id || compiled.recipe_id,
@@ -1031,24 +1163,24 @@ export function compilePipelineFromWorkflow(workflow: WorkflowDefinition, pipeli
   };
 }
 
-export function syncWorkflowFromPipeline(
+export function syncWorkflowFromRuntimeProfile(
   workflow: WorkflowDefinition,
-  pipeline: PipelineDefinition,
+  runtimeProfile: WorkflowRuntimeProfile,
   source: WorkflowDefinition["source"] = workflow.source
 ): WorkflowDefinition {
   const normalized = workflow.nodes.length
-    ? normalizeWorkflowGraph(workflow, pipeline)
+    ? normalizeWorkflowGraph(workflow, runtimeProfile)
     : buildStarterWorkflow(
       {
         ...workflow,
         source
       },
-      pipeline
+      runtimeProfile
     );
 
   const nodes = normalized.nodes.map((node) => ({
     ...cloneNode(node),
-    config: normalizeConfigNode(node.node_type, node.config ?? {}, pipeline)
+    config: normalizeConfigNode(node.node_type, node.config ?? {}, runtimeProfile)
   }));
 
   return {
@@ -1056,8 +1188,8 @@ export function syncWorkflowFromPipeline(
     source,
     meta: {
       ...normalized.meta,
-      template_id: pipeline.recipe_id,
-      output_bundle_id: pipeline.output_bundle_id
+      template_id: runtimeProfile.recipe_id,
+      output_bundle_id: runtimeProfile.output_bundle_id
     },
     nodes,
     updated_at: new Date().toISOString()
@@ -1092,10 +1224,10 @@ export function updateWorkflowMeta(
   };
 }
 
-export function buildBlankWorkflowFromPipeline(
+export function buildBlankWorkflowFromRuntimeProfile(
   workflowId: string,
   name: string,
-  pipeline: PipelineDefinition
+  runtimeProfile: WorkflowRuntimeProfile
 ): WorkflowDefinition {
   const timestamp = new Date().toISOString();
   return {
@@ -1105,8 +1237,8 @@ export function buildBlankWorkflowFromPipeline(
     graph_mode: "dag",
     source: "manual",
     meta: {
-      template_id: pipeline.recipe_id ?? "custom",
-      output_bundle_id: pipeline.output_bundle_id ?? "custom"
+      template_id: runtimeProfile.recipe_id ?? "custom",
+      output_bundle_id: runtimeProfile.output_bundle_id ?? "custom"
     },
     nodes: [],
     edges: [],

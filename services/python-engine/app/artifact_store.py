@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,7 @@ def _json_ready(value: Any) -> Any:
 def _artifact_paths(project_dir: Path, run_id: str, artifact_id: str) -> tuple[Path, Path]:
     artifact_dir = project_dir / "runs" / run_id / "artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    return artifact_dir / f"{artifact_id}.json", artifact_dir / f"{artifact_id}.preview.json"
+    return artifact_dir / f"{artifact_id}.json.gz", artifact_dir / f"{artifact_id}.preview.json"
 
 
 def _relative_path(project_dir: Path, path: Path) -> str:
@@ -59,7 +60,8 @@ def write_artifact(project_dir: Path, run_id: str, node_id: str, kind: str, payl
         "rows": preview_rows,
     }
 
-    payload_path.write_text(json.dumps(normalized_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    with gzip.open(payload_path, "wt", encoding="utf-8", compresslevel=6) as handle:
+        handle.write(json.dumps(normalized_payload, ensure_ascii=False, separators=(",", ":")))
     preview_path.write_text(json.dumps(preview_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return {
@@ -74,8 +76,10 @@ def write_artifact(project_dir: Path, run_id: str, node_id: str, kind: str, payl
     }
 
 
-def _find_artifact_path(project_dir: Path, artifact_id: str, suffix: str) -> Path:
-    matches = list(project_dir.glob(f"runs/*/artifacts/{artifact_id}{suffix}"))
+def _find_artifact_path(project_dir: Path, artifact_id: str, *suffixes: str) -> Path:
+    matches: list[Path] = []
+    for suffix in suffixes:
+        matches.extend(project_dir.glob(f"runs/*/artifacts/{artifact_id}{suffix}"))
     if not matches:
         raise ValueError(f"Artifact {artifact_id} not found")
     return matches[0]
@@ -92,7 +96,10 @@ def load_artifact_preview(project_dir: Path, artifact_id: str, limit: int = 50) 
 
 
 def load_artifact_payload(project_dir: Path, artifact_id: str) -> Any:
-    payload_path = _find_artifact_path(project_dir, artifact_id, ".json")
+    payload_path = _find_artifact_path(project_dir, artifact_id, ".json.gz", ".json")
     if payload_path.name.endswith(".preview.json"):
         raise ValueError(f"Artifact payload {artifact_id} not found")
+    if payload_path.name.endswith(".json.gz"):
+        with gzip.open(payload_path, "rt", encoding="utf-8") as handle:
+            return json.loads(handle.read())
     return json.loads(payload_path.read_text(encoding="utf-8"))

@@ -3,10 +3,8 @@ from __future__ import annotations
 import ast
 import io
 import json
+from multiprocessing import freeze_support
 import sys
-
-from app.cli import main
-from app.service import serve
 
 
 def configure_stdio_utf8() -> None:
@@ -39,13 +37,23 @@ def parse_service_payload(raw: str) -> dict[str, object]:
         raise ValueError("service payload must be an object")
     return payload
 
-if __name__ == "__main__":
-    configure_stdio_utf8()
+
+def run_entrypoint() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "serve":
+        from app.service import serve
+
         if len(sys.argv) > 3:
             serve(host=sys.argv[2], port=int(sys.argv[3]))
         else:
             payload = parse_service_payload(sys.argv[2]) if len(sys.argv) > 2 else {}
             serve(host=payload.get("host", "127.0.0.1"), port=int(payload.get("port", 8765)))
-    else:
-        main()
+        return
+
+    from app.cli import main
+
+    main()
+
+if __name__ == "__main__":
+    freeze_support()
+    configure_stdio_utf8()
+    run_entrypoint()

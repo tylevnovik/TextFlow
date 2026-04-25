@@ -1,5 +1,10 @@
 import type { ExperimentSpec, RunRecord } from "@textflow/shared-types";
 import { MiniMetric, Panel } from "../../ui";
+import {
+  runArtifactKey,
+  runArtifactSummaryDetail,
+  runArtifactSummaryLabel
+} from "../../runArtifacts";
 import type { ReviewTaskRecord } from "../review/reviewTypes";
 
 type ExperimentRunRecord = RunRecord & {
@@ -80,8 +85,10 @@ export function RunHistoryPanel({
                 <span className="pill">{run.artifacts.length} step artifacts</span>
               </div>
               <ul className="micro-list">
-                {run.artifacts.map((artifact) => (
-                  <li key={`${run.run_id}-${artifact.step}`}>{artifact.step}: {artifact.output_files.length} 个文件</li>
+                {run.artifacts.map((artifact, index) => (
+                  <li key={`${run.run_id}-${runArtifactKey(artifact, index)}`}>
+                    {runArtifactSummaryLabel(artifact)}: {runArtifactSummaryDetail(artifact)}
+                  </li>
                 ))}
               </ul>
             </article>

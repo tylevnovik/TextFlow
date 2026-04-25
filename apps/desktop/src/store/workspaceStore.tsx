@@ -20,6 +20,7 @@ import type {
   ProjectManifest,
   ProjectSummary,
   RunRecord,
+  WorkflowNodeRuntimeState,
   WorkspaceSnapshot
 } from "@textflow/shared-types";
 import type {
@@ -161,6 +162,27 @@ function sameProgressState(left: TaskProgressState, right: TaskProgressState): b
   );
 }
 
+function workflowNodeStateSignature(detail: Extract<NonNullable<TaskProgressState["detail"]>, { kind: "workflow_run" }>): string {
+  const sourceStates = detail.full_node_state_sync
+    ? detail.node_states ?? {}
+    : {
+        ...(detail.node_states ?? {}),
+        ...(detail.node_state_delta ?? {})
+      };
+  return Object.entries(sourceStates)
+    .sort(([leftNodeId], [rightNodeId]) => leftNodeId.localeCompare(rightNodeId))
+    .map(([nodeId, nodeState]) => [
+      nodeId,
+      nodeState.status,
+      Math.round((nodeState.progress ?? 0) * 1000),
+      nodeState.detail ?? "",
+      nodeState.output_summary ?? "",
+      nodeState.duration_ms ?? "",
+      nodeState.error ?? ""
+    ].join("~"))
+    .join(",");
+}
+
 function progressDetailSignature(detail: TaskProgressState["detail"]): string {
   if (!detail) {
     return "";
@@ -175,7 +197,7 @@ function progressDetailSignature(detail: TaskProgressState["detail"]): string {
       String(detail.total_nodes),
       detail.detail ?? "",
       detail.full_node_state_sync ? "1" : "0",
-      Object.keys(detail.node_state_delta ?? {}).join(",")
+      workflowNodeStateSignature(detail)
     ].join("|");
   }
   if ("node_label" in detail) {
@@ -208,12 +230,97 @@ function mergeWorkflowRunDetail(
   };
 }
 
+function completedWorkflowNodeCount(nodeStates: Record<string, WorkflowNodeRuntimeState>): number {
+  return Object.values(nodeStates).filter((nodeState) => nodeState.status !== "pending" && nodeState.status !== "running").length;
+}
+
+function workflowNodeStatesFromRun(run: RunRecord): Record<string, WorkflowNodeRuntimeState> {
+  const nodeRuns = run.node_runs ?? [];
+  const totalNodes = Math.max(nodeRuns.length, 1);
+  return nodeRuns.reduce<Record<string, WorkflowNodeRuntimeState>>((accumulator, nodeRun, index) => {
+    accumulator[nodeRun.node_id] = {
+      node_id: nodeRun.node_id,
+      node_type: nodeRun.node_type,
+      label: nodeRun.label,
+      status: nodeRun.status,
+      node_index: index + 1,
+      total_nodes: totalNodes,
+      progress: 1,
+      started_at: nodeRun.started_at,
+      ended_at: nodeRun.ended_at,
+      duration_ms: nodeRun.duration_ms,
+      cache_hit: nodeRun.cache_hit,
+      cache_key: nodeRun.cache_key,
+      cache_path: nodeRun.cache_path,
+      output_ports: nodeRun.output_ports,
+      output_summary: nodeRun.output_summary,
+      sample_outputs: nodeRun.sample_outputs,
+      error: nodeRun.error
+    };
+    return accumulator;
+  }, {});
+}
+
+function completeWorkflowRunDetail(
+  previous: TaskProgressState["detail"],
+  run?: RunRecord,
+  message?: string
+): TaskProgressState["detail"] {
+  const previousWorkflowDetail = previous?.kind === "workflow_run" ? previous : undefined;
+  const runNodeStates = run ? workflowNodeStatesFromRun(run) : {};
+  let nodeStates = Object.keys(runNodeStates).length
+    ? runNodeStates
+    : { ...(previousWorkflowDetail?.node_states ?? {}) };
+
+  const activeNodeId = previousWorkflowDetail?.current_node_id;
+  if (!Object.keys(runNodeStates).length && activeNodeId && nodeStates[activeNodeId]?.status === "running") {
+    nodeStates = {
+      ...nodeStates,
+      [activeNodeId]: {
+        ...nodeStates[activeNodeId],
+        status: "completed",
+        progress: 1,
+        detail: message || nodeStates[activeNodeId].detail
+      }
+    };
+  }
+
+  const totalNodes = Math.max(
+    run?.node_runs?.length ?? previousWorkflowDetail?.total_nodes ?? Object.keys(nodeStates).length,
+    0
+  );
+  const completedNodes = Object.keys(nodeStates).length
+    ? completedWorkflowNodeCount(nodeStates)
+    : Math.max(previousWorkflowDetail?.completed_nodes ?? 0, totalNodes);
+
+  return {
+    ...(previousWorkflowDetail ?? { kind: "workflow_run" as const }),
+    run_id: run?.run_id ?? previousWorkflowDetail?.run_id,
+    workflow_id: run?.workflow_id ?? previousWorkflowDetail?.workflow_id,
+    workflow_name: run?.workflow_name ?? previousWorkflowDetail?.workflow_name,
+    stage: "completed",
+    total_nodes: totalNodes,
+    completed_nodes: Math.max(completedNodes, previousWorkflowDetail?.completed_nodes ?? 0),
+    current_node_id: undefined,
+    current_node_label: undefined,
+    current_node_index: undefined,
+    last_completed_node_id: run?.node_runs?.at(-1)?.node_id ?? activeNodeId ?? previousWorkflowDetail?.last_completed_node_id,
+    detail: message || previousWorkflowDetail?.detail || run?.output_summary || "流程已完成",
+    node_states: nodeStates,
+    node_state_delta: nodeStates,
+    full_node_state_sync: true
+  };
+}
+
 function normalizeProgressDetail(
   event: EngineProgressEvent,
   previous: TaskProgressState
 ): TaskProgressState["detail"] {
   if (event.detail) {
     return mergeWorkflowRunDetail(previous.detail, event.detail);
+  }
+  if (event.action === "run-workflow" && event.status === "completed" && previous.detail?.kind === "workflow_run") {
+    return completeWorkflowRunDetail(previous.detail, undefined, event.message);
   }
   const nodeMatch = event.message.match(/^正在执行节点：(.+)$/);
   if (nodeMatch) {
@@ -830,6 +937,18 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           loading: false,
           statusLine: `当前项目：${response.project.name}，最近一次动作：运行流程`
         });
+        updateProgress((previous) => {
+          const message = previous.action === "run-workflow" && previous.status === "completed"
+            ? previous.message
+            : "运行流程完成";
+          return {
+            action: "run-workflow",
+            status: "completed",
+            value: 1,
+            message,
+            detail: completeWorkflowRunDetail(previous.detail, response.run, message)
+          };
+        });
         return response.run;
       } catch (error) {
         failAction("运行流程", error);
@@ -1329,3 +1448,11 @@ export function useWorkspace() {
 export function useTaskProgress() {
   return useContext(TaskProgressContext);
 }
+
+export const workspaceStoreTestables = {
+  sameProgressState,
+  mergeWorkflowRunDetail,
+  normalizeProgressDetail,
+  workflowNodeStatesFromRun,
+  completeWorkflowRunDetail
+};

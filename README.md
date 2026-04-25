@@ -2,7 +2,7 @@
 
 TextFlow Studio 是一个桌面优先的本地文本预处理与基础文本挖掘工具，面向研究、舆情、内容分析和语料整理场景。项目当前采用 `Tauri + React + TypeScript + Python` 架构，目标是提供一个安装即用、项目化、可复跑、可审计的桌面工作台。
 
-当前仓库已经不是空骨架，而是具备可运行的桌面端、Python sidecar、词表中心、workflow 画布、分析导出和自动化测试基线的开发中版本。
+当前仓库已经不是空骨架，而是具备可运行的桌面端、Python sidecar、词表中心、workflow 画布、分析导出、官方场景样例和自动化测试基线的开发中版本。
 
 ## 项目目标
 
@@ -21,7 +21,7 @@ TextFlow Studio 是一个桌面优先的本地文本预处理与基础文本挖�
 - `txt/csv/xlsx/json` 导入
 - `source profile`、字段映射、主文本拼接
 - 文档搜索、预览、编辑、删除
-- 首次启动自动生成 9 个后端构建的场景示例项目
+- 首次启动自动生成 9 个后端构建的真实公开数据场景示例项目
 
 ### 文本处理
 
@@ -38,6 +38,7 @@ TextFlow Studio 是一个桌面优先的本地文本预处理与基础文本挖�
 - 机构关键词、机构主题
 - CSV / XLSX / PNG / HTML 导出
 - 运行历史、参数快照、日志、审计表
+- 项目概览只展示最近运行摘要，完整运行历史与产物预览放在结果页按需查看
 
 ### workflow 与运行时
 
@@ -55,16 +56,17 @@ TextFlow Studio 是一个桌面优先的本地文本预处理与基础文本挖�
 
 ## 当前状态
 
-- 版本：`0.1.0`
+- 版本：`0.1.1`
 - 当前阶段：开发中，已可运行，但仍在持续收敛交付质量
 - 已验证：
+  - `npm run test --workspace apps/desktop`
   - `npm run lint`
   - `npm run test:engine`
   - `npm run tauri:build --workspace apps/desktop`
 
-最近一次对外版本：
+最新对外版本：
 
-- [GitHub Release v0.1.0](https://github.com/tylevnovik/TextFlow/releases/tag/v0.1.0)
+- [GitHub Release v0.1.1](https://github.com/tylevnovik/TextFlow/releases/tag/v0.1.1)
 
 ## 技术栈
 
@@ -150,13 +152,14 @@ See `docs/examples.md`.
 - [内置场景样例](./docs/examples.md)
 - [大规模压测记录](./docs/benchmark.md)
 - [插件节点说明](./plugins/nodes/README.md)
+- [发布记录](./CHANGELOG.md)
 - [历史方案与旧文档归档](./docs/archive/README.md)
 
 ## 已知仍需继续收敛的部分
 
 - workflow 画布的产品化体验
-- 前端自动化测试与 CI
-- Windows 发版链路的持续验证
+- 更系统的前端自动化测试、E2E 与 CI
+- Windows 发版链路的持续自动化验证
 - macOS 构建与运行验证
 - native DAG 更细粒度的 ready-queue 调度、局部重跑和更完整的 artifact 管理
 - 超大项目的冷启动、结果页首屏和导出阶段 I/O 仍有继续优化空间

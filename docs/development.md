@@ -139,7 +139,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-large-benchmark.ps1 --lim
 
 ## 当前测试与验证情况
 
-截至 `2026-04-24`，本地已验证或纳入最终验证清单：
+截至 `2026-04-25`，本地已验证或纳入最终验证清单：
 
 - `npm run lint` 通过
 - `npm run test --workspace apps/desktop` 通过
@@ -150,7 +150,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-large-benchmark.ps1 --lim
 当前 Windows installer 输出位置：
 
 ```text
-apps/desktop/src-tauri/target/release/bundle/nsis/TextFlow Studio_0.1.0_x64-setup.exe
+apps/desktop/src-tauri/target/release/bundle/nsis/TextFlow Studio_0.1.1_x64-setup.exe
 ```
 
 当前测试重点在：
@@ -162,7 +162,7 @@ apps/desktop/src-tauri/target/release/bundle/nsis/TextFlow Studio_0.1.0_x64-setu
 
 ## 当前开发注意事项
 
-- 目前没有前端单元测试和 E2E 测试。
+- 目前已有少量前端组件/store 测试，但还没有系统化前端测试矩阵和 E2E 测试。
 - 仓库中没有 CI 配置，回归主要依赖本地命令。
 - Python 测试耗时约 3 分钟，适合在较完整改动后执行。
 - sidecar 打包依赖 `PyInstaller`，首次构建会慢一些。

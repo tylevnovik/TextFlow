@@ -11,11 +11,11 @@
 - [架构说明](./architecture.md)
   说明桌面端、Python sidecar、项目存储、词表、运行记录和打包结构。
 - [工作流与运行时](./workflow-runtime.md)
-  说明 workflow、兼容 pipeline、native DAG、缓存和插件节点的当前关系。
+  说明 workflow-only 持久化、native DAG、缓存和插件节点的当前关系。
 - [开发与构建说明](./development.md)
   开发环境、脚本、测试、打包、压测入口。
 - [示例项目说明](./sample-projects.md)
-  首次启动自动生成的 3 个示例项目及用途。
+  首次启动自动生成的 9 个官方场景样例及用途。
 - [大规模压测记录](./benchmark.md)
   当前仓库保留的万条级工作流压测数据与性能边界。
 - [插件节点说明](../plugins/nodes/README.md)
@@ -29,6 +29,6 @@
 
 ## 不再作为当前依据的文档
 
-旧版 `PRD`、线性 pipeline 规格、V2 迁移规格、画布布局草图和实施计划已移入归档区：
+旧版 `PRD`、线性流程规格、V2 迁移规格、画布布局草图和实施计划已移入归档区：
 
 - [归档说明](./archive/README.md)

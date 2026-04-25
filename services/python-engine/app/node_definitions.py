@@ -208,7 +208,7 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
             "inputs": [_port("dictionary_set_in", "DictionarySet", "词表输入")],
             "outputs": [_port("dictionary_set", "DictionarySet", "已筛选词表")],
             "params": [
-                _string_param("selected_table_ids_text", "启用分表 ID", "standard-project,synonym-project"),
+                _string_param("selected_table_ids_text", "启用分表 ID / 类型", "standard-project,synonym_map"),
             ],
             "runtime": _runtime(
                 "resource",
@@ -968,7 +968,7 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
             "category": "output",
             "description": "把上游表格结果写成 CSV 文件。",
             "inputs": [_port("table_in", "AnyTable", "表格输入", allow_multiple=True)],
-            "outputs": [_port("artifact", "ExportArtifact", "导出产物")],
+            "outputs": [{**_port("artifact", "ExportArtifact", "导出产物"), "artifact_kind": "export"}],
             "params": [_string_param("file_prefix", "文件名前缀", "tables")],
             "runtime": _runtime("export", "export.save_csv", cacheable=False, previewable=True, output_node=True, parallel_safe=True),
         },
@@ -978,7 +978,7 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
             "category": "output",
             "description": "把上游表格结果整理成 Excel 文件。",
             "inputs": [_port("table_in", "AnyTable", "表格输入", allow_multiple=True)],
-            "outputs": [_port("artifact", "ExportArtifact", "导出产物")],
+            "outputs": [{**_port("artifact", "ExportArtifact", "导出产物"), "artifact_kind": "export"}],
             "params": [_string_param("file_prefix", "文件名前缀", "tables")],
             "runtime": _runtime("export", "export.save_xlsx", cacheable=False, previewable=True, output_node=True, parallel_safe=True),
         },
@@ -988,7 +988,7 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
             "category": "output",
             "description": "把上游分析结果按默认图表规则渲染为 PNG。",
             "inputs": [_port("render_in", "AnyRenderable", "图像输入", allow_multiple=True)],
-            "outputs": [_port("artifact", "ExportArtifact", "导出产物")],
+            "outputs": [{**_port("artifact", "ExportArtifact", "导出产物"), "artifact_kind": "export"}],
             "params": [
                 _string_param("file_prefix", "文件名前缀", "charts"),
                 _number_param("chart_dpi", "PNG 分辨率（DPI）", int(export.get("chart_dpi", 320))),
@@ -1001,7 +1001,7 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
             "category": "output",
             "description": "根据上游分析结果生成 HTML 报告。",
             "inputs": [_port("report_in", "AnyAnalysisResult", "报告输入", allow_multiple=True)],
-            "outputs": [_port("artifact", "ExportArtifact", "导出产物")],
+            "outputs": [{**_port("artifact", "ExportArtifact", "导出产物"), "artifact_kind": "export"}],
             "params": [
                 _string_param("file_prefix", "文件名前缀", "report"),
                 _bool_param("include_audit", "附带审计摘要", bool(export.get("include_audit", True))),

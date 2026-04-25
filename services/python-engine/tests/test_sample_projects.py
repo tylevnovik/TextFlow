@@ -10,6 +10,7 @@ from app.node_definitions import build_builtin_node_definitions
 from app.sample_dataset_cache import read_normalized_sample_cache, write_normalized_sample_cache
 from app.sample_dataset_sources import normalize_public_sample_row
 from app.sample_projects import (
+    BUILTIN_SAMPLE_PROJECT_DATA_REVISION,
     BUILTIN_SAMPLE_PROJECTS,
     FIRST_BUILTIN_SAMPLE_PROJECT_NAME,
     _is_synthetic_placeholder_row,
@@ -115,6 +116,16 @@ def _populate_public_sample_cache(monkeypatch, tmp_path) -> None:
     )
 
 
+def _create_and_run_sample(monkeypatch, tmp_path, sample_name: str) -> tuple[Path, dict[str, object], list[dict[str, object]], dict[str, object]]:
+    _populate_public_sample_cache(monkeypatch, tmp_path)
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
+    created = create_builtin_sample_projects()
+    project_dir, _manifest = next(item for item in created if item[1]["name"] == sample_name)
+    manifest, corpus = load_project(project_dir)
+    manifest, corpus, run = run_project_workflow(project_dir, manifest, corpus)
+    return project_dir, manifest, corpus, run
+
+
 def test_builtin_sample_specs_cover_nine_scenarios():
     assert len(BUILTIN_SAMPLE_PROJECTS) == 9
     assert [spec["order"] for spec in BUILTIN_SAMPLE_PROJECTS] == list(range(1, 10))
@@ -168,6 +179,7 @@ def test_created_sample_projects_persist_guidance_metadata(monkeypatch, isolated
     for _project_dir, manifest in created:
         sample = manifest["settings"]["sample_project"]
         assert sample["order"] >= 1
+        assert sample["data_revision"] == BUILTIN_SAMPLE_PROJECT_DATA_REVISION
         assert sample["difficulty"]
         assert sample["goal"]
         assert sample["guided_steps"]
@@ -175,6 +187,32 @@ def test_created_sample_projects_persist_guidance_metadata(monkeypatch, isolated
         assert sample["public_row_count"] == 120
         assert sample["language_balance"] == {"en": 0.5, "zh": 0.5}
         assert sample["language_counts"] == {"en": 60, "zh": 60}
+
+
+def test_basic_preprocessing_sample_disables_full_audit_report(monkeypatch, isolated_workspace, tmp_path):
+    _populate_public_sample_cache(monkeypatch, tmp_path)
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
+    created = create_builtin_sample_projects()
+    _project_dir, manifest = next(item for item in created if item[1]["name"] == "示例 01 - 基础文本预处理")
+    workflow = manifest["workflow_definitions"][0]
+    report_node = next(node for node in workflow["nodes"] if node["node_type"] == "save_html_report")
+    assert report_node["config"]["include_audit"] is False
+
+
+def test_basic_preprocessing_sample_disables_heavy_transform_node_cache(monkeypatch, isolated_workspace, tmp_path):
+    _populate_public_sample_cache(monkeypatch, tmp_path)
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
+    created = create_builtin_sample_projects()
+    _project_dir, manifest = next(item for item in created if item[1]["name"] == "示例 01 - 基础文本预处理")
+    workflow = manifest["workflow_definitions"][0]
+
+    disabled_nodes = {
+        node["node_type"]
+        for node in workflow["nodes"]
+        if (node.get("runtime_meta") or {}).get("cache_enabled") is False
+    }
+
+    assert {"clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms"} <= disabled_nodes
 
 
 def test_review_and_experiment_sample_contains_product_surfaces(monkeypatch, isolated_workspace, tmp_path):
@@ -221,6 +259,110 @@ def test_representative_sample_workflows_run(monkeypatch, isolated_workspace, tm
     assert run["artifacts"]
 
 
+def test_basic_preprocessing_sample_run_avoids_full_audit_snapshot(monkeypatch, isolated_workspace, tmp_path):
+    _populate_public_sample_cache(monkeypatch, tmp_path)
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
+    created = create_builtin_sample_projects()
+    project_dir, manifest = next(item for item in created if item[1]["name"] == "示例 01 - 基础文本预处理")
+    manifest, corpus = load_project(project_dir)
+    manifest, _corpus, run = run_project_workflow(project_dir, manifest, corpus)
+
+    assert run["status"] == "completed"
+    assert manifest["results"]["audit_table"] == []
+
+
+def test_dictionary_frequency_sample_removes_builtin_stopwords(monkeypatch, isolated_workspace, tmp_path):
+    _populate_public_sample_cache(monkeypatch, tmp_path)
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
+    created = create_builtin_sample_projects()
+    project_dir, _manifest = next(item for item in created if item[1]["name"] == "示例 02 - 词表治理与词频统计")
+    manifest, corpus = load_project(project_dir)
+    manifest, processed_corpus, run = run_project_workflow(project_dir, manifest, corpus)
+
+    frequency_terms = {str(row.get("term") or "") for row in manifest["results"]["frequency_table"]}
+    surviving_tokens = {
+        str(token)
+        for row in processed_corpus
+        for token in (row.get("tokens") or [])
+    }
+
+    assert run["status"] == "completed"
+    assert "the" not in frequency_terms
+    assert "a" not in frequency_terms
+    assert "the" not in surviving_tokens
+    assert "a" not in surviving_tokens
+
+
+def test_institution_topic_sample_produces_institution_and_trend_outputs(monkeypatch, isolated_workspace, tmp_path):
+    _project_dir, manifest, _corpus, run = _create_and_run_sample(
+        monkeypatch,
+        tmp_path,
+        "示例 04 - 机构主题与技术方向",
+    )
+
+    artifact_node_ids = {str(item.get("node_id") or "") for item in manifest["artifact_records"]}
+
+    assert run["status"] == "completed"
+    assert manifest["results"]["term_year_table"]
+    assert manifest["results"]["institution_keyword_cooccurrence"]
+    assert manifest["results"]["institution_topic_cooccurrence"]
+    assert manifest["results"]["report_files"]
+    assert {
+        "node-term-year-analysis",
+        "node-institution-keyword-analysis",
+        "node-institution-topic-analysis",
+        "node-save-xlsx",
+        "node-save-html-report",
+    } <= artifact_node_ids
+
+
+def test_review_experiment_sample_produces_keyword_outputs_and_surface_artifacts(monkeypatch, isolated_workspace, tmp_path):
+    _project_dir, manifest, _corpus, run = _create_and_run_sample(
+        monkeypatch,
+        tmp_path,
+        "示例 05 - 复核实验与增量运行",
+    )
+
+    artifact_node_ids = {str(item.get("node_id") or "") for item in manifest["artifact_records"]}
+
+    assert run["status"] == "completed"
+    assert manifest["review_tasks"]
+    assert manifest["experiment_specs"]
+    assert manifest["results"]["keyword_result"]
+    assert manifest["results"]["keyword_cluster_result"]
+    assert manifest["results"]["report_files"]
+    assert {
+        "node-keyword-extraction",
+        "node-keyword-clustering",
+        "node-save-html-report",
+    } <= artifact_node_ids
+
+
+def test_split_evaluate_join_sample_produces_joined_and_evaluation_artifacts(monkeypatch, isolated_workspace, tmp_path):
+    _project_dir, manifest, _corpus, run = _create_and_run_sample(
+        monkeypatch,
+        tmp_path,
+        "示例 08 - 切分评估与结果拼接",
+    )
+
+    artifact_records_by_node = {
+        str(item.get("node_id") or ""): item
+        for item in manifest["artifact_records"]
+    }
+
+    assert run["status"] == "completed"
+    assert manifest["results"]["clustering_result"]
+    assert manifest["results"]["report_files"]
+    assert artifact_records_by_node["node-cluster-evaluation"]["row_count"] > 0
+    assert artifact_records_by_node["node-join-results"]["row_count"] > 0
+    assert {
+        "node-cluster-evaluation",
+        "node-join-results",
+        "node-save-csv",
+        "node-save-xlsx",
+    } <= set(artifact_records_by_node)
+
+
 def test_reconcile_builtin_sample_projects_refreshes_placeholder_corpus(monkeypatch, isolated_workspace, tmp_path):
     _populate_public_sample_cache(monkeypatch, tmp_path)
     monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
@@ -240,6 +382,7 @@ def test_reconcile_builtin_sample_projects_refreshes_placeholder_corpus(monkeypa
 
     refreshed_manifest, refreshed_corpus = load_project(project_dir)
     assert refreshed_manifest["description"] == BUILTIN_SAMPLE_PROJECTS[0]["description"]
+    assert refreshed_manifest["settings"]["sample_project"]["data_revision"] == BUILTIN_SAMPLE_PROJECT_DATA_REVISION
     assert refreshed_manifest["settings"]["sample_project"]["source_datasets"] == ["wikimedia_enwiki", "wikimedia_zhwiki"]
     assert Counter(row["language"] for row in refreshed_corpus) == {"en": 60, "zh": 60}
     assert not any(_is_synthetic_placeholder_row(row) for row in refreshed_corpus[:8])

@@ -21,6 +21,8 @@ from .resource_store import create_corpus_view, delete_corpus_view, update_corpu
 from .run_diff import compare_runs
 from .workflow_runner import run_project_workflow
 from .project_store import (
+    PROJECT_FILENAME,
+    backfill_manifest_summary_fields,
     build_project_summary,
     create_project,
     create_project_from_template,
@@ -45,7 +47,11 @@ from .project_store import (
     save_project,
     write_json,
 )
-from .sample_projects import FIRST_BUILTIN_SAMPLE_PROJECT_NAME, reconcile_builtin_sample_projects
+from .sample_projects import (
+    BUILTIN_SAMPLE_PROJECT_DATA_REVISION,
+    FIRST_BUILTIN_SAMPLE_PROJECT_NAME,
+    reconcile_builtin_sample_projects,
+)
 
 ProgressCallback = Callable[[float, str, dict[str, Any] | None], None]
 
@@ -124,6 +130,8 @@ def workflow_progress_detail_from_run_record(
         "elapsed_ms": elapsed_ms,
         "detail": detail_message,
         "node_states": node_states,
+        "node_state_delta": node_states,
+        "full_node_state_sync": True,
     }
 
 
@@ -134,40 +142,26 @@ def parse_payload() -> dict[str, Any]:
 
 
 def ensure_bootstrap_project() -> None:
-    project_dirs = list_project_dirs()
     workspace_state = load_workspace_state()
-    if workspace_state.get("bootstrap_completed"):
-        created = reconcile_builtin_sample_projects(create_missing=False)
-        if workspace_state.get("current_project_id") is None:
-            starter_manifest = next(
-                (manifest for _project_dir, manifest in created if manifest.get("name") == FIRST_BUILTIN_SAMPLE_PROJECT_NAME),
-                created[0][1] if created else None,
-            )
-            if starter_manifest is not None:
-                remember_project(starter_manifest["id"], set_current=True)
-        mark_workspace_bootstrapped()
+    if (
+        workspace_state.get("bootstrap_completed")
+        and int(workspace_state.get("builtin_samples_revision") or 0) >= BUILTIN_SAMPLE_PROJECT_DATA_REVISION
+    ):
         return
 
-    if project_dirs:
-        created = reconcile_builtin_sample_projects(create_missing=False)
-        if workspace_state.get("current_project_id") is None:
-            starter_manifest = next(
-                (manifest for _project_dir, manifest in created if manifest.get("name") == FIRST_BUILTIN_SAMPLE_PROJECT_NAME),
-                created[0][1] if created else None,
-            )
-            if starter_manifest is not None:
-                remember_project(starter_manifest["id"], set_current=True)
-        mark_workspace_bootstrapped()
-        return
-
-    created = reconcile_builtin_sample_projects(create_missing=True)
-    starter_manifest = next(
-        (manifest for _project_dir, manifest in created if manifest.get("name") == FIRST_BUILTIN_SAMPLE_PROJECT_NAME),
-        created[0][1] if created else None,
+    project_dirs = list_project_dirs()
+    created = reconcile_builtin_sample_projects(
+        create_missing=not project_dirs and not workspace_state.get("bootstrap_completed"),
     )
-    if starter_manifest is not None and workspace_state.get("current_project_id") is None:
-        remember_project(starter_manifest["id"], set_current=True)
-    mark_workspace_bootstrapped()
+    if workspace_state.get("current_project_id") is None:
+        starter_manifest = next(
+            (manifest for _project_dir, manifest in created if manifest.get("name") == FIRST_BUILTIN_SAMPLE_PROJECT_NAME),
+            created[0][1] if created else None,
+        )
+        if starter_manifest is not None:
+            remember_project(starter_manifest["id"], set_current=True)
+
+    mark_workspace_bootstrapped(builtin_samples_revision=BUILTIN_SAMPLE_PROJECT_DATA_REVISION)
 
 
 def load_project_or_fail(project_id: str) -> tuple[Any, dict[str, Any], list[dict[str, Any]]]:
@@ -278,10 +272,16 @@ def action_create_project_from_template(payload: dict[str, Any], progress_callba
 def action_open_project(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
     notify(progress_callback, 0.1, "正在打开项目")
     ensure_bootstrap_project()
-    project_dir, manifest, corpus = load_project_or_fail(payload["project_id"])
-    remember_project(manifest["id"], set_current=True)
+    project_dir = find_project_dir(payload["project_id"])
+    if project_dir is None:
+        raise ValueError(f"Project {payload['project_id']} not found")
+    manifest = read_json(project_dir / PROJECT_FILENAME)
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Invalid project manifest: {project_dir / PROJECT_FILENAME}")
+    manifest = backfill_manifest_summary_fields(project_dir, manifest)
+    remember_project(str(manifest["id"]), set_current=True)
     notify(progress_callback, 1.0, "项目已打开")
-    return build_project_summary(project_dir, manifest, corpus)
+    return build_project_summary(project_dir, manifest)
 
 
 def action_duplicate_project(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:
@@ -384,6 +384,7 @@ def action_run_workflow(payload: dict[str, Any], progress_callback: ProgressCall
     )
     save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections={"manifest", "corpus"})
     remember_project(manifest["id"], set_current=True)
+    saved_manifest, _saved_corpus = load_project(project_dir)
     notify(
         progress_callback,
         1.0,
@@ -396,7 +397,7 @@ def action_run_workflow(payload: dict[str, Any], progress_callback: ProgressCall
     )
     return {
         "run": run_record,
-        "project": manifest,
+        "project": saved_manifest,
     }
 
 
@@ -809,6 +810,8 @@ def action_run_experiment_matrix(payload: dict[str, Any], progress_callback: Pro
     )
     save_project(project_dir, manifest, result["corpus"], already_normalized=True, dirty_sections={"manifest", "corpus"})
     remember_project(manifest["id"], set_current=True)
+    saved_manifest, _saved_corpus = load_project(project_dir)
+    result["project"] = saved_manifest
     notify(progress_callback, 1.0, "实验矩阵运行完成")
     return result
 

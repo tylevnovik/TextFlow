@@ -720,6 +720,51 @@ def test_manual_workflow_native_dag_hits_node_cache_on_second_run(isolated_works
     assert first_run["workflow_hash"] == second_run["workflow_hash"]
 
 
+def test_manual_workflow_runtime_meta_can_disable_node_cache(isolated_workspace):
+    project_name = f"pytest-{uuid4().hex[:8]}"
+    project_dir, manifest, corpus = _create_test_project(project_name, "native dag cache override")
+    workflow = manifest["workflow_definitions"][0]
+    workflow["source"] = "manual"
+    _disconnect_export_sinks(workflow)
+    _bypass_analysis_except(workflow)
+
+    token_node = _workflow_node(workflow, "tokenize")
+    token_node["runtime_meta"] = {
+        **dict(token_node.get("runtime_meta") or {}),
+        "cache_enabled": False,
+    }
+
+    manifest, processed_corpus, first_run = run_project_workflow(project_dir, manifest, corpus)
+    _persist_runtime_project(project_dir, manifest, processed_corpus)
+
+    manifest, reloaded_corpus = load_project(project_dir)
+    workflow = manifest["workflow_definitions"][0]
+    workflow["source"] = "manual"
+    _disconnect_export_sinks(workflow)
+    _bypass_analysis_except(workflow)
+    token_node = _workflow_node(workflow, "tokenize")
+    token_node["runtime_meta"] = {
+        **dict(token_node.get("runtime_meta") or {}),
+        "cache_enabled": False,
+    }
+
+    manifest, _processed_corpus, second_run = run_project_workflow(project_dir, manifest, reloaded_corpus)
+
+    token_cache_files = list((project_dir / "cache" / "nodes" / token_node["node_id"]).glob("*.pkl"))
+    token_runs = [
+        node_run
+        for node_run in second_run["node_runs"]
+        if str(node_run.get("node_id") or "") == token_node["node_id"]
+    ]
+
+    assert first_run["status"] == "completed"
+    assert second_run["status"] == "completed"
+    assert token_runs
+    assert not token_cache_files
+    assert not any(node_run.get("cache_hit") for node_run in token_runs)
+    assert all(node_run.get("cache_path") in (None, "") for node_run in token_runs)
+
+
 def test_workflow_payload_hash_ignores_ui_only_changes():
     workflow = default_workflow_definition()
     baseline_hash = workflow_payload_hash(workflow)
@@ -783,6 +828,33 @@ def test_manual_workflow_cached_nodes_do_not_emit_running_progress_on_second_run
         and str((detail.get("node_states") or {}).get(str(detail.get("current_node_id")), {}).get("status") or "") == "running"
         for detail in progress_details
     )
+
+
+def test_manual_workflow_progress_details_emit_full_node_state_sync(isolated_workspace):
+    project_name = f"pytest-{uuid4().hex[:8]}"
+    project_dir, manifest, corpus = _create_test_project(project_name, "native dag full sync progress semantics")
+    workflow = manifest["workflow_definitions"][0]
+    workflow["source"] = "manual"
+    _disconnect_export_sinks(workflow)
+    _bypass_analysis_except(workflow, "frequency_statistics", "term_document_analysis")
+
+    progress_details: list[dict[str, Any]] = []
+
+    def progress_callback(_progress: float, _message: str, detail: dict[str, Any] | None = None) -> None:
+        if detail and detail.get("kind") == "workflow_run":
+            progress_details.append(deepcopy(detail))
+
+    run_project_workflow(
+        project_dir,
+        manifest,
+        corpus,
+        progress_callback=progress_callback,
+    )
+
+    runtime_details = [detail for detail in progress_details if isinstance(detail.get("node_states"), dict)]
+
+    assert runtime_details
+    assert all(detail.get("full_node_state_sync") is True for detail in runtime_details)
 
 
 def test_dag_parallel_worker_count_respects_env_overrides(monkeypatch):

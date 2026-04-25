@@ -256,6 +256,17 @@ def _read_cache_payload(project_dir: Path, node_id: str, cache_key: str) -> tupl
     return outputs, {str(key): str(value) for key, value in output_hashes.items()}, str(cache_path)
 
 
+def _node_cache_enabled(node: dict[str, Any], definition: dict[str, Any]) -> bool:
+    runtime = definition.get("runtime") if isinstance(definition.get("runtime"), dict) else {}
+    if not bool(runtime.get("cacheable", False)):
+        return False
+    runtime_meta = node.get("runtime_meta") if isinstance(node.get("runtime_meta"), dict) else {}
+    cache_override = runtime_meta.get("cache_enabled")
+    if cache_override is None:
+        return True
+    return bool(cache_override)
+
+
 def _node_cache_key(
     manifest: dict[str, Any],
     workflow_definition: dict[str, Any],
@@ -511,6 +522,8 @@ def _export_selection_from_active_graph(
         source_port_id = str(edge.get("from_port") or "")
         source_definition = definitions_by_type.get(source_type) or {}
         result_key = _result_key_for_output_port(source_definition, source_port_id)
+        sink_config = to_node.get("config") if isinstance(to_node.get("config"), dict) else {}
+        include_sink_audit = bool(sink_config.get("include_audit", True))
         if sink_type == "save_csv" and result_key:
             selection["csv_tables"].add(result_key)
         if sink_type == "save_xlsx" and result_key:
@@ -520,9 +533,20 @@ def _export_selection_from_active_graph(
         if sink_type == "save_html_report":
             if result_key and not _include_output_in_html_audit(source_definition, source_port_id):
                 selection["html_result_keys"].add(result_key)
-            if _include_output_in_html_audit(source_definition, source_port_id):
+            if include_sink_audit and _include_output_in_html_audit(source_definition, source_port_id):
                 selection["include_audit"].add("audit")
     return selection
+
+
+def _audit_requested(export_selection: dict[str, set[str]]) -> bool:
+    return any(
+        (
+            "audit" in set(export_selection.get("include_audit") or set()),
+            "audit_table" in set(export_selection.get("csv_tables") or set()),
+            "audit_table" in set(export_selection.get("xlsx_tables") or set()),
+            "audit_table" in set(export_selection.get("html_result_keys") or set()),
+        )
+    )
 
 
 @dataclass
@@ -571,6 +595,7 @@ class WorkflowExecutionContext:
         run_id: str,
         progress_callback: Any = None,
         total_nodes: int = 1,
+        audit_enabled: bool = True,
     ) -> None:
         self.project_dir = project_dir
         self.manifest = manifest
@@ -583,6 +608,7 @@ class WorkflowExecutionContext:
         self.run_id = run_id
         self.progress_callback = progress_callback
         self.total_nodes = max(total_nodes, 1)
+        self.audit_enabled = audit_enabled
         self.current_node_index = 1
         self.current_node_id: str | None = None
         self.last_completed_node_id: str | None = None
@@ -617,7 +643,7 @@ class WorkflowExecutionContext:
         self.log(node or {}, message, "warning")
 
     def add_audits(self, rows: list[dict[str, Any]]) -> None:
-        if not rows:
+        if not self.audit_enabled or not rows:
             return
         with self._lock:
             self.result_bundle["audit_table"] = [*self.result_bundle["audit_table"], *rows]
@@ -728,10 +754,13 @@ class WorkflowExecutionContext:
             if not force and now - self._last_runtime_emit_at < 0.2:
                 return
             self._last_runtime_emit_at = now
+            # The desktop shell polls the latest task snapshot instead of consuming
+            # every intermediate progress event. Emit the full runtime state on
+            # every update so fast node transitions do not lose completion status.
             detail_payload = self.runtime_detail(
                 stage=stage,
                 detail=detail or message,
-                full_node_state_sync=full_node_state_sync,
+                full_node_state_sync=True,
             )
         dispatch_progress_callback(
             self.progress_callback,
@@ -944,7 +973,7 @@ def _prepare_node_execution(
         input_payload[port_id] = values if bool(port.get("allow_multiple")) else values[-1]
         input_hashes[port_id] = source_hashes if bool(port.get("allow_multiple")) else source_hashes[-1]
 
-    cacheable = bool(runtime.get("cacheable", False))
+    cacheable = _node_cache_enabled(node, definition)
     cache_key = _node_cache_key(manifest, workflow_definition, node, executor_id, input_hashes) if cacheable else None
     cached = None if node_id in (dirty_node_ids or set()) else (_read_cache_payload(project_dir, node_id, cache_key) if cache_key else None)
     return PreparedNodeExecution(
@@ -1190,6 +1219,7 @@ def run_project_workflow_native(
         run_id=run_record["run_id"],
         progress_callback=progress_callback,
         total_nodes=total_nodes,
+        audit_enabled=_audit_requested(export_selection),
     )
 
     incoming_by_port: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)

@@ -55,8 +55,8 @@ class NodeRegistry:
 
 
 class NodeRegistryBuilder:
-    def __init__(self, pipeline_definition: dict[str, Any] | None = None) -> None:
-        self.pipeline_definition = deepcopy(pipeline_definition) if isinstance(pipeline_definition, dict) else None
+    def __init__(self, runtime_profile_definition: dict[str, Any] | None = None) -> None:
+        self.runtime_profile_definition = deepcopy(runtime_profile_definition) if isinstance(runtime_profile_definition, dict) else None
         self._definitions: list[dict[str, Any]] = []
         self._definitions_by_type: dict[str, dict[str, Any]] = {}
         self._compilers: dict[str, NodeCompilerHook] = {}
@@ -118,13 +118,13 @@ class NodeRegistryBuilder:
         )
 
 
-def build_node_registry(pipeline: dict[str, Any] | None = None) -> NodeRegistry:
+def build_node_registry(runtime_profile: dict[str, Any] | None = None) -> NodeRegistry:
     from .node_compilers import register_builtin_node_compilers
     from .node_definitions import register_builtin_node_definitions
     from .node_executors import register_builtin_node_executors
     from .node_plugins import load_node_plugins
 
-    builder = NodeRegistryBuilder(pipeline)
+    builder = NodeRegistryBuilder(runtime_profile)
     register_builtin_node_definitions(builder)
     register_builtin_node_compilers(builder)
     register_builtin_node_executors(builder)
@@ -132,9 +132,9 @@ def build_node_registry(pipeline: dict[str, Any] | None = None) -> NodeRegistry:
     return builder.build()
 
 
-def builtin_node_definitions(pipeline: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    return build_node_registry(pipeline).definitions
+def builtin_node_definitions(runtime_profile: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    return build_node_registry(runtime_profile).definitions
 
 
-def builtin_node_definition_map(pipeline: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
-    return build_node_registry(pipeline).definitions_by_type
+def builtin_node_definition_map(runtime_profile: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    return build_node_registry(runtime_profile).definitions_by_type

@@ -7,18 +7,18 @@ The product must be install-and-run and must not require users to configure Pyth
 
 ## Product Priorities
 1. Stable shipping quality over flashy features
-2. Project-based organization of data, pipelines, dictionaries, and outputs
+2. Project-based organization of data, workflows, dictionaries, and outputs
 3. Reproducible preprocessing workflow
 4. Rule auditability and run history
 5. Responsive desktop UI
-6. Future compatibility with node-based pipeline editor
+6. Future compatibility with node-based workflow editor
 
 ## Mandatory V1 Features
 - Project management
 - Corpus import from txt/csv/xlsx/json
 - Metadata mapping with source profiles
 - Main-text construction from one or multiple fields
-- Cleaning and normalization pipeline
+- Cleaning and normalization workflow
 - Tokenization with phrase preservation
 - Dictionary center
 - Stopword / synonym / standard term / exclusion handling
@@ -35,7 +35,7 @@ The product must be install-and-run and must not require users to configure Pyth
 - Saved runs and logs
 
 ## Explicit Non-Goals for V1
-- Node-based drag-and-drop pipeline UI
+- Node-based drag-and-drop workflow UI
 - Cloud sync
 - Multi-user collaboration
 - Native mobile apps
@@ -45,9 +45,9 @@ The product must be install-and-run and must not require users to configure Pyth
 - Frontend: React + TypeScript
 - Core analysis engine: Python sidecar/service
 - Separate UI, domain types, and execution engine cleanly
-- Do not hardcode all pipeline logic into UI components
+- Do not hardcode workflow logic into UI components
 - Do not couple project file format to transient UI state
-- Reserve graph-based pipeline schema even if V1 executes linearly
+- Reserve graph-based workflow schema even if V1 executes linearly
 
 ## Code Quality Rules
 - Prefer typed interfaces and clear domain models

@@ -33,6 +33,7 @@ import { ReviewQueuePanel } from "./features/review/ReviewQueuePanel";
 import { coerceReviewTasks } from "./features/review/reviewTypes";
 import { RunHistoryPanel } from "./features/results/RunHistoryPanel";
 import { RunDiffPanel } from "./features/results/RunDiffPanel";
+import { runArtifactCompactSummary } from "./runArtifacts";
 import { useTaskProgress, useWorkspace } from "./store/workspaceStore";
 import {
   addWorkflowNodeByType,
@@ -1493,6 +1494,8 @@ function ProjectPage() {
     return <EmptyState title="还没有项目" body="先在首页创建或打开一个 `.tfproj` 项目。" />;
   }
 
+  const recentProjectRuns = project.run_history.slice(-3).reverse();
+
   return (
     <>
       <div className="stat-grid">
@@ -1515,7 +1518,14 @@ function ProjectPage() {
           <p className="body-copy">{project.description}</p>
         </Panel>
 
-        <Panel title="源文件与最近运行">
+        <Panel
+          title="源文件与最近运行"
+          actions={
+            <button type="button" className="toolbar-button ghost" onClick={() => setActivePage("results")}>
+              查看历史记录
+            </button>
+          }
+        >
           <ul className="micro-list">
             {project.source_files.slice(0, 5).map((source) => (
               <li key={source.id}>
@@ -1524,7 +1534,7 @@ function ProjectPage() {
             ))}
           </ul>
           <div className="stack-list">
-            {project.run_history.slice().reverse().map((run) => (
+            {recentProjectRuns.map((run) => (
               <article className="run-card" key={run.run_id}>
                 <div className="run-head">
                   <strong>{run.run_id}</strong>
@@ -1534,13 +1544,20 @@ function ProjectPage() {
                   {run.started_at} → {run.ended_at ?? "处理"}
                 </p>
                 <p className="muted">{run.run_scope_summary ?? "处理对象：项目内全部资料"}</p>
-                <ul className="micro-list">
-                  {run.logs.map((entry) => (
-                    <li key={`${run.run_id}-${entry.step}-${entry.message}`}>{entry.step}: {entry.message}</li>
-                  ))}
-                </ul>
+                <div className="run-history-tags">
+                  <span className="pill">{run.processed_document_count} docs</span>
+                  <span className="pill">{run.artifacts.length} 份产物</span>
+                  {run.warnings.length > 0 && <span className="pill">{run.warnings.length} 个警告</span>}
+                  {run.errors.length > 0 && <span className="pill">{run.errors.length} 个错误</span>}
+                </div>
               </article>
             ))}
+            {!recentProjectRuns.length && (
+              <div className="status-panel">
+                <strong>还没有运行记录</strong>
+                <span className="muted">完成一次处理后，这里只显示最近几次运行摘要。</span>
+              </div>
+            )}
           </div>
         </Panel>
       </div>
@@ -2301,7 +2318,8 @@ function WorkflowEditorPage() {
     ? `${selectedEdgeSourceNode?.label ?? selectedEdge.from_node} -> ${selectedEdgeTargetNode?.label ?? selectedEdge.to_node}`
     : "";
   const latestRun = project.run_history.at(-1);
-  const liveWorkflowRun = taskProgress.action === "run-workflow"
+  const liveWorkflowRun = taskProgress.status === "running"
+    && taskProgress.action === "run-workflow"
     && taskProgress.detail?.kind === "workflow_run"
     && (!taskProgress.detail.workflow_id || taskProgress.detail.workflow_id === draftWorkflow.workflow_id)
     ? taskProgress.detail
@@ -3325,7 +3343,7 @@ function WorkflowEditorPage() {
             {project.results.report_files.slice(0, 5).map((path) => <li key={path}>{path}</li>)}
             {!project.results.report_files.length && <li>最近一次运行还没有导出文件。</li>}
           </ul>
-          <div className="status-panel"><strong>运行产物摘要</strong><span>{latestArtifacts.map((artifact) => `${artifact.step}:${artifact.record_count}`).join(" / ") || "暂无运行产物摘要"}</span></div>
+          <div className="status-panel"><strong>运行产物摘要</strong><span>{latestArtifacts.map((artifact) => runArtifactCompactSummary(artifact)).join(" / ") || "暂无运行产物摘要"}</span></div>
         </Panel>
       );
     }

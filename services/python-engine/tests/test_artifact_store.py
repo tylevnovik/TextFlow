@@ -15,3 +15,4 @@ def test_artifact_preview_loads_without_materializing_full_payload(scratch_dir):
     assert "rows" in preview
     assert len(preview["rows"]) == 50
     assert len(full_payload) == 75
+    assert artifact["path"].endswith(".json.gz")

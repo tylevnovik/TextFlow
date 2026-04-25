@@ -21,6 +21,7 @@ from .review_store import create_review_task
 from .sample_dataset_cache import ensure_public_sample_cache_available, read_normalized_sample_cache, sample_data_cache_root
 
 FIRST_BUILTIN_SAMPLE_PROJECT_NAME = "示例 01 - 基础文本预处理"
+BUILTIN_SAMPLE_PROJECT_DATA_REVISION = 3
 NODE_DEFINITION_BY_TYPE = {
     definition["type"]: definition for definition in build_builtin_node_definitions()
 }
@@ -66,7 +67,12 @@ BUILTIN_SAMPLE_PROJECTS: list[dict[str, Any]] = [
         ],
         "workflow_name": "基础文本预处理工作流",
         "import_template_overrides": {"text_build": {"mode": "concat_fields", "fields": ["raw_text"], "delimiter": "\n\n", "skip_empty": True}},
-        "node_config_overrides": {"clean_text": {"strip_html": True}, "normalize_text": {"normalize_whitespace": True}, "save_html_report": {"include_audit": True}},
+        "node_config_overrides": {
+            "clean_text": {"strip_html": True},
+            "normalize_text": {"normalize_whitespace": True},
+            "filter_terms": {"min_term_frequency": 3},
+            "save_html_report": {"include_audit": False},
+        },
         "dictionary_terms": {"phrase_lexicon": [("text mining", "text_mining"), ("自然语言处理", "自然语言处理")]},
         "review_tasks": [],
         "experiment_specs": [],
@@ -347,6 +353,12 @@ def _builtin_sample_project_requires_refresh(
         return True
     if list(sample_project.get("source_datasets") or []) != list(spec["source_datasets"]):
         return True
+    try:
+        data_revision = int(sample_project.get("data_revision") or 0)
+    except (TypeError, ValueError):
+        data_revision = 0
+    if data_revision != BUILTIN_SAMPLE_PROJECT_DATA_REVISION:
+        return True
     if not corpus:
         return True
     return any(_is_synthetic_placeholder_row(row) for row in corpus[:12])
@@ -468,6 +480,14 @@ def _apply_node_config(workflow: dict[str, Any], node_type: str, config: dict[st
     node["config"] = {**dict(node.get("config") or {}), **deepcopy(config)}
 
 
+def _apply_node_runtime_meta(workflow: dict[str, Any], node_type: str, runtime_meta_patch: dict[str, Any]) -> None:
+    node = _node_by_type(workflow, node_type)
+    node["runtime_meta"] = {
+        **dict(node.get("runtime_meta") or {}),
+        **deepcopy(runtime_meta_patch),
+    }
+
+
 def _add_note_and_group(workflow: dict[str, Any], *, group_title: str, note_text: str, x: int = 40, y: int = 40) -> None:
     workflow["nodes"].append(_new_registry_node("group", f"group-{group_title}", {"title": group_title}, x=x, y=y))
     workflow["nodes"].append(_new_registry_node("note", f"note-{group_title}", {"text": note_text}, x=x + 24, y=y + 28))
@@ -581,6 +601,9 @@ def _configure_basic_preprocessing_workflow(workflow: dict[str, Any]) -> None:
     _apply_node_config(workflow, "clean_text", {"strip_html": True, "strip_urls": True, "normalize_whitespace": True})
     _apply_node_config(workflow, "normalize_text", {"case_mode": "lower", "normalize_numbers": True})
     _apply_node_config(workflow, "tokenize", {"language_mode": "mixed"})
+    _apply_node_config(workflow, "filter_terms", {"min_term_frequency": 3})
+    for node_type in ("clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms"):
+        _apply_node_runtime_meta(workflow, node_type, {"cache_enabled": False})
     _connect(workflow, "node-corpus-input", "corpus", "node-clean-text", "corpus_in")
     _connect(workflow, "node-clean-text", "clean_corpus", "node-normalize-text", "corpus_in")
     _connect(workflow, "node-normalize-text", "normalized_corpus", "node-tokenize", "corpus_in")
@@ -1337,6 +1360,7 @@ def _build_builtin_sample_manifest(
     manifest["settings"]["sample_project"] = {
         "order": spec["order"],
         "slug": spec["slug"],
+        "data_revision": BUILTIN_SAMPLE_PROJECT_DATA_REVISION,
         "difficulty": spec["difficulty"],
         "goal": spec["goal"],
         "workflow_name": spec["workflow_name"],
