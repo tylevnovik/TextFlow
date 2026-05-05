@@ -471,6 +471,32 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
             "runtime": _runtime("cleaning", "workflow.clean_text", cacheable=True, previewable=True),
         },
         {
+            "type": "normalize_metadata",
+            "title": "元数据标准化",
+            "category": "process",
+            "description": "标准化机构、国家/地区、年份和类别字段。",
+            "inputs": [_port("corpus_in", "CorpusTable", "语料输入")],
+            "outputs": [
+                _port("normalized_corpus", "CorpusTable", "标准化后语料"),
+                _port(
+                    "metadata_audit_table",
+                    "MetadataAuditTable",
+                    "元数据审计表",
+                    result_bundle_key="metadata_audit_table",
+                    include_in_html_audit=True,
+                ),
+            ],
+            "params": [
+                _string_param("institution_aliases_text", "机构别名映射", ""),
+                _string_param("country_aliases_text", "国家别名映射", ""),
+                _string_param("category_aliases_text", "类别别名映射", ""),
+                _string_param("split_delimiters", "分隔符", ";；|"),
+                _bool_param("keep_first_institution", "仅保留首个机构", True),
+                _string_param("year_source_field", "年份来源字段", "year"),
+            ],
+            "runtime": _runtime("normalization", "workflow.normalize_metadata", cacheable=True, previewable=True),
+        },
+        {
             "type": "normalize_text",
             "title": "统一写法",
             "category": "process",

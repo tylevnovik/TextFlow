@@ -263,6 +263,7 @@ BUILTIN_NODE_COMPILERS = {
     "manual_review_gate": _compile_passthrough_node,
     "dictionary_input": _compile_dictionary_input,
     "clean_text": _merge_runtime_section("cleaning", "cleaning"),
+    "normalize_metadata": _compile_passthrough_node,
     "normalize_text": _merge_runtime_section("normalization", "normalization"),
     "tokenize": _merge_runtime_section("tokenization", "tokenization"),
     "apply_dictionary_rules": _merge_runtime_section("dictionary", "dictionary_application"),

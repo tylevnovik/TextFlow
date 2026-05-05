@@ -151,6 +151,17 @@ export const builtinWorkflowNodeSchema: Record<WorkflowNodeType, GeneratedWorkfl
     outputs: [{ port_id: "clean_corpus", port_type: "CleanCorpus", label: "清洗后语料" }],
     stepId: "cleaning"
   },
+  normalize_metadata: {
+    label: "元数据标准化",
+    description: "标准化机构、国家/地区、年份和类别字段。",
+    category: "process",
+    inputs: [{ port_id: "corpus_in", port_type: "CorpusTable", label: "语料输入" }],
+    outputs: [
+      { port_id: "normalized_corpus", port_type: "CorpusTable", label: "标准化后语料" },
+      { port_id: "metadata_audit_table", port_type: "MetadataAuditTable", label: "元数据审计表", result_bundle_key: "metadata_audit_table", include_in_html_audit: true }
+    ],
+    stepId: "normalization"
+  },
   normalize_text: {
     label: "统一写法",
     description: "统一时间、数字与正则替换后的文本表达。",

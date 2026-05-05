@@ -1410,6 +1410,7 @@ def empty_result_bundle() -> dict[str, Any]:
         "institution_keyword_cooccurrence": [],
         "institution_topic_cooccurrence": [],
         "clustering_result": [],
+        "metadata_audit_table": [],
         "audit_table": [],
         "report_files": [],
     }

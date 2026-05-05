@@ -1554,3 +1554,81 @@ def test_incremental_scope_can_limit_workflow_to_changed_documents(isolated_work
     assert run_record["run_mode"] == "incremental"
     assert run_record["processed_document_count"] == 1
     assert {row["doc_id"] for row in manifest["results"]["term_document_table"]} == {"DOC-004"}
+
+
+def test_normalize_metadata_node_standardizes_institution_country_year_and_category(isolated_workspace):
+    project_dir, manifest = create_project("metadata normalization", "metadata normalization node")
+    corpus = [
+        {
+            "doc_id": "DOC-1",
+            "title": "A",
+            "raw_text": "rare earth text",
+            "year": "2024-05-01",
+            "institution": "Univ. A; University A",
+            "country_or_region": "CN",
+            "category_or_tag": "C22B59/00",
+            "extra_metadata": {},
+            "status": "ready",
+            "source_profile": "wos",
+        }
+    ]
+    manifest["dictionary_set"] = _build_test_dictionary_set()
+    _tune_workflow_for_tests(manifest["workflow_definitions"][0])
+    workflow = manifest["workflow_definitions"][0]
+
+    # inject normalize_metadata between corpus_input and clean_text
+    from app.node_definitions import build_builtin_node_definitions
+    node_defs = {d["type"]: d for d in build_builtin_node_definitions()}
+    norm_meta_node = {
+        "node_id": "node-normalize-metadata",
+        "node_type": "normalize_metadata",
+        "label": "元数据标准化",
+        "position": {"x": 520, "y": 330},
+        "size": {"w": 230, "h": 190},
+        "inputs": deepcopy(node_defs["normalize_metadata"]["inputs"]),
+        "outputs": deepcopy(node_defs["normalize_metadata"]["outputs"]),
+        "config": {
+            "institution_aliases_text": "Univ. A\tUniversity A",
+            "country_aliases_text": "",
+            "category_aliases_text": "",
+            "split_delimiters": ";；|",
+            "keep_first_institution": True,
+            "year_source_field": "year",
+        },
+        "ui_state": {"collapsed": False, "bypassed": False},
+        "runtime_meta": {"step_id": "normalization", "node_impl_version": "2.0.0"},
+    }
+    workflow["nodes"].append(norm_meta_node)
+    # reconnect: corpus_input -> normalize_metadata -> clean_text
+    workflow["edges"] = [
+        edge for edge in workflow["edges"]
+        if not (edge["from_node"] == "node-corpus-input" and edge["to_node"] == "node-clean-text")
+    ]
+    workflow["edges"].append({
+        "edge_id": "edge-corpus-to-normalize-metadata",
+        "from_node": "node-corpus-input",
+        "from_port": "corpus",
+        "to_node": "node-normalize-metadata",
+        "to_port": "corpus_in",
+    })
+    workflow["edges"].append({
+        "edge_id": "edge-normalize-metadata-to-clean",
+        "from_node": "node-normalize-metadata",
+        "from_port": "normalized_corpus",
+        "to_node": "node-clean-text",
+        "to_port": "corpus_in",
+    })
+
+    manifest, _processed_corpus, run_record = run_project_workflow(project_dir, manifest, corpus)
+
+    assert run_record["status"] == "completed"
+    doc = _processed_corpus[0]
+    assert doc["institution"] == "University A"
+    assert doc["country_or_region"] == "China"
+    assert doc["year"] == 2024
+    assert doc["extra_metadata"]["metadata_normalization_audit"] is True
+    assert manifest["results"]["metadata_audit_table"]
+    audit = manifest["results"]["metadata_audit_table"]
+    assert any(row["field"] == "institution" for row in audit)
+    assert any(row["field"] == "country_or_region" for row in audit)
+    assert any(row["field"] == "year" for row in audit)
