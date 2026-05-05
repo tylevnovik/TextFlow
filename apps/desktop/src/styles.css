@@ -52,7 +52,7 @@ button {
   width: 100%;
   height: 100%;
   min-height: 100vh;
-  overflow: auto;
+  overflow: hidden;
   overscroll-behavior: none;
 }
 
@@ -60,8 +60,9 @@ button {
   position: relative;
   display: grid;
   grid-template-columns: minmax(260px, 300px) 1fr;
-  align-items: start;
-  min-height: 100vh;
+  align-items: stretch;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .background-grid {
@@ -82,7 +83,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
-  height: 100vh;
+  height: 100%;
   overflow-y: auto;
   padding: 2rem;
   border-right: 1px solid var(--line);
@@ -355,9 +356,15 @@ button {
 
 .workflow-node-card-canvas {
   position: absolute;
+  --node-drag-x: 0px;
+  --node-drag-y: 0px;
+  --node-lift-y: 0px;
+  --node-scale: 1;
   touch-action: none;
   user-select: none;
   cursor: default;
+  transform: translate3d(var(--node-drag-x), var(--node-drag-y), 0) translateY(var(--node-lift-y)) scale(var(--node-scale));
+  will-change: transform;
 }
 
 .workflow-node-card.is-selected {
@@ -885,6 +892,8 @@ button {
   position: absolute;
   inset: 0 auto auto 0;
   transform-origin: 0 0;
+  will-change: transform;
+  transform-style: preserve-3d;
 }
 
 .workflow-editor-shell .workflow-edge-path {
@@ -901,6 +910,8 @@ button {
 }
 
 .workflow-editor-shell .workflow-node-card {
+  --node-lift-y: 0px;
+  --node-scale: 1;
   width: 260px;
   min-height: 220px;
   gap: 0.8rem;
@@ -910,10 +921,12 @@ button {
   background: linear-gradient(180deg, rgba(33, 39, 48, 0.98), rgba(20, 24, 31, 0.96));
   color: #eef5fb;
   box-shadow: 0 24px 60px rgba(5, 7, 11, 0.28);
+  transform: translate3d(var(--node-drag-x, 0px), var(--node-drag-y, 0px), 0) translateY(var(--node-lift-y)) scale(var(--node-scale));
+  will-change: transform;
 }
 
 .workflow-editor-shell .workflow-node-card.is-selected {
-  transform: translateY(-3px);
+  --node-lift-y: -3px;
   border-color: rgba(137, 214, 255, 0.46);
   box-shadow: 0 28px 68px rgba(5, 7, 11, 0.34), 0 0 0 1px rgba(137, 214, 255, 0.18);
 }
@@ -923,7 +936,17 @@ button {
 }
 
 .workflow-editor-shell .workflow-node-card.is-dragging {
-  transform: scale(1.015);
+  --node-scale: 1.015;
+}
+
+.workflow-editor-canvas.is-panning .workflow-edge-path,
+.workflow-editor-canvas.is-dragging-node .workflow-edge-path {
+  filter: none;
+}
+
+.workflow-editor-canvas.is-panning .workflow-node-card,
+.workflow-editor-canvas.is-dragging-node .workflow-node-card {
+  transition: none;
 }
 
 .workflow-editor-shell .workflow-node-card.is-runtime-running {
@@ -1477,13 +1500,15 @@ button {
 
 .main-stage {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 1.75rem;
 }
 
 .main-stage.is-workflow-page {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
   overflow: hidden;
 }
 
@@ -1492,6 +1517,7 @@ button {
   justify-content: space-between;
   gap: 2rem;
   align-items: flex-start;
+  flex-shrink: 0;
   margin-bottom: 1.4rem;
 }
 
@@ -1551,17 +1577,26 @@ button {
 .content-grid {
   display: grid;
   gap: 1rem;
+  flex: 1;
+  min-height: 0;
+  align-content: start;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 0.25rem;
+  overscroll-behavior: contain;
 }
 
 .content-grid.is-workflow-page {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  padding-right: 0;
 }
 
 .progress-strip {
   display: grid;
   gap: 0.65rem;
+  flex-shrink: 0;
   margin: 0 0 1rem;
   padding: 0.95rem 1rem;
   border-radius: 20px;
@@ -2483,7 +2518,21 @@ button {
 }
 
 .table-wrap {
+  max-width: 100%;
   overflow-x: auto;
+}
+
+.table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(255, 251, 245, 0.96);
+  backdrop-filter: blur(10px);
+}
+
+.table-wrap td {
+  max-width: 28rem;
+  overflow-wrap: anywhere;
 }
 
 .corpus-review-grid {
@@ -2495,9 +2544,6 @@ button {
 .corpus-browser {
   display: grid;
   gap: 0.7rem;
-  max-height: 900px;
-  overflow-y: auto;
-  padding-right: 0.15rem;
 }
 
 .corpus-row {
@@ -2587,6 +2633,11 @@ th {
 
 .preview-copy {
   white-space: pre-wrap;
+  max-height: min(38vh, 420px);
+  overflow: auto;
+  padding: 0.8rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.46);
 }
 
 .preview-code {
@@ -2655,8 +2706,15 @@ th {
 }
 
 @media (max-width: 1200px) {
+  .app-shell-frame {
+    overflow: auto;
+  }
+
   .app-shell {
     grid-template-columns: 1fr;
+    height: auto !important;
+    min-height: 100vh;
+    overflow: visible;
   }
 
   .sidebar {
@@ -2664,6 +2722,17 @@ th {
     height: auto;
     overflow: visible;
     min-height: auto;
+  }
+
+  .main-stage {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .content-grid {
+    overflow: visible;
+    padding-right: 0;
   }
 
   .hero-panel,

@@ -8,9 +8,7 @@ const primaryPages: PageId[] = ["home", "project", "data", "dictionaries", "work
 export function App() {
   const {
     state: { activePage, snapshot, loading, statusLine, uiScale },
-    setActivePage,
-    runWorkflow,
-    exportProject
+    setActivePage
   } = useWorkspace();
   const progress = useTaskProgress();
 
@@ -36,6 +34,7 @@ export function App() {
     transform: `scale(${uiScale})`,
     transformOrigin: "top left",
     width: `${100 / uiScale}%`,
+    height: `calc(100vh / ${uiScale})`,
     minHeight: `calc(100vh / ${uiScale})`
   } as CSSProperties;
 
@@ -86,23 +85,6 @@ export function App() {
               <h2>{pageMeta[activePage].headline}</h2>
               <p className="topbar-copy">{statusLine}</p>
             </div>
-
-            <div className="toolbar">
-              <button type="button" className="toolbar-button ghost" onClick={() => setActivePage("home")}>
-                回到开始
-              </button>
-              <button type="button" className="toolbar-button" onClick={() => void runWorkflow()} disabled={loading || !project}>
-                开始处理
-              </button>
-              <button
-                type="button"
-                className="toolbar-button accent"
-                onClick={() => void exportProject(["csv", "xlsx", "html", "png"])}
-                disabled={loading || !project}
-              >
-                导出结果
-              </button>
-            </div>
           </header>
 
           {progress.status !== "idle" && (
@@ -120,7 +102,7 @@ export function App() {
             </section>
           )}
 
-          <section className={`content-grid ${isWorkflowPage ? "is-workflow-page" : ""}`}>
+          <section className={`content-grid page-${activePage} ${isWorkflowPage ? "is-workflow-page" : ""}`}>
             <PageView page={activePage} />
           </section>
         </main>

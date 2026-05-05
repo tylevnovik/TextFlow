@@ -9,7 +9,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from .cli import execute_action
-from .defaults import utc_now_iso
+from .defaults import json_ready, utc_now_iso
 
 
 class TaskManager:
@@ -118,7 +118,7 @@ def build_handler(task_manager: TaskManager, shutdown_server: Callable[[], None]
             return json.loads(raw.decode("utf-8"))
 
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
-            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            body = json.dumps(json_ready(payload), ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))

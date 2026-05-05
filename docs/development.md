@@ -50,13 +50,29 @@ npm run lint
 
 ```powershell
 npm run test:engine
+npm run test:engine:full
 ```
 
 或直接：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\test-engine.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\test-engine.ps1 -Suite fast
+powershell -ExecutionPolicy Bypass -File .\scripts\test-engine.ps1 -Suite full
 ```
+
+说明：
+
+- `npm run test:engine` 等价于 `test:engine:fast`，是默认的日常引擎回归集。
+- `npm run test:engine:full` 会额外跑官方样例生成、样例刷新、导出触发运行、打包期样例模板等重覆盖测试。
+- 未来 AI 在没有额外对话提示时，应默认按改动范围自动选择测试层级，而不是一律跑最慢的全量集。
+
+### 引擎测试分层规则
+
+- 只改前端、样式或文档：通常不需要 Python 引擎测试。
+- 改普通引擎逻辑但不涉及官方样例打包/引导：跑 `npm run test:engine`。
+- 改工作区首次启动、官方样例、public sample cache、sidecar 打包脚本、导出会触发样例运行的链路：跑 `npm run test:engine:full`。
+- 如果改动同时碰到 `services/python-engine/app/sample_projects.py`、`services/python-engine/app/bundled_sample_workspace.py`、`services/python-engine/app/cli.py` 的 bootstrap 路径、`scripts/build-bundled-sample-workspace.ps1` 或 `scripts/build-python-sidecar.ps1`，直接视为 `full`。
+- 发布前或对测试层级有疑问时，补跑 `npm run test:engine:full`。
 
 ### 缩小官方样例规模用于测试
 
@@ -99,6 +115,20 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-python-sidecar.ps1
 services/python-engine/dist/textflow-engine/
 ```
 
+### 预构建官方样例工作区
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-bundled-sample-workspace.ps1
+```
+
+说明：
+
+- 该脚本会先校验/刷新 `app/public_sample_cache`，再基于当前样例定义构建一个完整的官方样例工作区模板。
+- `build-python-sidecar.ps1` 会自动调用它，并把生成出的 `app/bundled_sample_workspace/` 一并打进 sidecar。
+- 安装包里的首次启动会优先恢复这份预构建模板，而不是现场重建 9 个样例项目。
+- 如果你修改了官方样例定义，重新打包后新安装包会自动带上新的样例工作区。
+- `-RowLimit` 只建议用于开发或测试模板；正式打包默认带完整官方规模。
+
 ### 构建安装包
 
 ```powershell
@@ -139,11 +169,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-large-benchmark.ps1 --lim
 
 ## 当前测试与验证情况
 
-截至 `2026-04-25`，本地已验证或纳入最终验证清单：
+截至 `2026-04-28`，本地已验证或纳入最终验证清单：
 
 - `npm run lint` 通过
 - `npm run test --workspace apps/desktop` 通过
 - `npm run test:engine` 通过
+- `npm run test:engine:full` 通过
+- `powershell -ExecutionPolicy Bypass -File .\scripts\build-python-sidecar.ps1` 通过
 - `npm run build` 通过
 - `npm run tauri:build --workspace apps/desktop` 通过，并已产出 NSIS installer
 
@@ -164,7 +196,7 @@ apps/desktop/src-tauri/target/release/bundle/nsis/TextFlow Studio_0.1.1_x64-setu
 
 - 目前已有少量前端组件/store 测试，但还没有系统化前端测试矩阵和 E2E 测试。
 - 仓库中没有 CI 配置，回归主要依赖本地命令。
-- Python 测试耗时约 3 分钟，适合在较完整改动后执行。
+- `test:engine:fast` 应保持适合日常迭代；`test:engine:full` 会明显更慢，因为它覆盖样例生成、刷新和打包期模板校验。
 - sidecar 打包依赖 `PyInstaller`，首次构建会慢一些。
 - 大语料性能当前主要受关键词提取和导出写盘影响。
 
@@ -173,5 +205,6 @@ apps/desktop/src-tauri/target/release/bundle/nsis/TextFlow Studio_0.1.1_x64-setu
 1. 先跑 `bootstrap-python.ps1` 和 `bootstrap-frontend.ps1`
 2. 日常修改时用 `npm run dev`
 3. 提交前至少跑 `npm run lint`
-4. 涉及引擎、workflow、存储或导出的改动再跑 `npm run test:engine`
-5. 涉及打包时补跑 `build-python-sidecar.ps1` 或 `tauri:build`
+4. 涉及引擎、workflow、存储或导出的改动先跑 `npm run test:engine`
+5. 涉及官方样例、首次启动、sidecar 打包或样例导出链路的改动补跑 `npm run test:engine:full`
+6. 涉及打包时补跑 `build-python-sidecar.ps1` 或 `tauri:build`

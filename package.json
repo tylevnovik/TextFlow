@@ -11,6 +11,8 @@
     "dev": "npm run dev --workspace apps/desktop",
     "build": "npm run build --workspace apps/desktop",
     "lint": "npm run lint --workspace apps/desktop",
-    "test:engine": "powershell -ExecutionPolicy Bypass -File .\\scripts\\test-engine.ps1"
+    "test:engine": "powershell -ExecutionPolicy Bypass -File .\\scripts\\test-engine.ps1",
+    "test:engine:fast": "powershell -ExecutionPolicy Bypass -File .\\scripts\\test-engine.ps1 -Suite fast",
+    "test:engine:full": "powershell -ExecutionPolicy Bypass -File .\\scripts\\test-engine.ps1 -Suite full"
   }
 }

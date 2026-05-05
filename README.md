@@ -21,7 +21,7 @@ TextFlow Studio 是一个桌面优先的本地文本预处理与基础文本挖�
 - `txt/csv/xlsx/json` 导入
 - `source profile`、字段映射、主文本拼接
 - 文档搜索、预览、编辑、删除
-- 首次启动自动生成 9 个后端构建的真实公开数据场景示例项目
+- 首次启动从安装包内置模板恢复 9 个后端构建的真实公开数据场景示例项目
 
 ### 文本处理
 
@@ -62,6 +62,8 @@ TextFlow Studio 是一个桌面优先的本地文本预处理与基础文本挖�
   - `npm run test --workspace apps/desktop`
   - `npm run lint`
   - `npm run test:engine`
+  - `npm run test:engine:full`
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\build-python-sidecar.ps1`
   - `npm run tauri:build --workspace apps/desktop`
 
 最新对外版本：
@@ -119,6 +121,7 @@ npm run dev
 ```powershell
 npm run lint
 npm run test:engine
+npm run test:engine:full
 ```
 
 ### 构建 sidecar
@@ -137,7 +140,7 @@ npm run tauri:build --workspace apps/desktop
 
 ## Built-In Scenario Samples
 
-On first launch, TextFlow creates nine backend-built sample projects from real public datasets. Each official sample has at least 10,000 public-source documents, split exactly 1:1 between English and Chinese rows, and demonstrates a real workflow scenario from preprocessing to advanced gates.
+On first launch, TextFlow restores a prebuilt bundled sample workspace that already contains nine backend-built sample projects from real public datasets. Packaging rebuilds that bundled workspace from the current sample definitions, so sample edits ship in the next installer without paying the full generation cost at first run. Each official sample still has at least 10,000 public-source documents, split exactly 1:1 between English and Chinese rows, and demonstrates a real workflow scenario from preprocessing to advanced gates.
 
 See `docs/examples.md`.
 

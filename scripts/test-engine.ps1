@@ -1,3 +1,9 @@
+param(
+  [ValidateSet("fast", "full")]
+  [string]$Suite = "fast",
+  [string[]]$AdditionalPytestArgs = @()
+)
+
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -18,7 +24,14 @@ $env:TMP = $tempRoot
 
 Push-Location $engineRoot
 try {
-  & $pythonExe -m pytest tests -q
+  $pytestArgs = @("-m", "pytest", "tests", "-q")
+  if ($Suite -eq "fast") {
+    $pytestArgs += @("-m", "not engine_full")
+  }
+  if ($AdditionalPytestArgs.Count -gt 0) {
+    $pytestArgs += $AdditionalPytestArgs
+  }
+  & $pythonExe @pytestArgs
 }
 finally {
   Pop-Location

@@ -12,7 +12,8 @@ from typing import Any, Callable
 import pandas as pd
 
 from .artifact_store import load_artifact_payload, load_artifact_preview
-from .defaults import deep_copy_manifest
+from .bundled_sample_workspace import restore_bundled_sample_workspace
+from .defaults import deep_copy_manifest, json_ready
 from .experiment_store import list_experiment_specs, run_experiment_matrix, save_experiment_spec
 from .ingestion import ensure_sample_files, import_files, parse_optional_year
 from .ingestion_specs import list_ingestion_specs, save_ingestion_spec
@@ -45,6 +46,7 @@ from .project_store import (
     save_import_template_record,
     save_project_template,
     save_project,
+    workspace_root,
     write_json,
 )
 from .sample_projects import (
@@ -57,7 +59,7 @@ ProgressCallback = Callable[[float, str, dict[str, Any] | None], None]
 
 
 def emit(payload: Any) -> None:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False))
+    sys.stdout.write(json.dumps(json_ready(payload), ensure_ascii=False))
 
 
 def notify(
@@ -150,6 +152,16 @@ def ensure_bootstrap_project() -> None:
         return
 
     project_dirs = list_project_dirs()
+    if not project_dirs and not workspace_state.get("bootstrap_completed"):
+        if restore_bundled_sample_workspace(workspace_root()):
+            restored_state = load_workspace_state()
+            if (
+                restored_state.get("bootstrap_completed")
+                and int(restored_state.get("builtin_samples_revision") or 0) >= BUILTIN_SAMPLE_PROJECT_DATA_REVISION
+            ):
+                return
+        project_dirs = list_project_dirs()
+
     created = reconcile_builtin_sample_projects(
         create_missing=not project_dirs and not workspace_state.get("bootstrap_completed"),
     )
@@ -188,7 +200,7 @@ def _save_sections_from_project_payload(payload: dict[str, Any]) -> set[str]:
 def normalize_corpus_document(document: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
     normalized = dict(current or {})
     normalized.update(document)
-    doc_id = str(normalized.get("doc_id") or normalized.get("id") or f"doc-{hashlib.md5(json.dumps(document, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:8]}")
+    doc_id = str(normalized.get("doc_id") or normalized.get("id") or f"doc-{hashlib.md5(json.dumps(json_ready(document), ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:8]}")
     raw_text = str(normalized.get("raw_text") or "")
     normalized["id"] = doc_id
     normalized["doc_id"] = doc_id

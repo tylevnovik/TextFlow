@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-import shutil
 import textwrap
 
 import pytest
 
+from app.bundled_sample_workspace import BUNDLED_SAMPLE_WORKSPACE_ENV_VAR
 from app.cli import (
     action_create_project,
     action_create_project_from_template,
@@ -39,51 +39,43 @@ from app.sample_projects import (
     FIRST_BUILTIN_SAMPLE_PROJECT_NAME,
     _is_synthetic_placeholder_row,
 )
-from tests.test_sample_projects import _placeholder_row, _populate_public_sample_cache
-
-
-@pytest.fixture(scope="session")
-def workspace_cli_template(tmp_path_factory):
-    workspace = tmp_path_factory.mktemp("workspace-cli-template")
-    public_sample_cache = tmp_path_factory.mktemp("workspace-cli-public-sample-cache")
-    env = pytest.MonkeyPatch()
-    try:
-        env.setenv("TEXTFLOW_WORKSPACE_ROOT", str(workspace))
-        env.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
-        _populate_public_sample_cache(env, public_sample_cache)
-        action_load_workspace()
-    finally:
-        env.undo()
-    return workspace
+from tests.sample_test_support import TEST_SAMPLE_ROW_LIMIT, placeholder_row
 
 
 @pytest.fixture
-def isolated_workspace(monkeypatch, scratch_dir, workspace_cli_template):
+def public_sample_cache(monkeypatch, public_sample_cache_root):
+    monkeypatch.setenv("TEXTFLOW_PUBLIC_SAMPLE_CACHE_ROOT", str(public_sample_cache_root))
+    return public_sample_cache_root
+
+
+@pytest.fixture
+def isolated_workspace(monkeypatch, scratch_dir, bundled_sample_workspace_120):
     workspace = scratch_dir / "workspace"
-    shutil.copytree(workspace_cli_template, workspace, dirs_exist_ok=True)
+    workspace.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("TEXTFLOW_WORKSPACE_ROOT", str(workspace))
+    monkeypatch.setenv(BUNDLED_SAMPLE_WORKSPACE_ENV_VAR, str(bundled_sample_workspace_120))
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", str(TEST_SAMPLE_ROW_LIMIT))
     return workspace
 
 
 def test_workspace_cli_persists_current_project_and_recent_order(isolated_workspace):
-    bootstrap_snapshot = action_load_workspace()
+    first = action_create_project({"name": "真实项目 A", "description": "A"})
+    second = action_create_project({"name": "真实项目 B", "description": "B"})
+
     assert workspace_state_path().exists()
-    bootstrap_id = bootstrap_snapshot["current_project"]["id"]
+    assert load_workspace_state()["current_project_id"] == second["id"]
 
-    created = action_create_project({"name": "真实项目 A", "description": "test"})
-    assert load_workspace_state()["current_project_id"] == created["id"]
+    action_open_project({"project_id": first["id"]})
+    assert load_workspace_state()["current_project_id"] == first["id"]
 
-    action_open_project({"project_id": bootstrap_id})
-    assert load_workspace_state()["current_project_id"] == bootstrap_id
-
-    duplicated = action_duplicate_project({"project_id": bootstrap_id, "name": "真实项目 A 副本"})
+    duplicated = action_duplicate_project({"project_id": first["id"], "name": "真实项目 A 副本"})
     assert load_workspace_state()["current_project_id"] == duplicated["id"]
 
     workspace_state = load_workspace_state()
     assert workspace_state["current_project_id"] == duplicated["id"]
     assert workspace_state["recent_project_ids"][0] == duplicated["id"]
-    assert bootstrap_id in workspace_state["recent_project_ids"]
-    assert created["id"] in workspace_state["recent_project_ids"]
+    assert first["id"] in workspace_state["recent_project_ids"]
+    assert second["id"] in workspace_state["recent_project_ids"]
 
 
 def test_workspace_snapshot_only_fully_loads_current_project(isolated_workspace, monkeypatch):
@@ -164,8 +156,7 @@ def test_save_project_compacts_large_result_tables_on_disk(isolated_workspace):
     ]
     save_project(project_dir, manifest, corpus, already_normalized=True)
 
-    stored_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
-    stored_corpus = json.loads((project_dir / CORPUS_FILENAME).read_text(encoding="utf-8"))
+    stored_manifest, stored_corpus = load_project(project_dir)
 
     assert len(stored_manifest["results"]["frequency_table"]) == RESULT_PREVIEW_DEFAULT_LIMIT
     assert len(stored_manifest["results"]["audit_table"]) == 100
@@ -175,6 +166,7 @@ def test_save_project_compacts_large_result_tables_on_disk(isolated_workspace):
     assert stored_corpus[0]["filtered_tokens"] == []
 
 
+@pytest.mark.engine_full
 def test_action_run_workflow_returns_compact_project_results(isolated_workspace):
     snapshot = action_load_workspace()
     sample = next(project for project in snapshot["recent_projects"] if project["name"] == "示例 02 - 词表治理与词频统计")
@@ -188,20 +180,19 @@ def test_action_run_workflow_returns_compact_project_results(isolated_workspace)
     assert len(stored_manifest["results"]["cooccurrence_table"]) == len(result["project"]["results"]["cooccurrence_table"])
 
 
-def test_load_workspace_refreshes_placeholder_builtin_sample(monkeypatch, scratch_dir):
+@pytest.mark.engine_full
+def test_load_workspace_refreshes_placeholder_builtin_sample(monkeypatch, scratch_dir, public_sample_cache):
     workspace = scratch_dir / "workspace-placeholder-refresh"
     workspace.mkdir(parents=True, exist_ok=True)
-    cache_root = scratch_dir / "workspace-placeholder-cache"
     monkeypatch.setenv("TEXTFLOW_WORKSPACE_ROOT", str(workspace))
-    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "120")
-    _populate_public_sample_cache(monkeypatch, cache_root)
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", str(TEST_SAMPLE_ROW_LIMIT))
 
     project_dir, manifest = create_project(FIRST_BUILTIN_SAMPLE_PROJECT_NAME, "legacy placeholder sample")
     legacy_corpus = [
-        _placeholder_row("wikimedia_enwiki", "en", idx)
+        placeholder_row("wikimedia_enwiki", "en", idx)
         for idx in range(60)
     ] + [
-        _placeholder_row("wikimedia_zhwiki", "zh", idx)
+        placeholder_row("wikimedia_zhwiki", "zh", idx)
         for idx in range(60)
     ]
     manifest["settings"]["sample_project"] = {"slug": "sample-01-basic-preprocessing"}
@@ -235,8 +226,8 @@ def test_bootstrap_skips_reconcile_once_builtin_sample_revision_is_current(isola
 
 
 def test_open_project_uses_manifest_summary_without_loading_full_project(isolated_workspace, monkeypatch):
-    snapshot = action_load_workspace()
-    project_id = snapshot["current_project"]["id"]
+    created = action_create_project({"name": "轻量打开项目", "description": "summary path"})
+    project_id = created["id"]
 
     def fail_load_project_or_fail(_project_id):
         raise AssertionError("action_open_project should not fully load the project before refresh() reloads the workspace")
@@ -285,7 +276,7 @@ def test_workspace_snapshot_loads_python_node_plugins(isolated_workspace, scratc
     )
     monkeypatch.setenv("TEXTFLOW_NODE_PLUGIN_DIR", str(plugin_root))
 
-    snapshot = action_load_workspace()
+    snapshot = load_workspace_snapshot()
     assert any(node["type"] == "demo_plugin_node" for node in snapshot["node_definitions"])
 
     compiled = compile_runtime_profile_from_workflow(
@@ -387,10 +378,18 @@ def test_project_storage_compacts_builtin_dictionary_entries_and_rehydrates_on_l
 
 
 def test_workspace_snapshot_backfills_legacy_project_summary_counts(isolated_workspace):
-    snapshot = action_load_workspace()
-    sample_project = next(project for project in snapshot["recent_projects"] if project["name"] == FIRST_BUILTIN_SAMPLE_PROJECT_NAME)
-    project_dir = find_project_dir(sample_project["id"])
-    assert project_dir is not None
+    project_dir, manifest = create_project("旧摘要回填项目", "backfill summary")
+    corpus = [
+        normalize_corpus_document(
+            {
+                "doc_id": "DOC-BACKFILL-001",
+                "title": "摘要项目",
+                "raw_text": "用于回填统计字段的测试正文。",
+                "source_profile": "generic",
+            }
+        )
+    ]
+    save_project(project_dir, manifest, corpus, already_normalized=True)
 
     raw_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
     raw_manifest.pop("document_count", None)
@@ -398,7 +397,7 @@ def test_workspace_snapshot_backfills_legacy_project_summary_counts(isolated_wor
     (project_dir / PROJECT_FILENAME).write_text(json.dumps(raw_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     refreshed = load_workspace_snapshot()
-    refreshed_summary = next(project for project in refreshed["recent_projects"] if project["id"] == sample_project["id"])
+    refreshed_summary = next(project for project in refreshed["recent_projects"] if project["id"] == manifest["id"])
     reloaded_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
 
     assert refreshed_summary["document_count"] > 0
@@ -838,6 +837,7 @@ def test_export_project_backup_creates_zip_archive(isolated_workspace):
     assert "exports/backups/" in result["relative_path"]
 
 
+@pytest.mark.engine_full
 def test_export_project_returns_export_dir_and_files(isolated_workspace):
     snapshot = action_load_workspace()
     project_id = snapshot["current_project"]["id"]
@@ -867,6 +867,8 @@ def test_import_project_package_restores_portable_project(isolated_workspace):
 
 
 def test_delete_project_removes_workspace_entry_and_files(isolated_workspace):
+    first_dir, first_manifest = create_project("保留项目", "keep me")
+    assert first_dir.exists()
     project_dir, manifest = create_project("待删除项目", "delete me")
     assert project_dir.exists()
 
@@ -875,12 +877,13 @@ def test_delete_project_removes_workspace_entry_and_files(isolated_workspace):
     assert result["project_id"] == manifest["id"]
     assert not project_dir.exists()
 
-    snapshot = action_load_workspace()
+    snapshot = load_workspace_snapshot()
     assert all(item["id"] != manifest["id"] for item in snapshot["recent_projects"])
     assert snapshot["current_project"] is not None
-    assert snapshot["current_project"]["id"] != manifest["id"]
+    assert snapshot["current_project"]["id"] == first_manifest["id"]
 
 
+@pytest.mark.engine_full
 def test_bootstrap_project_is_not_recreated_after_manual_delete(isolated_workspace):
     snapshot = action_load_workspace()
     expected_sample_names = {str(spec["name"]) for spec in BUILTIN_SAMPLE_PROJECTS}

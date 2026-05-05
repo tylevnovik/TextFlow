@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Performance
+
+- Split Python engine verification into a default `test:engine` fast tier and a heavier `test:engine:full` tier so day-to-day changes do not always pay for bundled sample integration coverage.
+- Moved the nine official sample projects to a build-time bundled workspace template that ships inside the Python sidecar, avoiding first-run live generation for empty workspaces.
+
+### Fixes
+
+- Fixed IncoPat import presets to match real exported column names such as `标题 (中文)` / `摘要 (中文)` / `IPC`, added broader patent-text fallbacks, and improved source-field matching across punctuation and spacing variants.
+- Fixed XLSX import normalization so empty spreadsheet cells no longer become literal `nan`, required-field checks correctly treat blank cells as missing, and date-like values now produce a usable document year.
+- Fixed the advanced import field editor losing focus while typing by keeping mapping-row React keys stable during inline edits.
+
 ## v0.1.1 - 2026-04-25
 
 ### Highlights

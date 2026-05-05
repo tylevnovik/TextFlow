@@ -253,7 +253,7 @@ const outputBundleCards: Array<{
   }
 ];
 const sampleProjectName = "示例项目 - 学术摘要机构主题";
-const CORPUS_BROWSER_PAGE_SIZE = 60;
+const CORPUS_BROWSER_PAGE_SIZE = 12;
 const sampleJourneySteps = [
   "先打开示例项目，在“导入资料”里抽查 3 个来源文件和导入后的文档。",
   "再到“词表规则”看 8 张词表分别在切词、统一写法和套用词表时怎么生效。",
@@ -393,7 +393,7 @@ const dictionaryCollectionMeta: Record<DictionaryKind, { name: string; descripti
   regex_rules: { name: "Regex 规则", description: "在清洗和标准化阶段使用的正则规则。" }
 };
 
-const DICTIONARY_ENTRY_PAGE_SIZE = 200;
+const DICTIONARY_ENTRY_PAGE_SIZE = 24;
 
 function cloneDictionaryEntry(entry: DictionaryEntry, fallbackId: string): DictionaryEntry {
   return {
@@ -1906,7 +1906,7 @@ function DataPage() {
             </div>
             <div className="mapping-editor">
               {draftTemplate.field_mappings.map((rule, index) => (
-                <div className="mapping-editor-row" key={`${index}-${rule.source_field}-${rule.target_field}`}>
+                <div className="mapping-editor-row" key={index}>
                   <input
                     value={rule.source_field}
                     onChange={(event) => updateMapping(index, { source_field: event.target.value })}
@@ -2146,7 +2146,9 @@ function WorkflowEditorPage() {
   const canvasTopbarRef = useRef<HTMLDivElement | null>(null);
   const canvasBannerRef = useRef<HTMLDivElement | null>(null);
   const miniMapRef = useRef<HTMLDivElement | null>(null);
+  const toolboxDragGhostRef = useRef<HTMLDivElement | null>(null);
   const toolboxDragStateRef = useRef<{ nodeType: WorkflowNodeInstance["node_type"] } | null>(null);
+  const toolboxDropActiveRef = useRef(false);
   const canvasPanStateRef = useRef<{
     startClientX: number;
     startClientY: number;
@@ -2165,6 +2167,73 @@ function WorkflowEditorPage() {
   const [canvasOverlayOffset, setCanvasOverlayOffset] = useState(120);
   const [draggingNodeId, setDraggingNodeId] = useState("");
   const [isCanvasPanning, setIsCanvasPanning] = useState(false);
+  const canvasSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const workflowNodeElementRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const scheduledCanvasFrameRef = useRef<number | null>(null);
+  const pendingCanvasDomWriteRef = useRef<(() => void) | null>(null);
+  const latestNodeDragRef = useRef<{ nodeId: string; x: number; y: number } | null>(null);
+  const latestViewportDragRef = useRef<{ x: number; y: number; zoom: number } | null>(null);
+  const draftPersistenceRef = useRef<{
+    projectId: string;
+    workflowId: string;
+    workflow: WorkflowDefinition | null;
+  }>({ projectId: "", workflowId: "", workflow: null });
+  const draftWorkflowId = draftWorkflow?.workflow_id ?? "";
+
+  draftPersistenceRef.current = {
+    projectId: project?.id ?? "",
+    workflowId: draftWorkflowId,
+    workflow: draftWorkflow
+  };
+
+  const persistDraftWorkflow = () => {
+    const { projectId, workflowId, workflow } = draftPersistenceRef.current;
+    if (!projectId || !workflowId || !workflow) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        workflowDraftStorageKey(projectId, workflowId),
+        JSON.stringify(workflow)
+      );
+    } catch {
+      // Ignore draft persistence failures and keep the in-memory editor usable.
+    }
+  };
+
+  const scheduleCanvasDomWrite = (writer: () => void) => {
+    pendingCanvasDomWriteRef.current = writer;
+    if (scheduledCanvasFrameRef.current !== null) {
+      return;
+    }
+    scheduledCanvasFrameRef.current = window.requestAnimationFrame(() => {
+      scheduledCanvasFrameRef.current = null;
+      const pendingWriter = pendingCanvasDomWriteRef.current;
+      pendingCanvasDomWriteRef.current = null;
+      if (!pendingWriter) {
+        return;
+      }
+      pendingWriter();
+    });
+  };
+
+  const flushCanvasDomWrite = () => {
+    if (scheduledCanvasFrameRef.current !== null) {
+      window.cancelAnimationFrame(scheduledCanvasFrameRef.current);
+      scheduledCanvasFrameRef.current = null;
+    }
+    const pendingWriter = pendingCanvasDomWriteRef.current;
+    pendingCanvasDomWriteRef.current = null;
+    pendingWriter?.();
+  };
+
+  useEffect(() => () => {
+    if (scheduledCanvasFrameRef.current !== null) {
+      window.cancelAnimationFrame(scheduledCanvasFrameRef.current);
+    }
+    pendingCanvasDomWriteRef.current = null;
+    persistDraftWorkflow();
+  }, []);
 
   useEffect(() => {
     const nextWorkflow = project ? resolveActiveWorkflow(project) : null;
@@ -2203,25 +2272,19 @@ function WorkflowEditorPage() {
 
   useEffect(() => {
     if (!project || !draftWorkflow) {
-      return;
+      return undefined;
     }
-    try {
-      window.localStorage.setItem(
-        workflowDraftStorageKey(project.id, draftWorkflow.workflow_id),
-        JSON.stringify(draftWorkflow)
-      );
-    } catch {
-      // Ignore draft persistence failures and keep the in-memory editor usable.
-    }
+    const timeoutId = window.setTimeout(persistDraftWorkflow, 450);
+    return () => window.clearTimeout(timeoutId);
   }, [draftWorkflow, project?.id]);
 
   useEffect(() => {
-    if (!project || !draftWorkflow) {
+    if (!project || !draftWorkflowId) {
       return;
     }
     try {
       window.localStorage.setItem(
-        workflowEditorStateStorageKey(project.id, draftWorkflow.workflow_id),
+        workflowEditorStateStorageKey(project.id, draftWorkflowId),
         JSON.stringify({
           selectedNodeId,
           selectedEdgeId,
@@ -2237,7 +2300,7 @@ function WorkflowEditorPage() {
     dockCollapsed,
     dockView,
     documentPickerQuery,
-    draftWorkflow,
+    draftWorkflowId,
     project?.id,
     selectedEdgeId,
     selectedNodeId
@@ -2451,15 +2514,46 @@ function WorkflowEditorPage() {
       }
       const deltaX = (event.clientX - dragState.startClientX) / viewport.zoom;
       const deltaY = (event.clientY - dragState.startClientY) / viewport.zoom;
-      setDraftWorkflow((current) => current
-        ? updateWorkflowNodePosition(current, dragState.nodeId, {
-          x: dragState.startX + deltaX,
-          y: dragState.startY + deltaY
-        })
-        : current);
+      const nextPosition = {
+        x: dragState.startX + deltaX,
+        y: dragState.startY + deltaY
+      };
+      latestNodeDragRef.current = { nodeId: dragState.nodeId, ...nextPosition };
+      const dragOffset = {
+        x: nextPosition.x - dragState.startX,
+        y: nextPosition.y - dragState.startY
+      };
+      scheduleCanvasDomWrite(() => {
+        const nodeElement = workflowNodeElementRefs.current.get(dragState.nodeId);
+        if (!nodeElement) {
+          return;
+        }
+        nodeElement.style.setProperty("--node-drag-x", `${dragOffset.x}px`);
+        nodeElement.style.setProperty("--node-drag-y", `${dragOffset.y}px`);
+      });
     };
 
     const handlePointerUp = () => {
+      flushCanvasDomWrite();
+      const latestPosition = latestNodeDragRef.current;
+      if (latestPosition) {
+        const nodeElement = workflowNodeElementRefs.current.get(latestPosition.nodeId);
+        if (nodeElement) {
+          nodeElement.style.left = `${canvasOrigin.x + latestPosition.x}px`;
+          nodeElement.style.top = `${canvasOrigin.y + latestPosition.y}px`;
+          nodeElement.style.removeProperty("--node-drag-x");
+          nodeElement.style.removeProperty("--node-drag-y");
+        }
+        setDraftWorkflow((current) =>
+          current
+            ? updateWorkflowNodePosition(current, latestPosition.nodeId, {
+              x: latestPosition.x,
+              y: latestPosition.y
+            })
+            : current
+        );
+      }
+      latestNodeDragRef.current = null;
       dragStateRef.current = null;
       setDraggingNodeId("");
     };
@@ -2470,7 +2564,7 @@ function WorkflowEditorPage() {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [draggingNodeId, viewport.zoom]);
+  }, [canvasOrigin.x, canvasOrigin.y, draggingNodeId, viewport.zoom]);
 
   useEffect(() => {
     if (!isCanvasPanning) {
@@ -2484,15 +2578,32 @@ function WorkflowEditorPage() {
       }
       const deltaX = event.clientX - panState.startClientX;
       const deltaY = event.clientY - panState.startClientY;
-      setDraftWorkflow((current) => current
-        ? updateWorkflowViewport(current, {
-          x: panState.startViewportX + deltaX,
-          y: panState.startViewportY + deltaY
-        })
-        : current);
+      const nextViewport = {
+        x: panState.startViewportX + deltaX,
+        y: panState.startViewportY + deltaY,
+        zoom: viewport.zoom
+      };
+      latestViewportDragRef.current = nextViewport;
+      scheduleCanvasDomWrite(() => {
+        if (!canvasSurfaceRef.current) {
+          return;
+        }
+        canvasSurfaceRef.current.style.transform = `translate3d(${nextViewport.x}px, ${nextViewport.y}px, 0) scale(${nextViewport.zoom})`;
+      });
     };
 
     const handlePointerUp = () => {
+      flushCanvasDomWrite();
+      const latestViewport = latestViewportDragRef.current;
+      if (latestViewport) {
+        setDraftWorkflow((current) => current
+          ? updateWorkflowViewport(current, {
+            x: latestViewport.x,
+            y: latestViewport.y
+          })
+          : current);
+      }
+      latestViewportDragRef.current = null;
       canvasPanStateRef.current = null;
       setIsCanvasPanning(false);
     };
@@ -2503,7 +2614,7 @@ function WorkflowEditorPage() {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [isCanvasPanning]);
+  }, [isCanvasPanning, viewport.zoom]);
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -2520,15 +2631,32 @@ function WorkflowEditorPage() {
       const clampedY = Math.min(rect.bottom, Math.max(rect.top, event.clientY));
       const worldX = (clampedX - rect.left) / miniMap.scale;
       const worldY = (clampedY - rect.top) / miniMap.scale;
-      setDraftWorkflow((current) => current
-        ? updateWorkflowViewport(current, {
-          x: canvasElement.clientWidth / 2 - worldX * viewport.zoom,
-          y: canvasElement.clientHeight / 2 - worldY * viewport.zoom
-        })
-        : current);
+      const nextViewport = {
+        x: canvasElement.clientWidth / 2 - worldX * viewport.zoom,
+        y: canvasElement.clientHeight / 2 - worldY * viewport.zoom,
+        zoom: viewport.zoom
+      };
+      latestViewportDragRef.current = nextViewport;
+      scheduleCanvasDomWrite(() => {
+        if (!canvasSurfaceRef.current) {
+          return;
+        }
+        canvasSurfaceRef.current.style.transform = `translate3d(${nextViewport.x}px, ${nextViewport.y}px, 0) scale(${nextViewport.zoom})`;
+      });
     };
 
     const handlePointerUp = () => {
+      flushCanvasDomWrite();
+      const latestViewport = latestViewportDragRef.current;
+      if (latestViewport) {
+        setDraftWorkflow((current) => current
+          ? updateWorkflowViewport(current, {
+            x: latestViewport.x,
+            y: latestViewport.y
+          })
+          : current);
+      }
+      latestViewportDragRef.current = null;
       miniMapDragStateRef.current = false;
     };
 
@@ -2546,10 +2674,21 @@ function WorkflowEditorPage() {
     }
 
     const handlePointerMove = (event: PointerEvent) => {
-      setToolboxDragPointer({ x: event.clientX, y: event.clientY });
+      const nextLeft = event.clientX + 14;
+      const nextTop = event.clientY + 14;
+      scheduleCanvasDomWrite(() => {
+        if (!toolboxDragGhostRef.current) {
+          return;
+        }
+        toolboxDragGhostRef.current.style.left = `${nextLeft}px`;
+        toolboxDragGhostRef.current.style.top = `${nextTop}px`;
+      });
       const canvasElement = canvasScrollRef.current;
       if (!canvasElement) {
-        setIsCanvasDropActive(false);
+        if (toolboxDropActiveRef.current) {
+          toolboxDropActiveRef.current = false;
+          setIsCanvasDropActive(false);
+        }
         return;
       }
       const rect = canvasElement.getBoundingClientRect();
@@ -2557,7 +2696,10 @@ function WorkflowEditorPage() {
         && event.clientX <= rect.right
         && event.clientY >= rect.top
         && event.clientY <= rect.bottom;
-      setIsCanvasDropActive(insideCanvas);
+      if (toolboxDropActiveRef.current !== insideCanvas) {
+        toolboxDropActiveRef.current = insideCanvas;
+        setIsCanvasDropActive(insideCanvas);
+      }
     };
 
     const handlePointerUp = (event: PointerEvent) => {
@@ -2580,6 +2722,7 @@ function WorkflowEditorPage() {
         }
       }
       toolboxDragStateRef.current = null;
+      toolboxDropActiveRef.current = false;
       setDraggedToolboxNodeType("");
       setToolboxDragPointer(null);
       setIsCanvasDropActive(false);
@@ -2756,6 +2899,7 @@ function WorkflowEditorPage() {
       return;
     }
     toolboxDragStateRef.current = { nodeType };
+    toolboxDropActiveRef.current = false;
     setDraggedToolboxNodeType(nodeType);
     setToolboxDragPointer({ x: event.clientX, y: event.clientY });
     event.preventDefault();
@@ -3586,7 +3730,7 @@ function WorkflowEditorPage() {
         </aside>
 
         <section
-          className={`workflow-editor-canvas ${isCanvasPanning ? "is-panning" : ""} ${isCanvasDropActive ? "is-drop-active" : ""}`}
+          className={`workflow-editor-canvas ${isCanvasPanning ? "is-panning" : ""} ${draggingNodeId ? "is-dragging-node" : ""} ${isCanvasDropActive ? "is-drop-active" : ""}`}
           style={{ ["--workflow-overlay-offset" as string]: `${canvasOverlayOffset}px` }}
         >
           <div ref={canvasTopbarRef} className="workflow-floating-topbar">
@@ -3642,11 +3786,12 @@ function WorkflowEditorPage() {
           >
             <div className="workflow-canvas-stage" onClick={() => setPendingConnection(null)}>
                 <div
+                  ref={canvasSurfaceRef}
                   className="workflow-canvas-surface"
                   style={{
                     width: canvasMetrics.width,
                     height: canvasMetrics.height,
-                    transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`
+                    transform: `translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.zoom})`
                   }}
                 >
                   <svg className="workflow-edge-layer" width={canvasMetrics.width} height={canvasMetrics.height} viewBox={`0 0 ${canvasMetrics.width} ${canvasMetrics.height}`} aria-hidden="true">
@@ -3710,6 +3855,13 @@ function WorkflowEditorPage() {
                   });
                   return (
                     <div
+                      ref={(element) => {
+                        if (element) {
+                          workflowNodeElementRefs.current.set(node.node_id, element);
+                        } else {
+                          workflowNodeElementRefs.current.delete(node.node_id);
+                        }
+                      }}
                       key={node.node_id}
                       className={`workflow-node-card workflow-node-card-canvas ${nodeSelected ? "is-selected" : ""} ${node.ui_state.bypassed ? "is-bypassed" : ""} ${draggingNodeId === node.node_id ? "is-dragging" : ""} ${nodeRuntime ? `is-runtime-${nodeRuntime.status}` : ""} ${activeRuntimeNode?.node_id === node.node_id ? "is-runtime-current" : ""}`.trim()}
                       style={{
@@ -3854,6 +4006,7 @@ function WorkflowEditorPage() {
 
           {toolboxDragPointer && (
             <div
+              ref={toolboxDragGhostRef}
               className={`workflow-toolbox-drag-ghost ${isCanvasDropActive ? "is-valid" : ""}`}
               style={{
                 left: toolboxDragPointer.x + 14,

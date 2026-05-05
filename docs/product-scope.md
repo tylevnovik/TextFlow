@@ -45,7 +45,7 @@
 - 语料资源、语料视图、导入规格、artifact records、review tasks 和 experiment specs 已写入项目模型
 - 桌面端已提供 Resource Browser、Artifact Browser、Review Queue、Experiment Matrix 和 Run Diff surface
 - 本地纯 Python 插件节点已可被 sidecar 扫描并注册
-- 首次启动自动生成 9 个场景样例项目，覆盖从预处理、词表治理到复核、门禁的完整 workflow surface
+- 首次启动恢复 9 个预构建场景样例项目，覆盖从预处理、词表治理到复核、门禁的完整 workflow surface
 
 ## 当前仍不算“已交付完成”的部分
 
