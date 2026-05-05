@@ -1192,6 +1192,14 @@ def workflow_port_compatible(source_type: str, target_type: str) -> bool:
         "InstitutionTopicTable",
         "DocumentClusterTable",
         "AuditTable",
+        "GraphNodeTable",
+        "GraphEdgeTable",
+        "GraphMetricTable",
+        "CommunityTable",
+        "MainPathTable",
+        "LinkPredictionTable",
+        "TechnologyIndicatorTable",
+        "TechnologyClassificationTable",
     }
     renderable_source_types = {
         "FrequencyTable",
