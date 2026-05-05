@@ -785,6 +785,7 @@ export const sourceProfiles: Record<SourceProfile, string> = {
   generic: "通用结构化数据",
   literature: "文献数据",
   wos: "Web of Science",
+  scopus: "Scopus",
   patent: "专利数据",
   incopat: "IncoPat",
   business_reserved: "商业数据（预留）"
@@ -841,6 +842,22 @@ export const sourceProfileImportTemplates: Record<
       { source_field: "WC", target_field: "category_or_tag", required: false, aliases: ["Web of Science Categories"] }
     ],
     text_build: { mode: "concat_fields", fields: ["TI", "AB", "DE"], delimiter: "\n\n", skip_empty: true }
+  },
+  scopus: {
+    name: "Scopus 模板",
+    description: "预置 Scopus CSV 常见字段别名与主文本拼接策略。",
+    field_mappings: [
+      { source_field: "EID", target_field: "doc_id", required: true, aliases: ["eid"] },
+      { source_field: "Title", target_field: "title", required: true, aliases: ["title"] },
+      { source_field: "Abstract", target_field: "raw_text", required: true, aliases: ["abstract"] },
+      { source_field: "Year", target_field: "year", required: false, aliases: ["year"] },
+      { source_field: "Source title", target_field: "source", required: false, aliases: ["source"] },
+      { source_field: "Authors", target_field: "author", required: false, aliases: ["author"] },
+      { source_field: "Affiliations", target_field: "institution", required: false, aliases: ["affiliation"] },
+      { source_field: "Author Keywords", target_field: "keyword_field", required: false, aliases: ["keywords"] },
+      { source_field: "Index Keywords", target_field: "keyword_field", required: false, aliases: ["index_keywords"] }
+    ],
+    text_build: { mode: "concat_fields", fields: ["Title", "Abstract", "Author Keywords"], delimiter: "\n\n", skip_empty: true }
   },
   patent: {
     name: "专利导入模板",
