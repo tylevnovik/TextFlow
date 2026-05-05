@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
 
-from .defaults import utc_now_iso
+from .defaults import json_ready, utc_now_iso
 from .project_store import data_root, workspace_root
 
 CORE_FIELDS = {
@@ -30,15 +31,48 @@ SOURCE_PROFILE_VALUES = {
     "generic",
     "literature",
     "wos",
+    "scopus",
     "patent",
     "incopat",
     "business_reserved",
 }
 
+HEADER_VARIANT_TRANSLATION = str.maketrans({
+    "（": "(",
+    "）": ")",
+    "【": "[",
+    "】": "]",
+    "｛": "{",
+    "｝": "}",
+    "：": ":",
+    "，": ",",
+    "；": ";",
+    "　": " ",
+    "\u00A0": " ",
+})
+
 
 def stable_payload_hash(payload: Any) -> str:
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(json_ready(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def normalize_lookup_key(value: Any) -> str:
+    normalized = str(value).translate(HEADER_VARIANT_TRANSLATION).casefold().strip()
+    return re.sub(r"\s+", "", normalized)
+
+
+def is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (list, tuple, dict, set)):
+        return False
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def sample_records() -> list[dict[str, Any]]:
@@ -120,13 +154,22 @@ def resolve_source_value(
 
     candidates = [source_field, *(aliases or [])]
     casefold_lookup = {str(key).casefold(): key for key in record}
+    normalized_lookup = {normalize_lookup_key(key): key for key in record}
 
     for candidate in candidates:
+        candidate_text = str(candidate).strip()
+        if not candidate_text:
+            continue
         if candidate in record:
-            return candidate, record[candidate]
-        actual_key = casefold_lookup.get(str(candidate).casefold())
-        if actual_key is not None:
-            return str(actual_key), record[actual_key]
+            actual_key = candidate
+        else:
+            actual_key = casefold_lookup.get(candidate_text.casefold()) or normalized_lookup.get(normalize_lookup_key(candidate_text))
+        if actual_key is None:
+            continue
+        value = record[actual_key]
+        if is_missing_value(value):
+            continue
+        return str(actual_key), value
 
     return None, None
 
@@ -159,18 +202,43 @@ def map_record_fields(import_template: dict[str, Any], record: dict[str, Any]) -
     return mapped, consumed_fields
 
 
-def build_raw_text(record: dict[str, Any], text_build: dict[str, Any], mapped_fields: dict[str, Any] | None = None) -> str:
+def resolve_text_build_value(
+    field: str,
+    record: dict[str, Any],
+    mapped_fields: dict[str, Any] | None = None,
+    field_mappings: Iterable[dict[str, Any]] | None = None,
+) -> Any:
+    matched_key, value = resolve_source_value(record, str(field))
+    if matched_key is not None:
+        return value
+
+    if not mapped_fields:
+        return None
+
+    direct_value = mapped_fields.get(str(field))
+    if not is_missing_value(direct_value):
+        return direct_value
+
+    return None
+
+
+def build_raw_text(
+    record: dict[str, Any],
+    text_build: dict[str, Any],
+    mapped_fields: dict[str, Any] | None = None,
+    field_mappings: Iterable[dict[str, Any]] | None = None,
+) -> str:
     fields = text_build.get("fields") or ["raw_text"]
     values: list[str] = []
 
     for field in fields:
-        matched_key, value = resolve_source_value(record, str(field))
-        if matched_key is None and mapped_fields:
-            value = mapped_fields.get(str(field))
-        if value is None or value == "":
+        value = resolve_text_build_value(str(field), record, mapped_fields, field_mappings)
+        if is_missing_value(value):
             if text_build.get("skip_empty", True):
                 continue
-        values.append(str(value or ""))
+            values.append("")
+            continue
+        values.append(str(value))
 
     delimiter = text_build.get("delimiter", "\n\n")
     return delimiter.join(values).strip()
@@ -180,7 +248,7 @@ def dataframe_from_source(path: Path) -> pd.DataFrame:
     suffix = path.suffix.lower()
     if suffix == ".csv":
         return pd.read_csv(path)
-    if suffix == ".xlsx":
+    if suffix in (".xlsx", ".xls"):
         return pd.read_excel(path)
     if suffix == ".json":
         return pd.read_json(path)
@@ -190,12 +258,26 @@ def dataframe_from_source(path: Path) -> pd.DataFrame:
 
 
 def parse_optional_year(value: Any) -> int | None:
-    if value in (None, ""):
+    if is_missing_value(value):
         return None
+    if isinstance(value, pd.Timestamp):
+        return int(value.year)
+    if hasattr(value, "year") and isinstance(getattr(value, "year"), int):
+        return int(value.year)
+    if isinstance(value, str):
+        parsed = pd.to_datetime(value, errors="coerce")
+        if not pd.isna(parsed):
+            return int(parsed.year)
     try:
         return int(value)
     except (TypeError, ValueError):
-        return None
+        try:
+            parsed = pd.to_datetime(value, errors="coerce")
+        except (TypeError, ValueError):
+            return None
+        if pd.isna(parsed):
+            return None
+        return int(parsed.year)
 
 
 def normalize_source_profile(import_template: dict[str, Any], mapped_fields: dict[str, Any]) -> str:
@@ -209,42 +291,42 @@ def missing_required_fields(record: dict[str, Any], import_template: dict[str, A
         if not rule.get("required", False):
             continue
         matched_key, value = resolve_source_value(record, str(rule.get("source_field", "")), rule.get("aliases", []))
-        if matched_key is None or value in (None, ""):
+        if matched_key is None or is_missing_value(value):
             missing.append(str(rule.get("source_field", "")))
     return missing
 
 
 def normalize_record(record: dict[str, Any], import_template: dict[str, Any], source_file: Path) -> dict[str, Any]:
     mapped_fields, consumed_fields = map_record_fields(import_template, record)
-    raw_text = build_raw_text(record, import_template.get("text_build", {}), mapped_fields)
+    raw_text = build_raw_text(record, import_template.get("text_build", {}), mapped_fields, import_template.get("field_mappings", []))
     if not raw_text:
         raw_text = str(mapped_fields.get("raw_text", "") or "").strip()
 
     extra_metadata = {
-        key: value
+        key: json_ready(value)
         for key, value in record.items()
         if key not in consumed_fields and key not in CORE_FIELDS
     }
 
     if isinstance(mapped_fields.get("extra_metadata"), dict):
-        extra_metadata.update(mapped_fields["extra_metadata"])
+        extra_metadata.update(json_ready(mapped_fields["extra_metadata"]))
 
     if mapped_fields.get("source_type") not in (None, ""):
-        extra_metadata.setdefault("source_type", mapped_fields["source_type"])
+        extra_metadata.setdefault("source_type", json_ready(mapped_fields["source_type"]))
 
     normalized: dict[str, Any] = {
         "doc_id": mapped_fields.get("doc_id")
-        or f"{source_file.stem}-{hashlib.md5(json.dumps(record, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:8]}",
+        or f"{source_file.stem}-{hashlib.md5(json.dumps(json_ready(record), ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:8]}",
         "source_profile": normalize_source_profile(import_template, mapped_fields),
         "title": str(mapped_fields.get("title") or record.get("title") or source_file.stem),
         "raw_text": raw_text,
         "year": parse_optional_year(mapped_fields.get("year")),
-        "source": mapped_fields.get("source"),
-        "author": mapped_fields.get("author"),
-        "institution": mapped_fields.get("institution"),
-        "country_or_region": mapped_fields.get("country_or_region"),
-        "category_or_tag": mapped_fields.get("category_or_tag"),
-        "keyword_field": mapped_fields.get("keyword_field"),
+        "source": json_ready(mapped_fields.get("source")),
+        "author": json_ready(mapped_fields.get("author")),
+        "institution": json_ready(mapped_fields.get("institution")),
+        "country_or_region": json_ready(mapped_fields.get("country_or_region")),
+        "category_or_tag": json_ready(mapped_fields.get("category_or_tag")),
+        "keyword_field": json_ready(mapped_fields.get("keyword_field")),
         "extra_metadata": extra_metadata,
         "clean_text": "",
         "normalized_text": "",
