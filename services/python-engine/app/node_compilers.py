@@ -289,6 +289,8 @@ BUILTIN_NODE_COMPILERS = {
     "community_detection": _compile_analysis_passthrough_node,
     "main_path_analysis": _compile_analysis_passthrough_node,
     "link_prediction": _compile_analysis_passthrough_node,
+    "technology_indicators": _compile_analysis_passthrough_node,
+    "technology_classification": _compile_analysis_passthrough_node,
     "save_csv": _compile_save_csv,
     "save_xlsx": _compile_save_xlsx,
     "save_png": _compile_save_png,

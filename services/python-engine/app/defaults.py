@@ -1416,6 +1416,8 @@ def empty_result_bundle() -> dict[str, Any]:
         "community_table": [],
         "main_path_table": [],
         "link_prediction_table": [],
+        "technology_indicator_table": [],
+        "technology_classification_table": [],
         "metadata_audit_table": [],
         "audit_table": [],
         "report_files": [],

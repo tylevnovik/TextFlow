@@ -1476,6 +1476,46 @@ def execute_link_prediction(context: Any, node: dict[str, Any], inputs: dict[str
     return {"link_prediction_table": graph_ops.link_prediction_rows(nodes, edges, top_n=int(config.get("link_prediction_top_n", 200) or 200))}
 
 
+def _technology_ops():
+    from . import technology_ops as technology_ops_module
+    return technology_ops_module
+
+
+def execute_technology_indicators(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    tech_ops = _technology_ops()
+    term_year_rows = _table_rows_from_inputs_or_results(context, inputs, "term_year_table_in", "term_year_table")
+    graph_metric_rows = _table_rows_from_inputs_or_results(context, inputs, "graph_metric_table_in", "graph_metric_table")
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    current_year = config.get("indicator_current_year")
+    if current_year is None:
+        import datetime
+        current_year = datetime.datetime.now().year
+    return {
+        "technology_indicator_table": tech_ops.technology_indicator_rows(
+            term_year_rows,
+            graph_metric_rows if graph_metric_rows else None,
+            current_year=int(current_year),
+        )
+    }
+
+
+def execute_technology_classification(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    tech_ops = _technology_ops()
+    indicator_rows = _table_rows_from_inputs_or_results(context, inputs, "technology_indicator_table_in", "technology_indicator_table")
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    thresholds = {
+        "emerging_novelty": config.get("threshold_emerging_novelty", 0.65),
+        "emerging_growth": config.get("threshold_emerging_growth", 1.5),
+        "disruptive_disruption": config.get("threshold_disruptive", 0.65),
+        "core_maturity": config.get("threshold_core", 0.65),
+        "declining_growth": config.get("threshold_declining_growth", 0.75),
+        "declining_maturity": config.get("threshold_declining_maturity", 0.4),
+    }
+    return {
+        "technology_classification_table": tech_ops.technology_classification_rows(indicator_rows, thresholds)
+    }
+
+
 def _legacy_analysis_bundle(context: Any, node: dict[str, Any], corpus: list[dict[str, Any]]) -> dict[str, Any]:
     analysis_ops = _analysis_ops()
     analysis_params = _analysis_params(
@@ -1693,6 +1733,8 @@ EXECUTORS_BY_TYPE = {
     "community_detection": execute_community_detection,
     "main_path_analysis": execute_main_path_analysis,
     "link_prediction": execute_link_prediction,
+    "technology_indicators": execute_technology_indicators,
+    "technology_classification": execute_technology_classification,
     "save_csv": execute_save_csv,
     "save_xlsx": execute_save_xlsx,
     "save_png": execute_save_png,

@@ -513,6 +513,30 @@ export const builtinWorkflowNodeSchema: Record<WorkflowNodeType, GeneratedWorkfl
     ],
     stepId: "analysis"
   },
+  technology_indicators: {
+    label: "技术指标",
+    description: "基于词项年份趋势和网络指标计算新颖度、颠覆度和成熟度。",
+    category: "analysis",
+    inputs: [
+      { port_id: "term_year_table_in", port_type: "TermYearTable", label: "词项年份表输入" }
+    ],
+    outputs: [
+      { port_id: "technology_indicator_table", port_type: "TechnologyIndicatorTable", label: "技术指标表", result_bundle_key: "technology_indicator_table" }
+    ],
+    stepId: "analysis"
+  },
+  technology_classification: {
+    label: "技术分类",
+    description: "根据技术指标将词项分类为新兴、颠覆性、核心或衰退。",
+    category: "analysis",
+    inputs: [
+      { port_id: "technology_indicator_table_in", port_type: "TechnologyIndicatorTable", label: "技术指标表输入" }
+    ],
+    outputs: [
+      { port_id: "technology_classification_table", port_type: "TechnologyClassificationTable", label: "技术分类表", result_bundle_key: "technology_classification_table" }
+    ],
+    stepId: "analysis"
+  },
   save_csv: {
     label: "保存 CSV",
     description: "把上游表格结果写成 CSV 文件。",

@@ -1073,6 +1073,41 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
             ],
             executor="analysis.link_prediction",
         ),
+        _analysis_node(
+            "technology_indicators",
+            "技术指标",
+            "基于词项年份趋势和网络指标计算新颖度、颠覆度和成熟度。",
+            inputs=[
+                _port("term_year_table_in", "TermYearTable", "词项年份表输入"),
+            ],
+            outputs=[
+                _port("technology_indicator_table", "TechnologyIndicatorTable", "技术指标表", result_bundle_key="technology_indicator_table"),
+            ],
+            params=[
+                _number_param("indicator_current_year", "当前年份", None),
+            ],
+            executor="analysis.technology_indicators",
+        ),
+        _analysis_node(
+            "technology_classification",
+            "技术分类",
+            "根据技术指标将词项分类为新兴、颠覆性、核心或衰退。",
+            inputs=[
+                _port("technology_indicator_table_in", "TechnologyIndicatorTable", "技术指标表输入"),
+            ],
+            outputs=[
+                _port("technology_classification_table", "TechnologyClassificationTable", "技术分类表", result_bundle_key="technology_classification_table"),
+            ],
+            params=[
+                _number_param("threshold_emerging_novelty", "新兴-新颖度阈值", 0.65),
+                _number_param("threshold_emerging_growth", "新兴-增长率阈值", 1.5),
+                _number_param("threshold_disruptive", "颠覆-颠覆度阈值", 0.65),
+                _number_param("threshold_core", "核心-成熟度阈值", 0.65),
+                _number_param("threshold_declining_growth", "衰退-增长率阈值", 0.75),
+                _number_param("threshold_declining_maturity", "衰退-成熟度阈值", 0.4),
+            ],
+            executor="analysis.technology_classification",
+        ),
         {
             "type": "save_csv",
             "title": "保存 CSV",
