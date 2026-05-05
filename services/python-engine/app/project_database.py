@@ -101,17 +101,25 @@ def replace_corpus_rows(db: ProjectDatabase, rows: list[dict[str, Any]]) -> None
     conn = db.connect()
     try:
         conn.execute("DELETE FROM corpus_documents")
+        seen_doc_ids: set[str] = set()
         for row in rows:
+            doc_id = str(row.get("doc_id") or row.get("id") or "")
+            original_doc_id = doc_id
+            suffix = 1
+            while doc_id in seen_doc_ids:
+                doc_id = f"{original_doc_id}__lang_{suffix}"
+                suffix += 1
+            seen_doc_ids.add(doc_id)
             conn.execute(
                 """
-                INSERT OR REPLACE INTO corpus_documents (
+                INSERT INTO corpus_documents (
                     doc_id, id, source_profile, language, title, raw_text, year,
                     source, author, institution, country_or_region, category_or_tag,
                     keyword_field, extra_metadata_json, status, raw_hash
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    str(row.get("doc_id") or row.get("id") or ""),
+                    doc_id,
                     str(row.get("id") or row.get("doc_id") or ""),
                     str(row.get("source_profile") or "generic"),
                     str(row.get("language") or "") or None,
