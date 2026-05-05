@@ -1428,6 +1428,54 @@ def execute_document_clustering(context: Any, node: dict[str, Any], inputs: dict
     return {"document_cluster_table": rows}
 
 
+def _graph_ops():
+    from . import graph_ops as graph_ops_module
+    return graph_ops_module
+
+
+def execute_build_network(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    graph_ops = _graph_ops()
+    cooccurrence_rows = _table_rows_from_inputs_or_results(context, inputs, "cooccurrence_table_in", "cooccurrence_table")
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    nodes, edges = graph_ops.build_term_graph_tables(
+        cooccurrence_rows,
+        min_edge_weight=int(config.get("min_edge_weight", 1) or 1),
+        max_edges=int(config.get("max_edges", 5000) or 5000),
+    )
+    return {"graph_node_table": nodes, "graph_edge_table": edges}
+
+
+def execute_graph_metrics(context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    graph_ops = _graph_ops()
+    nodes = _table_rows_from_inputs_or_results(context, inputs, "graph_node_table_in", "graph_node_table")
+    edges = _table_rows_from_inputs_or_results(context, inputs, "graph_edge_table_in", "graph_edge_table")
+    return {"graph_metric_table": graph_ops.graph_metric_rows(nodes, edges)}
+
+
+def execute_community_detection(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    graph_ops = _graph_ops()
+    nodes = _table_rows_from_inputs_or_results(context, inputs, "graph_node_table_in", "graph_node_table")
+    edges = _table_rows_from_inputs_or_results(context, inputs, "graph_edge_table_in", "graph_edge_table")
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    return {"community_table": graph_ops.community_rows(nodes, edges, method=str(config.get("community_method", "greedy_modularity")))}
+
+
+def execute_main_path_analysis(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    graph_ops = _graph_ops()
+    nodes = _table_rows_from_inputs_or_results(context, inputs, "graph_node_table_in", "graph_node_table")
+    edges = _table_rows_from_inputs_or_results(context, inputs, "graph_edge_table_in", "graph_edge_table")
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    return {"main_path_table": graph_ops.main_path_rows(nodes, edges, mode=str(config.get("main_path_mode", "directed_citation_or_weighted_backbone")))}
+
+
+def execute_link_prediction(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    graph_ops = _graph_ops()
+    nodes = _table_rows_from_inputs_or_results(context, inputs, "graph_node_table_in", "graph_node_table")
+    edges = _table_rows_from_inputs_or_results(context, inputs, "graph_edge_table_in", "graph_edge_table")
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    return {"link_prediction_table": graph_ops.link_prediction_rows(nodes, edges, top_n=int(config.get("link_prediction_top_n", 200) or 200))}
+
+
 def _legacy_analysis_bundle(context: Any, node: dict[str, Any], corpus: list[dict[str, Any]]) -> dict[str, Any]:
     analysis_ops = _analysis_ops()
     analysis_params = _analysis_params(
@@ -1640,6 +1688,11 @@ EXECUTORS_BY_TYPE = {
     "institution_keyword_analysis": execute_institution_keyword_analysis,
     "institution_topic_analysis": execute_institution_topic_analysis,
     "document_clustering": execute_document_clustering,
+    "build_network": execute_build_network,
+    "graph_metrics": execute_graph_metrics,
+    "community_detection": execute_community_detection,
+    "main_path_analysis": execute_main_path_analysis,
+    "link_prediction": execute_link_prediction,
     "save_csv": execute_save_csv,
     "save_xlsx": execute_save_xlsx,
     "save_png": execute_save_png,

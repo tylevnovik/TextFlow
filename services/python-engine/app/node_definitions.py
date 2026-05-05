@@ -988,6 +988,91 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
             ],
             executor="analysis.document_clustering",
         ),
+        _analysis_node(
+            "build_network",
+            "构建网络",
+            "从共现表构建词项网络。",
+            inputs=[
+                _port("cooccurrence_table_in", "CooccurrenceTable", "共现表输入"),
+            ],
+            outputs=[
+                _port("graph_node_table", "GraphNodeTable", "网络节点表", result_bundle_key="graph_node_table"),
+                _port("graph_edge_table", "GraphEdgeTable", "网络边表", result_bundle_key="graph_edge_table"),
+            ],
+            params=[
+                _number_param("min_edge_weight", "最小边权重", 1),
+                _number_param("max_edges", "最大边数", 5000),
+            ],
+            executor="analysis.build_network",
+        ),
+        _analysis_node(
+            "graph_metrics",
+            "网络指标",
+            "计算 PageRank、介数中心性等网络指标。",
+            inputs=[
+                _port("graph_node_table_in", "GraphNodeTable", "节点表输入"),
+                _port("graph_edge_table_in", "GraphEdgeTable", "边表输入"),
+            ],
+            outputs=[
+                _port("graph_metric_table", "GraphMetricTable", "网络指标表", result_bundle_key="graph_metric_table"),
+            ],
+            params=[],
+            executor="analysis.graph_metrics",
+        ),
+        _analysis_node(
+            "community_detection",
+            "社区发现",
+            "检测网络中的社区结构。",
+            inputs=[
+                _port("graph_node_table_in", "GraphNodeTable", "节点表输入"),
+                _port("graph_edge_table_in", "GraphEdgeTable", "边表输入"),
+            ],
+            outputs=[
+                _port("community_table", "CommunityTable", "社区表", result_bundle_key="community_table"),
+            ],
+            params=[
+                _enum_param("community_method", "社区方法", "greedy_modularity", [
+                    ("greedy_modularity", "贪心模块度"),
+                    ("label_propagation", "标签传播"),
+                ]),
+            ],
+            executor="analysis.community_detection",
+        ),
+        _analysis_node(
+            "main_path_analysis",
+            "主路径分析",
+            "提取网络的主干路径。",
+            inputs=[
+                _port("graph_node_table_in", "GraphNodeTable", "节点表输入"),
+                _port("graph_edge_table_in", "GraphEdgeTable", "边表输入"),
+            ],
+            outputs=[
+                _port("main_path_table", "MainPathTable", "主路径表", result_bundle_key="main_path_table"),
+            ],
+            params=[
+                _enum_param("main_path_mode", "主路径模式", "directed_citation_or_weighted_backbone", [
+                    ("directed_citation_or_weighted_backbone", "有向引用或加权骨干"),
+                    ("cooccurrence_backbone", "共现骨干"),
+                ]),
+            ],
+            executor="analysis.main_path_analysis",
+        ),
+        _analysis_node(
+            "link_prediction",
+            "链接预测",
+            "预测网络中可能缺失的链接。",
+            inputs=[
+                _port("graph_node_table_in", "GraphNodeTable", "节点表输入"),
+                _port("graph_edge_table_in", "GraphEdgeTable", "边表输入"),
+            ],
+            outputs=[
+                _port("link_prediction_table", "LinkPredictionTable", "链接预测表", result_bundle_key="link_prediction_table"),
+            ],
+            params=[
+                _number_param("link_prediction_top_n", "Top N 预测", 200),
+            ],
+            executor="analysis.link_prediction",
+        ),
         {
             "type": "save_csv",
             "title": "保存 CSV",

@@ -450,6 +450,69 @@ export const builtinWorkflowNodeSchema: Record<WorkflowNodeType, GeneratedWorkfl
     ],
     stepId: "analysis"
   },
+  build_network: {
+    label: "构建网络",
+    description: "从共现表构建词项网络。",
+    category: "analysis",
+    inputs: [{ port_id: "cooccurrence_table_in", port_type: "CooccurrenceTable", label: "共现表输入" }],
+    outputs: [
+      { port_id: "graph_node_table", port_type: "GraphNodeTable", label: "网络节点表", result_bundle_key: "graph_node_table" },
+      { port_id: "graph_edge_table", port_type: "GraphEdgeTable", label: "网络边表", result_bundle_key: "graph_edge_table" }
+    ],
+    stepId: "analysis"
+  },
+  graph_metrics: {
+    label: "网络指标",
+    description: "计算 PageRank、介数中心性等网络指标。",
+    category: "analysis",
+    inputs: [
+      { port_id: "graph_node_table_in", port_type: "GraphNodeTable", label: "节点表输入" },
+      { port_id: "graph_edge_table_in", port_type: "GraphEdgeTable", label: "边表输入" }
+    ],
+    outputs: [
+      { port_id: "graph_metric_table", port_type: "GraphMetricTable", label: "网络指标表", result_bundle_key: "graph_metric_table" }
+    ],
+    stepId: "analysis"
+  },
+  community_detection: {
+    label: "社区发现",
+    description: "检测网络中的社区结构。",
+    category: "analysis",
+    inputs: [
+      { port_id: "graph_node_table_in", port_type: "GraphNodeTable", label: "节点表输入" },
+      { port_id: "graph_edge_table_in", port_type: "GraphEdgeTable", label: "边表输入" }
+    ],
+    outputs: [
+      { port_id: "community_table", port_type: "CommunityTable", label: "社区表", result_bundle_key: "community_table" }
+    ],
+    stepId: "analysis"
+  },
+  main_path_analysis: {
+    label: "主路径分析",
+    description: "提取网络的主干路径。",
+    category: "analysis",
+    inputs: [
+      { port_id: "graph_node_table_in", port_type: "GraphNodeTable", label: "节点表输入" },
+      { port_id: "graph_edge_table_in", port_type: "GraphEdgeTable", label: "边表输入" }
+    ],
+    outputs: [
+      { port_id: "main_path_table", port_type: "MainPathTable", label: "主路径表", result_bundle_key: "main_path_table" }
+    ],
+    stepId: "analysis"
+  },
+  link_prediction: {
+    label: "链接预测",
+    description: "预测网络中可能缺失的链接。",
+    category: "analysis",
+    inputs: [
+      { port_id: "graph_node_table_in", port_type: "GraphNodeTable", label: "节点表输入" },
+      { port_id: "graph_edge_table_in", port_type: "GraphEdgeTable", label: "边表输入" }
+    ],
+    outputs: [
+      { port_id: "link_prediction_table", port_type: "LinkPredictionTable", label: "链接预测表", result_bundle_key: "link_prediction_table" }
+    ],
+    stepId: "analysis"
+  },
   save_csv: {
     label: "保存 CSV",
     description: "把上游表格结果写成 CSV 文件。",
