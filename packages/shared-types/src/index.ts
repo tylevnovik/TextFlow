@@ -2,6 +2,7 @@ export type SourceProfile =
   | "generic"
   | "literature"
   | "wos"
+  | "scopus"
   | "patent"
   | "incopat"
   | "business_reserved";
@@ -85,6 +86,15 @@ export type WorkflowPortType =
   | "InstitutionKeywordTable"
   | "InstitutionTopicTable"
   | "DocumentClusterTable"
+  | "GraphNodeTable"
+  | "GraphEdgeTable"
+  | "GraphMetricTable"
+  | "CommunityTable"
+  | "MainPathTable"
+  | "LinkPredictionTable"
+  | "TechnologyIndicatorTable"
+  | "TechnologyClassificationTable"
+  | "MetadataAuditTable"
   | "AnalysisBundle"
   | "AuditTable"
   | "ExportBundle"
@@ -199,7 +209,7 @@ export interface ExperimentSpec {
 export interface SourceFileRecord {
   id: string;
   name: string;
-  source_type: "txt" | "csv" | "xlsx" | "json";
+  source_type: "txt" | "csv" | "xlsx" | "xls" | "json";
   relative_path: string;
   imported_at: string;
   row_count: number;
@@ -851,16 +861,17 @@ export const sourceProfileImportTemplates: Record<
     name: "IncoPat 模板",
     description: "预置 IncoPat 常见中文字段名与别名。",
     field_mappings: [
-      { source_field: "公开（公告）号", target_field: "doc_id", required: true, aliases: ["申请号", "专利号"] },
-      { source_field: "标题", target_field: "title", required: true, aliases: ["专利名称"] },
-      { source_field: "摘要", target_field: "raw_text", required: true, aliases: ["简介"] },
-      { source_field: "公开（公告）日", target_field: "year", required: false, aliases: ["申请日", "年份"] },
-      { source_field: "申请人", target_field: "institution", required: false, aliases: ["专利权人"] },
-      { source_field: "发明人", target_field: "author", required: false, aliases: ["Inventor"] },
-      { source_field: "IPC分类号", target_field: "category_or_tag", required: false, aliases: ["IPC"] },
-      { source_field: "关键词", target_field: "keyword_field", required: false, aliases: ["主题词"] }
+      { source_field: "公开（公告）号", target_field: "doc_id", required: true, aliases: ["公开(公告)号", "申请号", "专利号", "公开号", "授权公告号", "首次公开号"] },
+      { source_field: "标题 (中文)", target_field: "title", required: true, aliases: ["标题（中文）", "标题(中文)", "标题", "专利名称", "标题 (英文)", "标题（英文）", "标题(英文)", "标题（小语种原文）"] },
+      { source_field: "摘要 (中文)", target_field: "raw_text", required: true, aliases: ["摘要（中文）", "摘要(中文)", "摘要", "摘要 (英文)", "摘要（英文）", "摘要(英文)", "摘要（小语种原文）", "首权翻译", "首项权利要求", "独立权利要求", "简介"] },
+      { source_field: "公开（公告）日", target_field: "year", required: false, aliases: ["公开(公告)日", "申请日", "优先权日", "最早优先权日", "年份", "首次公开日", "授权公告日"] },
+      { source_field: "申请人", target_field: "institution", required: false, aliases: ["标准化申请人", "当前权利人", "标准化当前权利人", "第一申请人", "专利权人", "申请人(翻译)", "申请人（翻译）"] },
+      { source_field: "发明人", target_field: "author", required: false, aliases: ["第一发明(设计)人", "第一发明（设计）人", "发明(设计)人(其他)", "发明（设计）人（其他）", "Inventor"] },
+      { source_field: "公开国别", target_field: "country_or_region", required: false, aliases: ["申请人国家/地区", "优先权国别", "同族国家/地区"] },
+      { source_field: "IPC", target_field: "category_or_tag", required: false, aliases: ["IPC分类号", "IPC主分类-小组", "CPC"] },
+      { source_field: "技术功效短语", target_field: "keyword_field", required: false, aliases: ["技术功效句", "用途", "关键词", "主题词"] }
     ],
-    text_build: { mode: "concat_fields", fields: ["标题", "摘要", "关键词"], delimiter: "\n\n", skip_empty: true }
+    text_build: { mode: "concat_fields", fields: ["标题 (中文)", "摘要 (中文)"], delimiter: "\n\n", skip_empty: true }
   },
   business_reserved: {
     name: "商业数据模板",

@@ -6,6 +6,14 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .project_database import (
+    initialize_project_database,
+    load_artifact_payload as db_load_artifact_payload,
+    load_artifact_preview as db_load_artifact_preview,
+    write_artifact_payload as db_write_artifact_payload,
+)
+from .project_store import PROJECT_DATABASE_FILENAME
+
 
 def _json_ready(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -45,6 +53,11 @@ def _preview_rows(payload: Any, limit: int) -> list[Any]:
 
 
 def write_artifact(project_dir: Path, run_id: str, node_id: str, kind: str, payload: Any) -> dict[str, Any]:
+    db_path = project_dir / PROJECT_DATABASE_FILENAME
+    if db_path.exists():
+        db = initialize_project_database(db_path)
+        return db_write_artifact_payload(db, run_id, node_id, kind, payload)
+
     artifact_id = f"artifact-{uuid4().hex[:12]}"
     payload_path, preview_path = _artifact_paths(project_dir, run_id, artifact_id)
     normalized_payload = _json_ready(payload)
@@ -86,6 +99,13 @@ def _find_artifact_path(project_dir: Path, artifact_id: str, *suffixes: str) -> 
 
 
 def load_artifact_preview(project_dir: Path, artifact_id: str, limit: int = 50) -> dict[str, Any]:
+    db_path = project_dir / PROJECT_DATABASE_FILENAME
+    if db_path.exists():
+        db = initialize_project_database(db_path)
+        try:
+            return db_load_artifact_preview(db, artifact_id, limit)
+        except ValueError:
+            pass
     preview_path = _find_artifact_path(project_dir, artifact_id, ".preview.json")
     preview = json.loads(preview_path.read_text(encoding="utf-8"))
     rows = preview.get("rows", [])
@@ -96,6 +116,13 @@ def load_artifact_preview(project_dir: Path, artifact_id: str, limit: int = 50) 
 
 
 def load_artifact_payload(project_dir: Path, artifact_id: str) -> Any:
+    db_path = project_dir / PROJECT_DATABASE_FILENAME
+    if db_path.exists():
+        db = initialize_project_database(db_path)
+        try:
+            return db_load_artifact_payload(db, artifact_id)
+        except ValueError:
+            pass
     payload_path = _find_artifact_path(project_dir, artifact_id, ".json.gz", ".json")
     if payload_path.name.endswith(".preview.json"):
         raise ValueError(f"Artifact payload {artifact_id} not found")

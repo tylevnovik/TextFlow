@@ -20,13 +20,22 @@ from .defaults import (
     default_project_manifest,
     default_workflow_definition,
     empty_result_bundle,
+    json_ready,
     utc_now_iso,
     workflow_payload_hash,
 )
 from .node_registry import builtin_node_definitions
+from .project_database import (
+    initialize_project_database,
+    load_corpus_rows,
+    migrate_corpus_from_json,
+    project_database_integrity_check,
+    replace_corpus_rows,
+)
 from .runtime_support import workflow_runtime_profile
 
 PROJECT_FILENAME = "project.json"
+PROJECT_DATABASE_FILENAME = "project.db"
 CORPUS_FILENAME = "metadata/corpus.json"
 CORPUS_VIEWS_FILENAME = "metadata/corpus_views.json"
 INGESTION_SPECS_FILENAME = "metadata/ingestion_specs.json"
@@ -231,7 +240,7 @@ def ensure_project_layout(project_dir: Path) -> None:
 
 def write_json(path: Path, data: Any) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = json.dumps(data, ensure_ascii=False, indent=2)
+    serialized = json.dumps(json_ready(data), ensure_ascii=False, indent=2)
     if path.exists():
         try:
             if path.read_text(encoding="utf-8") == serialized:
@@ -833,7 +842,11 @@ def write_project_payload(
     if normalized_dirty is None or "manifest" in normalized_dirty:
         write_json(project_dir / PROJECT_FILENAME, storage_manifest)
     if normalized_dirty is None or "corpus" in normalized_dirty:
-        write_json(project_dir / CORPUS_FILENAME, compact_corpus_for_storage(corpus))
+        db_path = project_dir / PROJECT_DATABASE_FILENAME
+        db = initialize_project_database(db_path)
+        replace_corpus_rows(db, compact_corpus_for_storage(corpus))
+        if (project_dir / CORPUS_FILENAME).exists():
+            (project_dir / CORPUS_FILENAME).unlink()
     if normalized_dirty is None or "import_template" in normalized_dirty:
         write_json(project_dir / "metadata/import_template.json", manifest["import_template"])
     if normalized_dirty is None or "dictionary_set" in normalized_dirty:
@@ -1233,7 +1246,16 @@ def save_project(
 
 def load_project(project_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     manifest = read_json(project_dir / PROJECT_FILENAME)
-    corpus = read_json(project_dir / CORPUS_FILENAME) if (project_dir / CORPUS_FILENAME).exists() else []
+    db_path = project_dir / PROJECT_DATABASE_FILENAME
+    corpus: list[dict[str, Any]] = []
+    if db_path.exists():
+        db = initialize_project_database(db_path)
+        corpus = load_corpus_rows(db)
+    elif (project_dir / CORPUS_FILENAME).exists():
+        corpus = read_json(project_dir / CORPUS_FILENAME)
+        db = initialize_project_database(db_path)
+        migrate_corpus_from_json(db, corpus)
+        (project_dir / CORPUS_FILENAME).unlink()
     if (project_dir / CORPUS_VIEWS_FILENAME).exists():
         manifest["corpus_views"] = read_json(project_dir / CORPUS_VIEWS_FILENAME)
     if (project_dir / INGESTION_SPECS_FILENAME).exists():
@@ -1268,7 +1290,27 @@ def delete_project(project_id: str) -> dict[str, Any]:
         raise ValueError(f"Project {project_id} not found")
 
     deleted_path = str(project_dir)
-    shutil.rmtree(project_dir)
+    db_path = project_dir / PROJECT_DATABASE_FILENAME
+    if db_path.exists():
+        try:
+            db = initialize_project_database(db_path)
+            conn = db.connect()
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.execute("PRAGMA journal_mode=DELETE")
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            pass
+    import gc
+    gc.collect()
+    for _ in range(5):
+        shutil.rmtree(project_dir, ignore_errors=True)
+        if not project_dir.exists():
+            break
+        import time
+        time.sleep(0.1)
     remove_project_from_workspace(project_id)
     return {
         "project_id": project_id,
@@ -1349,6 +1391,12 @@ def import_project_package(package_path: Path) -> tuple[Path, dict[str, Any], li
         source_project_dir = find_project_root(temp_root)
         manifest = read_json(source_project_dir / PROJECT_FILENAME)
         corpus = read_json(source_project_dir / CORPUS_FILENAME) if (source_project_dir / CORPUS_FILENAME).exists() else []
+        db_path = source_project_dir / PROJECT_DATABASE_FILENAME
+        if db_path.exists():
+            db = initialize_project_database(db_path)
+            integrity = project_database_integrity_check(db)
+            if integrity != "ok":
+                raise ValueError(f"Project database integrity check failed: {integrity}")
         existing_dir = find_project_dir(str(manifest.get("id")))
         target_dir = ensure_unique_project_dir(str(manifest.get("name") or source_project_dir.stem))
         shutil.copytree(source_project_dir, target_dir)
@@ -1389,6 +1437,19 @@ def build_project_summary(
 
 
 def infer_legacy_document_count(project_dir: Path) -> int:
+    db_path = project_dir / PROJECT_DATABASE_FILENAME
+    if db_path.exists():
+        try:
+            db = initialize_project_database(db_path)
+            conn = db.connect()
+            try:
+                cursor = conn.execute("SELECT COUNT(*) FROM corpus_documents")
+                result = cursor.fetchone()
+                return int(result[0]) if result else 0
+            finally:
+                conn.close()
+        except Exception:
+            pass
     corpus_path = project_dir / CORPUS_FILENAME
     if not corpus_path.exists():
         return 0
