@@ -26,9 +26,11 @@ services/python-engine/pytest-cache/
 services/python-engine/pytest-cache-files-*/
 services/python-engine/build/
 services/python-engine/dist/
+services/python-engine/app/bundled_sample_workspace/
 services/python-engine/*.egg-info/
 services/python-engine/.test-service-*.txt
 *.tfproj/runs/
 *.tfproj/cache/
 *.tfproj/exports/
 samples/projects/*/runs/
+sample_seed_sources/private/
