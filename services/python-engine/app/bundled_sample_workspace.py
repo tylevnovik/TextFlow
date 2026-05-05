@@ -111,6 +111,13 @@ def build_bundled_sample_workspace(
         created = create_builtin_sample_projects()
         _seed_workspace_state(created)
 
+    # Strip raw import source files from bundled projects to reduce installer size.
+    # Corpus is already persisted in project.db; seeds are recreated on first-run restore if needed.
+    for project_dir, _manifest in created:
+        seed_dir = project_dir / "metadata" / "sample_seed"
+        if seed_dir.exists():
+            shutil.rmtree(seed_dir)
+
     metadata = {
         "version": "1.0.0",
         "built_at": utc_now_iso(),
