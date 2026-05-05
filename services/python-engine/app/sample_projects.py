@@ -289,6 +289,42 @@ BUILTIN_SAMPLE_PROJECTS: list[dict[str, Any]] = [
         "review_tasks": [],
         "experiment_specs": [],
     },
+    {
+        "order": 10,
+        "slug": "sample-10-network-technology",
+        "name": "示例 10 - 网络分析与技术识别",
+        "description": "使用 OpenAlex 双语摘要演示共现网络构建、社区发现、主路径分析和技术分类。",
+        "difficulty": "高级",
+        "default_row_count": 10_000,
+        "goal": "如何从共现关系构建网络并识别新兴与核心技术？",
+        "guided_steps": ["运行共现分析并构建网络", "查看社区发现与主路径结果", "运行技术指标与分类"],
+        "covered_nodes": [
+            "corpus_input", "dictionary_input", "normalize_metadata", "clean_text", "normalize_text",
+            "tokenize", "apply_dictionary_rules", "filter_terms", "term_year_analysis",
+            "cooccurrence_analysis", "build_network", "graph_metrics", "community_detection",
+            "main_path_analysis", "link_prediction", "technology_indicators", "technology_classification",
+            "save_csv", "save_xlsx", "save_png", "save_html_report", "note", "group",
+        ],
+        "covered_settings": ["min_edge_weight", "community_method", "main_path_mode", "threshold_emerging_novelty"],
+        "public_data_only": True,
+        "language_balance": {"en": 0.5, "zh": 0.5},
+        "source_datasets": ["openalex_works"],
+        "source_profile": "literature",
+        "sources": [
+            _source_spec("network_tech_en.xlsx", "xlsx", "openalex_works", "en", "sample_10_network_en", 0.5),
+            _source_spec("network_tech_zh.xlsx", "xlsx", "openalex_works", "zh", "sample_10_network_zh", 0.5),
+        ],
+        "workflow_name": "网络分析与技术识别工作流",
+        "import_template_overrides": {"text_build": {"mode": "concat_fields", "fields": ["raw_text"], "delimiter": "\n\n", "skip_empty": True}},
+        "node_config_overrides": {
+            "cooccurrence_analysis": {"cooccurrence_window": 5},
+            "build_network": {"min_edge_weight": 1},
+            "save_html_report": {"include_audit": True},
+        },
+        "dictionary_terms": {"phrase_lexicon": [("network analysis", "network_analysis"), ("技术识别", "技术识别")]},
+        "review_tasks": [],
+        "experiment_specs": [],
+    },
 ]
 
 BUILTIN_SAMPLE_PROJECT_BY_SLUG = {
@@ -1026,6 +1062,77 @@ def _configure_control_gate_workflow(workflow: dict[str, Any]) -> None:
     _connect(workflow, "node-manual-review-gate", "review_gate_summary", "node-save-html-report", "report_in")
 
 
+def _configure_network_technology_workflow(workflow: dict[str, Any]) -> None:
+    workflow["source"] = "manual"
+    workflow["name"] = "网络分析与技术识别工作流"
+    _keep_only_nodes(
+        workflow,
+        {
+            "corpus_input",
+            "dictionary_input",
+            "clean_text",
+            "normalize_text",
+            "tokenize",
+            "apply_dictionary_rules",
+            "filter_terms",
+            "term_year_analysis",
+            "cooccurrence_analysis",
+            "save_csv",
+            "save_xlsx",
+            "save_png",
+            "save_html_report",
+        },
+    )
+    workflow["nodes"].extend(
+        [
+            _new_registry_node("normalize_metadata", "node-normalize-metadata", {"keep_first_institution": True}, x=520, y=330),
+            _new_registry_node("build_network", "node-build-network", {"min_edge_weight": 1}, x=2860, y=860),
+            _new_registry_node("graph_metrics", "node-graph-metrics", {}, x=3240, y=80),
+            _new_registry_node("community_detection", "node-community-detection", {"community_method": "greedy_modularity"}, x=3240, y=340),
+            _new_registry_node("main_path_analysis", "node-main-path-analysis", {"main_path_mode": "cooccurrence_backbone"}, x=3240, y=600),
+            _new_registry_node("link_prediction", "node-link-prediction", {"link_prediction_top_n": 200}, x=3240, y=860),
+            _new_registry_node("technology_indicators", "node-technology-indicators", {}, x=3620, y=80),
+            _new_registry_node("technology_classification", "node-technology-classification", {}, x=3620, y=340),
+        ]
+    )
+    workflow["edges"] = []
+    _add_note_and_group(workflow, group_title="示例 10", note_text="从共现关系构建网络，计算指标并发现社区，最后做技术分类。")
+    _connect(workflow, "node-corpus-input", "corpus", "node-normalize-metadata", "corpus_in")
+    _connect(workflow, "node-normalize-metadata", "normalized_corpus", "node-clean-text", "corpus_in")
+    _connect(workflow, "node-clean-text", "clean_corpus", "node-normalize-text", "corpus_in")
+    _connect(workflow, "node-normalize-text", "normalized_corpus", "node-tokenize", "corpus_in")
+    _connect(workflow, "node-tokenize", "token_corpus", "node-apply-dictionary-rules", "token_corpus_in")
+    _connect(workflow, "node-dictionary-input", "dictionary_set", "node-apply-dictionary-rules", "dictionary_set_in")
+    _connect(workflow, "node-apply-dictionary-rules", "token_corpus", "node-filter-terms", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-term-year-analysis", "token_corpus_in")
+    _connect(workflow, "node-filter-terms", "filtered_token_corpus", "node-cooccurrence-analysis", "token_corpus_in")
+    _connect(workflow, "node-cooccurrence-analysis", "cooccurrence_table", "node-build-network", "cooccurrence_table_in")
+    _connect(workflow, "node-build-network", "graph_node_table", "node-graph-metrics", "graph_node_table_in")
+    _connect(workflow, "node-build-network", "graph_edge_table", "node-graph-metrics", "graph_edge_table_in")
+    _connect(workflow, "node-build-network", "graph_node_table", "node-community-detection", "graph_node_table_in")
+    _connect(workflow, "node-build-network", "graph_edge_table", "node-community-detection", "graph_edge_table_in")
+    _connect(workflow, "node-build-network", "graph_node_table", "node-main-path-analysis", "graph_node_table_in")
+    _connect(workflow, "node-build-network", "graph_edge_table", "node-main-path-analysis", "graph_edge_table_in")
+    _connect(workflow, "node-build-network", "graph_node_table", "node-link-prediction", "graph_node_table_in")
+    _connect(workflow, "node-build-network", "graph_edge_table", "node-link-prediction", "graph_edge_table_in")
+    _connect(workflow, "node-term-year-analysis", "term_year_table", "node-technology-indicators", "term_year_table_in")
+    _connect(workflow, "node-technology-indicators", "technology_indicator_table", "node-technology-classification", "technology_indicator_table_in")
+    for target, port in [
+        ("graph-metrics", "graph_metric_table"),
+        ("community-detection", "community_table"),
+        ("main-path-analysis", "main_path_table"),
+        ("link-prediction", "link_prediction_table"),
+        ("technology-indicators", "technology_indicator_table"),
+        ("technology-classification", "technology_classification_table"),
+    ]:
+        _connect(workflow, f"node-{target}", port, "node-save-csv", "table_in")
+        _connect(workflow, f"node-{target}", port, "node-save-xlsx", "table_in")
+        _connect(workflow, f"node-{target}", port, "node-save-html-report", "report_in")
+    _connect(workflow, "node-term-year-analysis", "term_year_table", "node-save-png", "render_in")
+    _connect(workflow, "node-cooccurrence-analysis", "cooccurrence_table", "node-save-png", "render_in")
+    _connect(workflow, "node-normalize-metadata", "metadata_audit_table", "node-save-html-report", "report_in")
+
+
 def _configure_workflow_for_spec(manifest: dict[str, Any], spec: dict[str, Any]) -> None:
     workflow = manifest["workflow_definitions"][0]
     slug = str(spec["slug"])
@@ -1047,6 +1154,8 @@ def _configure_workflow_for_spec(manifest: dict[str, Any], spec: dict[str, Any])
         _configure_split_evaluate_join_workflow(workflow)
     elif slug == "sample-09-conditional-routing":
         _configure_control_gate_workflow(workflow)
+    elif slug == "sample-10-network-technology":
+        _configure_network_technology_workflow(workflow)
     else:
         raise ValueError(f"Unknown sample project workflow slug: {slug}")
 
