@@ -242,6 +242,16 @@ def load_artifact_preview(db: ProjectDatabase, artifact_id: str, limit: int = 50
         conn.close()
 
 
+def clear_artifacts_except_run(db: ProjectDatabase, keep_run_id: str) -> int:
+    conn = db.connect()
+    try:
+        cursor = conn.execute("DELETE FROM artifacts WHERE run_id != ?", (keep_run_id,))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def project_database_integrity_check(db: ProjectDatabase) -> str:
     conn = db.connect()
     try:

@@ -1367,6 +1367,18 @@ def run_project_workflow_native(
     context.result_bundle["report_files"] = report_files
 
     result_binding_map = _result_bundle_binding_map(active_workflow, registry)
+
+    # Purge stale artifacts before writing new ones to prevent unbounded DB growth.
+    # Cache hits are handled by filesystem pickles; artifacts are only for result inspection.
+    db_path = project_dir / "project.db"
+    if db_path.exists():
+        from .project_database import clear_artifacts_except_run, initialize_project_database
+
+        db = initialize_project_database(db_path)
+        cleared = clear_artifacts_except_run(db, run_record["run_id"])
+        if cleared:
+            context.warning(f"已清理 {cleared} 条历史 artifact 记录")
+
     run_artifact_records: list[dict[str, Any]] = []
     for result_key, value in result_bundle_table_entries(context.result_bundle):
         artifact_kind = _artifact_kind_for_result_value(value)
@@ -1409,12 +1421,8 @@ def run_project_workflow_native(
         dirty_node_ids,
         current_run_id=run_record["run_id"],
     )
-    existing_artifacts = [
-        deepcopy(item)
-        for item in manifest.get("artifact_records", [])
-        if isinstance(item, dict) and str(item.get("run_id") or "") != run_record["run_id"]
-    ]
-    manifest["artifact_records"] = [*existing_artifacts, *run_artifact_records]
+    # Only keep artifact records for the current run to avoid manifest bloat.
+    manifest["artifact_records"] = run_artifact_records
 
     manifest["results"] = context.result_bundle
     manifest["updated_at"] = utc_now_iso()
