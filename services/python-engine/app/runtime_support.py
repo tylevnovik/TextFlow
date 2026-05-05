@@ -13,7 +13,11 @@ _PROGRESS_CALLBACK_DETAIL_SUPPORT: dict[int, bool] = {}
 
 
 def _progress_callback_accepts_detail(progress_callback: ProgressCallback) -> bool:
-    cache_key = id(progress_callback)
+    try:
+        code = progress_callback.__code__
+    except AttributeError:
+        code = None
+    cache_key = id(code) if code is not None else id(progress_callback)
     cached = _PROGRESS_CALLBACK_DETAIL_SUPPORT.get(cache_key)
     if cached is not None:
         return cached
