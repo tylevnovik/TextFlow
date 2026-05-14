@@ -8,6 +8,7 @@ import type {
   DictionaryTableResource,
   FieldMappingRule,
   ImportTemplate,
+  NodeOutputPreview,
   NodeRunSummary,
   OutputBundleId,
   WorkflowRuntimeProfile,
@@ -27,12 +28,7 @@ import type {
 import { sourceProfileImportTemplates, sourceProfiles } from "@textflow/shared-types";
 import type { ImportProjectFilesResponse } from "./bridge/desktopBridge";
 import { ArtifactBrowser } from "./features/artifacts/ArtifactBrowser";
-import { ExperimentPanel } from "./features/experiments/ExperimentPanel";
-import { ResourceBrowser } from "./features/resources/ResourceBrowser";
-import { ReviewQueuePanel } from "./features/review/ReviewQueuePanel";
-import { coerceReviewTasks } from "./features/review/reviewTypes";
 import { RunHistoryPanel } from "./features/results/RunHistoryPanel";
-import { RunDiffPanel } from "./features/results/RunDiffPanel";
 import { runArtifactCompactSummary } from "./runArtifacts";
 import { useTaskProgress, useWorkspace } from "./store/workspaceStore";
 import {
@@ -64,16 +60,10 @@ import {
   AuditTable,
   DocumentPreview,
   EmptyState,
-  FrequencyTable,
-  KeywordPanel,
-  LineChart,
   Meta,
-  PaginatedTable,
   Panel,
-  ScatterChart,
   StatCard,
   Table,
-  TopicPanel
 } from "./ui";
 import type { DocumentPreviewMode } from "./ui";
 import { renderWorkflowNodeInlineEditor, renderWorkflowNodePreview } from "./workflowNodeRegistry";
@@ -132,7 +122,8 @@ const tokenizationToggleItems = [
   ["split_hyphenated_terms", "拆分连字符"],
   ["split_slash_terms", "拆分斜杠词"],
   ["normalize_camel_case", "拆分 camelCase"],
-  ["keep_original_order", "保留原始顺序"]
+  ["keep_original_order", "保留原始顺序"],
+  ["enable_ngrams", "生成 n-gram"]
 ] as const;
 const dictionaryToggleItems = [
   ["apply_standard_terms", "应用标准词"],
@@ -167,16 +158,16 @@ const analysisMethodCards = [
     params: ["每篇文档关键词数", "项目级关键词数"]
   },
   {
-    title: "NMF 主题",
+    title: "NMF / LDA 主题",
     output: "影响：机构 × 主题、主题标签摘要",
     description: "把一组经常共同出现的词归成主题，用来概括机构、年份或来源的关注方向。",
-    params: ["主题数量"]
+    params: ["主题算法", "主题数量"]
   },
   {
-    title: "共现与聚类",
-    output: "影响：共现表、关键词聚类、文档聚类图",
-    description: "用窗口共现和聚类把词与文档的关联结构展示出来，方便找热点和分组。",
-    params: ["共现窗口", "最小共现次数", "关键词聚类数", "文档聚类数"]
+    title: "共现、相似度与聚类",
+    output: "影响：共现表、相似度表、关键词聚类、文档聚类图",
+    description: "用窗口共现、文档相似度和聚类把词与文档的关联结构展示出来，方便找热点和分组。",
+    params: ["共现窗口", "最小共现次数", "最小相似度", "关键词聚类数", "文档聚类数"]
   }
 ] as const;
 const runScopeModeOptions: Array<{ id: RunScopeDefinition["mode"]; title: string; description: string }> = [
@@ -343,7 +334,6 @@ export const pageMeta: Record<PageId, { title: string; headline: string; tag: st
   data: { title: "导入资料", headline: "把文件导入进来，并确认字段对应关系", tag: "导入" },
   workflow: { title: "处理与分析", headline: "确认处理步骤，然后开始运行", tag: "处理" },
   dictionaries: { title: "词表规则", headline: "维护停用词、同义词和标准词规则", tag: "词表" },
-  analysis: { title: "分析详情", headline: "查看词频、共现、YAKE 关键词和 NMF 主题", tag: "分析" },
   results: { title: "结果导出", headline: "查看本次运行，并导出需要的结果", tag: "结果" },
   report: { title: "报告预览", headline: "预览 HTML 报告结构和摘要", tag: "报告" },
   settings: { title: "设置", headline: "查看默认偏好和本地配置", tag: "设置" }
@@ -564,8 +554,18 @@ function normalizeRuntimeProfileDraft(runtimeProfile: WorkflowRuntimeProfile): W
   const enabledOptionalSteps = optionalWorkflowSteps.filter((step) => runtimeProfile.enabled_steps.includes(step));
   return {
     ...runtimeProfile,
+    tokenization: {
+      ...runtimeProfile.tokenization,
+      enable_ngrams: runtimeProfile.tokenization.enable_ngrams ?? false,
+      ngram_min: runtimeProfile.tokenization.ngram_min ?? 2,
+      ngram_max: runtimeProfile.tokenization.ngram_max ?? 2
+    },
     analysis: {
       ...runtimeProfile.analysis,
+      similarity_method: runtimeProfile.analysis.similarity_method ?? "cosine",
+      min_similarity: runtimeProfile.analysis.min_similarity ?? 0.2,
+      similarity_top_k: runtimeProfile.analysis.similarity_top_k ?? 200,
+      topic_algorithm: runtimeProfile.analysis.topic_algorithm ?? "nmf",
       topic_model_k: runtimeProfile.analysis.topic_model_k ?? runtimeProfile.analysis.keyword_cluster_k ?? 4
     },
     export: {
@@ -741,12 +741,16 @@ function workflowNodeSummary(node: WorkflowNodeInstance, runtimeProfile: Workflo
       return "输出词项年份变化";
     case "cooccurrence_analysis":
       return `窗口 ${Number(config.cooccurrence_window ?? runtimeProfile.analysis.cooccurrence_window)} · 最小共现 ${Number(config.min_cooccurrence ?? runtimeProfile.analysis.min_cooccurrence)}`;
+    case "similarity_analysis":
+      return `Cosine · >= ${Number(config.min_similarity ?? runtimeProfile.analysis.min_similarity)}`;
     case "keyword_extraction":
       return `文档 ${Number(config.top_k_per_doc ?? runtimeProfile.analysis.top_k_per_doc)} · 项目 ${Number(config.top_k_project ?? runtimeProfile.analysis.top_k_project)}`;
     case "keyword_clustering":
       return `聚类 ${Number(config.keyword_cluster_k ?? runtimeProfile.analysis.keyword_cluster_k)} · 主题 ${Number(config.topic_model_k ?? runtimeProfile.analysis.topic_model_k)}`;
     case "institution_topic_analysis":
       return `主题 ${Number(config.topic_model_k ?? runtimeProfile.analysis.topic_model_k)}`;
+    case "topic_modeling":
+      return `${String(config.topic_algorithm ?? runtimeProfile.analysis.topic_algorithm).toUpperCase()} · 主题 ${Number(config.topic_model_k ?? runtimeProfile.analysis.topic_model_k)}`;
     case "save_csv":
       return `CSV · ${String(config.file_prefix ?? "tables")}`;
     case "save_xlsx":
@@ -1014,6 +1018,85 @@ function previewSampleTerms(documents: CorpusItem[], field: "tokens" | "phrase_h
     .slice(0, 12);
 }
 
+function stringifyNodeOutputPreviewCell(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map((item) => stringifyNodeOutputPreviewCell(item)).filter(Boolean).slice(0, 12).join(" / ");
+  }
+  if (value && typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value ?? "—");
+}
+
+function renderPersistedNodeOutputPreview(nodeRuntime?: WorkflowNodeRuntimeState) {
+  const previewEntries = Object.entries(nodeRuntime?.output_previews ?? {})
+    .filter((entry): entry is [string, NodeOutputPreview] => Boolean(entry[1]) && entry[1].kind !== "empty");
+  if (!previewEntries.length) {
+    return null;
+  }
+  const [portId, preview] = previewEntries[0];
+  const rowCount = Number(preview.row_count ?? 0);
+
+  if (preview.kind === "table" && preview.rows?.length) {
+    const rows = preview.rows.slice(0, 5).map((row) =>
+      Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [key, stringifyNodeOutputPreviewCell(value)])
+      )
+    );
+    const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 8);
+    return (
+      <Panel title="节点输出预览（最近一次运行）">
+        <div className="status-panel"><strong>输出端口</strong><span>{portId} · {rowCount} 行</span></div>
+        <Table columns={columns} rows={rows} />
+      </Panel>
+    );
+  }
+
+  if (preview.kind === "list" && preview.items?.length) {
+    return (
+      <Panel title="节点输出预览（最近一次运行）">
+        <div className="status-panel"><strong>输出端口</strong><span>{portId} · {rowCount} 项</span></div>
+        <ul className="micro-list">
+          {preview.items.slice(0, 8).map((item, index) => <li key={`${portId}-${index}`}>{item}</li>)}
+        </ul>
+      </Panel>
+    );
+  }
+
+  if (preview.kind === "text" && preview.text) {
+    return (
+      <Panel title="节点输出预览（最近一次运行）">
+        <div className="status-panel"><strong>输出端口</strong><span>{portId}</span></div>
+        <p className="body-copy preview-copy">{preview.text}</p>
+      </Panel>
+    );
+  }
+
+  if ((preview.kind === "object" || preview.kind === "scalar") && preview.value !== undefined) {
+    return (
+      <Panel title="节点输出预览（最近一次运行）">
+        <div className="status-panel"><strong>输出端口</strong><span>{portId}</span></div>
+        <pre className="code-box preview-code">{stringifyNodeOutputPreviewCell(preview.value)}</pre>
+      </Panel>
+    );
+  }
+
+  if (preview.kind === "object" && preview.keys?.length) {
+    return (
+      <Panel title="节点输出预览（最近一次运行）">
+        <div className="status-panel"><strong>输出端口</strong><span>{portId}</span></div>
+        <div className="status-panel"><strong>字段</strong><span>{preview.keys.join(" / ")}</span></div>
+      </Panel>
+    );
+  }
+
+  return null;
+}
+
 function edgeDataSummary(
   portType: WorkflowPortType | "Unknown",
   project: ProjectManifest,
@@ -1087,11 +1170,13 @@ function edgeDataSummary(
       };
     case "AnyTable":
       return {
-        summary: `当前结果快照包含 ${results.frequency_table.length + results.term_year_table.length + results.cooccurrence_table.length} 条主要表格结果。`,
+        summary: `当前结果快照包含 ${results.frequency_table.length + results.term_year_table.length + results.cooccurrence_table.length + (results.topic_summary_table?.length ?? 0) + (results.graph_metric_table?.length ?? 0)} 条主要表格结果。`,
         samples: [
           ...results.frequency_table.slice(0, 2).map((row) => `词频：${row.term}`),
           ...results.term_year_table.slice(0, 2).map((row) => `年份：${row.term}`),
-          ...results.cooccurrence_table.slice(0, 2).map((row) => `共现：${row.term_a}`)
+          ...results.cooccurrence_table.slice(0, 2).map((row) => `共现：${row.term_a}`),
+          ...(results.topic_summary_table ?? []).slice(0, 1).map((row) => `主题：${String(row.topic_label ?? row.topic_id ?? "")}`),
+          ...(results.graph_metric_table ?? []).slice(0, 1).map((row) => `网络：${String(row.term ?? row.node ?? "")}`)
         ].slice(0, 5)
       };
     case "AnyRenderable":
@@ -1164,6 +1249,7 @@ function historicalRuntimeState(nodeRun: NodeRunSummary, index: number, totalNod
     output_ports: nodeRun.output_ports,
     output_summary: nodeRun.output_summary,
     sample_outputs: nodeRun.sample_outputs,
+    output_previews: nodeRun.output_previews,
     error: nodeRun.error,
   };
 }
@@ -1243,8 +1329,6 @@ export const PageView = memo(function PageView({ page }: { page: PageId }) {
       return <WorkflowEditorPage />;
     case "dictionaries":
       return <DictionariesPage />;
-    case "analysis":
-      return <AnalysisPage />;
     case "results":
       return <ResultsPage />;
     case "report":
@@ -1483,9 +1567,7 @@ function HomePage() {
 
 function ProjectPage() {
   const {
-    state: { snapshot, loading },
-    createCorpusView,
-    saveIngestionSpec,
+    state: { snapshot },
     setActivePage
   } = useWorkspace();
   const project = snapshot.current_project;
@@ -1561,19 +1643,6 @@ function ProjectPage() {
           </div>
         </Panel>
       </div>
-
-      <ResourceBrowser
-        project={project}
-        corpus={snapshot.corpus}
-        loading={loading}
-        onOpenCorpusView={() => setActivePage("data")}
-        onCreateCorpusView={async (view) => {
-          await createCorpusView(view);
-        }}
-        onSaveIngestionSpec={async (spec) => {
-          await saveIngestionSpec(spec);
-        }}
-      />
 
       <Panel title="项目源文件清单">
         <Table
@@ -2120,18 +2189,54 @@ function DataPage() {
   );
 }
 
-function WorkflowEditorPage() {
+export function WorkflowEditorPage() {
+  const workspace = useWorkspace();
+  const taskProgress = useTaskProgress();
+  const {
+    state: { snapshot, loading }
+  } = workspace;
+  const project = snapshot.current_project;
+  const activeWorkflow = project ? resolveActiveWorkflow(project) : null;
+
+  if (!project || !activeWorkflow) {
+    return (
+      <EmptyState
+        title="流程配置待初始化"
+        body={loading ? "项目仍在加载中，稍等一下就能继续配置流程。" : "请先建立项目工作区。"}
+      />
+    );
+  }
+
+  return (
+    <WorkflowEditorPageContent
+      workspace={workspace}
+      taskProgress={taskProgress}
+      project={project}
+      activeWorkflow={activeWorkflow}
+    />
+  );
+}
+
+function WorkflowEditorPageContent({
+  workspace,
+  taskProgress,
+  project,
+  activeWorkflow
+}: {
+  workspace: ReturnType<typeof useWorkspace>;
+  taskProgress: ReturnType<typeof useTaskProgress>;
+  project: ProjectManifest;
+  activeWorkflow: WorkflowDefinition;
+}) {
   const {
     state: { snapshot, loading },
     saveProject,
     runWorkflow,
-    setActivePage
-  } = useWorkspace();
-  const taskProgress = useTaskProgress();
-  const project = snapshot.current_project;
-  const activeWorkflow = project ? resolveActiveWorkflow(project) : null;
+    setActivePage,
+    loadArtifactPreview
+  } = workspace;
   const [draftWorkflow, setDraftWorkflow] = useState<WorkflowDefinition | null>(
-    project && activeWorkflow ? deepClone(activeWorkflow) : null
+    deepClone(activeWorkflow)
   );
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [selectedEdgeId, setSelectedEdgeId] = useState("");
@@ -2142,6 +2247,7 @@ function WorkflowEditorPage() {
   const [draggedToolboxNodeType, setDraggedToolboxNodeType] = useState<WorkflowNodeInstance["node_type"] | "">("");
   const [toolboxDragPointer, setToolboxDragPointer] = useState<{ x: number; y: number } | null>(null);
   const [isCanvasDropActive, setIsCanvasDropActive] = useState(false);
+  const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
   const canvasScrollRef = useRef<HTMLDivElement | null>(null);
   const canvasTopbarRef = useRef<HTMLDivElement | null>(null);
   const canvasBannerRef = useRef<HTMLDivElement | null>(null);
@@ -2236,14 +2342,14 @@ function WorkflowEditorPage() {
   }, []);
 
   useEffect(() => {
-    const nextWorkflow = project ? resolveActiveWorkflow(project) : null;
-    const persistedDraft = project && nextWorkflow
+    const nextWorkflow = resolveActiveWorkflow(project) ?? activeWorkflow;
+    const persistedDraft = nextWorkflow
       ? loadPersistedWorkflowDraft(project.id, nextWorkflow.workflow_id)
       : null;
-    const persistedEditorState = project && nextWorkflow
+    const persistedEditorState = nextWorkflow
       ? loadPersistedWorkflowEditorState(project.id, nextWorkflow.workflow_id)
       : null;
-    const normalizedWorkflow = project && nextWorkflow
+    const normalizedWorkflow = nextWorkflow
       ? normalizeWorkflowGraph(
         deepClone(persistedDraft ?? nextWorkflow),
         projectRuntimeProfile(project, persistedDraft ?? nextWorkflow)
@@ -2252,12 +2358,11 @@ function WorkflowEditorPage() {
     const hydratedWorkflow = normalizedWorkflow && !persistedDraft
       ? updateWorkflowViewport(normalizedWorkflow, workflowFitViewport(normalizedWorkflow.nodes))
       : normalizedWorkflow;
-    const sortedNodeIds = hydratedWorkflow
-      ? [...hydratedWorkflow.nodes]
-        .sort((left, right) => left.position.x - right.position.x || left.position.y - right.position.y)
-        .map((node) => node.node_id)
-      : [];
-    setDraftWorkflow(hydratedWorkflow);
+    const nextDraftWorkflow = hydratedWorkflow ?? deepClone(activeWorkflow);
+    const sortedNodeIds = [...nextDraftWorkflow.nodes]
+      .sort((left, right) => left.position.x - right.position.x || left.position.y - right.position.y)
+      .map((node) => node.node_id);
+    setDraftWorkflow(nextDraftWorkflow);
     setSelectedNodeId(
       persistedEditorState?.selectedNodeId && sortedNodeIds.includes(persistedEditorState.selectedNodeId)
         ? persistedEditorState.selectedNodeId
@@ -2268,7 +2373,7 @@ function WorkflowEditorPage() {
     setDocumentPickerQuery(persistedEditorState?.documentPickerQuery ?? "");
     setDockView(persistedEditorState?.dockView ?? "library");
     setDockCollapsed(persistedEditorState?.dockCollapsed ?? false);
-  }, [project?.id, project?.updated_at, project?.active_workflow_id]);
+  }, [activeWorkflow, project]);
 
   useEffect(() => {
     if (!project || !draftWorkflow) {
@@ -2396,6 +2501,37 @@ function WorkflowEditorPage() {
     }, {});
   }, [latestRun?.run_id, latestRun?.node_runs]);
   const runtimeNodeStates = liveWorkflowRun?.node_states ?? historicalRuntimeStates;
+  const runtimeStateForNode = (node: WorkflowNodeInstance | null | undefined): WorkflowNodeRuntimeState | undefined => {
+    if (!node) {
+      return undefined;
+    }
+    return runtimeNodeStates[node.node_id]
+      ?? Object.values(runtimeNodeStates).find((nodeState) => nodeState.node_type === node.node_type);
+  };
+  const previewArtifacts = useMemo(() => {
+    if (!previewNodeId || !project) return [];
+    return project.artifact_records.filter((artifact) => artifact.node_id === previewNodeId);
+  }, [previewNodeId, project]);
+  const previewNode = previewNodeId ? nodeLookup.get(previewNodeId) ?? null : null;
+  const handleLoadArtifactPreview = async (artifactId: string) => {
+    const data = await loadArtifactPreview(artifactId);
+    if (!data) {
+      throw new Error("加载产物预览失败");
+    }
+    return data;
+  };
+  useEffect(() => {
+    if (!previewNodeId) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPreviewNodeId(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [previewNodeId]);
   const liveRuntimeProgress = liveWorkflowRun ? workflowRuntimeProgress(liveWorkflowRun) : (latestRun?.node_runs?.length ? 1 : 0);
   const runtimeCompletedNodes = liveWorkflowRun?.completed_nodes
     ?? Object.values(runtimeNodeStates).filter((nodeRun) => nodeRun.status !== "pending" && nodeRun.status !== "running").length;
@@ -2458,7 +2594,7 @@ function WorkflowEditorPage() {
     }))
     .filter((section) => section.items.length > 0);
   const registeredNodeCount = snapshot.node_definitions?.length ?? 0;
-  const selectedNodeRuntime = selectedNode ? runtimeNodeStates[selectedNode.node_id] : undefined;
+  const selectedNodeRuntime = runtimeStateForNode(selectedNode);
 
   const activateDock = (view: "library" | "nodes" | "status") => {
     setDockView(view);
@@ -3199,6 +3335,14 @@ function WorkflowEditorPage() {
               <span>切词前最短长度</span>
               <input type="number" value={Number(selectedNode.config.min_token_length_before_filter ?? draftRuntimeProfile.tokenization.min_token_length_before_filter)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_token_length_before_filter: Number(event.target.value) })} disabled={loading} />
             </label>
+            <label className="field">
+              <span>最小 n-gram</span>
+              <input type="number" value={Number(selectedNode.config.ngram_min ?? draftRuntimeProfile.tokenization.ngram_min)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { ngram_min: Number(event.target.value) })} disabled={loading} />
+            </label>
+            <label className="field">
+              <span>最大 n-gram</span>
+              <input type="number" value={Number(selectedNode.config.ngram_max ?? draftRuntimeProfile.tokenization.ngram_max)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { ngram_max: Number(event.target.value) })} disabled={loading} />
+            </label>
           </div>
           {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, tokenizationToggleItems)}
         </Panel>
@@ -3253,6 +3397,36 @@ function WorkflowEditorPage() {
           <div className="settings-grid">
             <label className="field"><span>共现窗口</span><input type="number" value={Number(selectedNode.config.cooccurrence_window ?? draftRuntimeProfile.analysis.cooccurrence_window)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { cooccurrence_window: Number(event.target.value) })} disabled={loading} /></label>
             <label className="field"><span>最小共现次数</span><input type="number" value={Number(selectedNode.config.min_cooccurrence ?? draftRuntimeProfile.analysis.min_cooccurrence)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_cooccurrence: Number(event.target.value) })} disabled={loading} /></label>
+          </div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "similarity_analysis") {
+      return (
+        <Panel title="相似度计算">
+          <div className="settings-grid">
+            <label className="field"><span>最小相似度</span><input type="number" step="0.01" value={Number(selectedNode.config.min_similarity ?? draftRuntimeProfile.analysis.min_similarity)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_similarity: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>最多文档对</span><input type="number" value={Number(selectedNode.config.similarity_top_k ?? draftRuntimeProfile.analysis.similarity_top_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { similarity_top_k: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>特征词数量</span><input value={String(selectedNode.config.feature_term_count ?? draftRuntimeProfile.analysis.feature_term_count)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { feature_term_count: event.target.value })} disabled={loading} /></label>
+          </div>
+        </Panel>
+      );
+    }
+
+    if (selectedNode.node_type === "topic_modeling") {
+      return (
+        <Panel title="主题建模">
+          <div className="settings-grid">
+            <label className="field">
+              <span>主题算法</span>
+              <select value={String(selectedNode.config.topic_algorithm ?? draftRuntimeProfile.analysis.topic_algorithm)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { topic_algorithm: event.target.value })} disabled={loading}>
+                <option value="nmf">NMF</option>
+                <option value="lda">LDA</option>
+              </select>
+            </label>
+            <label className="field"><span>主题数量</span><input type="number" value={Number(selectedNode.config.topic_model_k ?? draftRuntimeProfile.analysis.topic_model_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { topic_model_k: Number(event.target.value) })} disabled={loading} /></label>
+            <label className="field"><span>每主题词项数</span><input type="number" value={Number(selectedNode.config.top_terms_per_topic ?? 5)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_terms_per_topic: Number(event.target.value) })} disabled={loading} /></label>
           </div>
         </Panel>
       );
@@ -3355,32 +3529,43 @@ function WorkflowEditorPage() {
     enabledDictionaryEntryCount
   });
 
-  const renderSelectedNodePreview = () => {
-    if (!selectedNode) {
-      return null;
-    }
-
-    const rawSamples = previewSampleTexts(matchedDocuments, "raw_text");
-    const cleanSamples = previewSampleTexts(matchedDocuments, "clean_text");
-    const normalizedSamples = previewSampleTexts(matchedDocuments, "normalized_text");
-    const tokenSamples = previewSampleTerms(matchedDocuments, "tokens");
-    const phraseSamples = previewSampleTerms(matchedDocuments, "phrase_hits");
-    const filteredSamples = previewSampleTerms(matchedDocuments, "filtered_tokens");
+  const renderNodePreview = (node: WorkflowNodeInstance) => {
+    const nodeScope = node.node_type === "corpus_input" || node.node_type === "filter_corpus"
+      ? runScopeForNode(node)
+      : workflowRunScope;
+    const nodeMatchedDocuments = snapshot.corpus.filter((item) => corpusMatchesRunScope(item, nodeScope));
+    const rawSamples = previewSampleTexts(nodeMatchedDocuments, "raw_text");
+    const cleanSamples = previewSampleTexts(nodeMatchedDocuments, "clean_text");
+    const normalizedSamples = previewSampleTexts(nodeMatchedDocuments, "normalized_text");
+    const tokenSamples = previewSampleTerms(nodeMatchedDocuments, "tokens");
+    const phraseSamples = previewSampleTerms(nodeMatchedDocuments, "phrase_hits");
+    const filteredSamples = previewSampleTerms(nodeMatchedDocuments, "filtered_tokens");
     const latestArtifacts = latestRun?.artifacts ?? [];
+    const nodeRuntime = runtimeStateForNode(node);
+    const persistedOutputPreview = renderPersistedNodeOutputPreview(nodeRuntime);
+    const resultBundle = project.results as unknown as Record<string, unknown>;
+    const outputResultKeys = node.outputs
+      .map((port) => (port as typeof port & { result_bundle_key?: string }).result_bundle_key)
+      .filter((key): key is string => Boolean(key));
+    const firstResultKey = outputResultKeys.find((key) => Array.isArray(resultBundle[key]));
+    const firstResultRows = firstResultKey && Array.isArray(resultBundle[firstResultKey])
+      ? resultBundle[firstResultKey] as Array<Record<string, unknown>>
+      : [];
+    const configKeys = Object.keys(node.config ?? {});
 
-    if (selectedNode.node_type === "corpus_input" || selectedNode.node_type === "load_project_corpus" || selectedNode.node_type === "filter_corpus") {
+    if (node.node_type === "corpus_input" || node.node_type === "load_project_corpus" || node.node_type === "filter_corpus") {
       return (
         <Panel title="预览（基于当前项目快照）">
-          <div className="status-panel"><strong>当前命中文档</strong><span>{matchedDocuments.length} 篇</span></div>
+          <div className="status-panel"><strong>当前命中文档</strong><span>{nodeMatchedDocuments.length} 篇</span></div>
           <ul className="micro-list">
-            {matchedDocuments.slice(0, 5).map((item) => <li key={item.doc_id}>{item.title}</li>)}
-            {!matchedDocuments.length && <li>当前范围下还没有可见文档。</li>}
+            {nodeMatchedDocuments.slice(0, 5).map((item) => <li key={item.doc_id}>{item.title}</li>)}
+            {!nodeMatchedDocuments.length && <li>当前范围下还没有可见文档。</li>}
           </ul>
         </Panel>
       );
     }
 
-    if (selectedNode.node_type === "dictionary_input" || selectedNode.node_type === "project_dictionary_set") {
+    if (node.node_type === "dictionary_input" || node.node_type === "project_dictionary_set") {
       return (
         <Panel title="预览（基于当前项目词表）">
           <div className="status-panel"><strong>启用词条</strong><span>{enabledDictionaryEntryCount(project.dictionary_set)} 条</span></div>
@@ -3391,47 +3576,59 @@ function WorkflowEditorPage() {
       );
     }
 
-    if (selectedNode.node_type === "clean_text") {
+    if (node.node_type === "clean_text") {
       return (
-        <Panel title="预览（基于最近一次项目快照）">
-          <div className="preview-compare-grid">
-            <div className="preview-card"><strong>原文片段</strong><p>{rawSamples[0] ?? "暂无原文样本。"}</p></div>
-            <div className="preview-card"><strong>清洗后片段</strong><p>{cleanSamples[0] ?? "暂无清洗后样本。"}</p></div>
-          </div>
-        </Panel>
+        <>
+          <Panel title="预览（基于最近一次项目快照）">
+            <div className="preview-compare-grid">
+              <div className="preview-card"><strong>原文片段</strong><p>{rawSamples[0] ?? "暂无原文样本。"}</p></div>
+              <div className="preview-card"><strong>清洗后片段</strong><p>{cleanSamples[0] ?? "暂无清洗后样本。"}</p></div>
+            </div>
+          </Panel>
+          {!cleanSamples[0] ? persistedOutputPreview : null}
+        </>
       );
     }
 
-    if (selectedNode.node_type === "normalize_text") {
+    if (node.node_type === "normalize_text") {
       return (
-        <Panel title="预览（基于最近一次项目快照）">
-          <div className="preview-compare-grid">
-            <div className="preview-card"><strong>清洗后片段</strong><p>{cleanSamples[0] ?? "暂无清洗后样本。"}</p></div>
-            <div className="preview-card"><strong>标准化片段</strong><p>{normalizedSamples[0] ?? "暂无标准化样本。"}</p></div>
-          </div>
-        </Panel>
+        <>
+          <Panel title="预览（基于最近一次项目快照）">
+            <div className="preview-compare-grid">
+              <div className="preview-card"><strong>清洗后片段</strong><p>{cleanSamples[0] ?? "暂无清洗后样本。"}</p></div>
+              <div className="preview-card"><strong>标准化片段</strong><p>{normalizedSamples[0] ?? "暂无标准化样本。"}</p></div>
+            </div>
+          </Panel>
+          {!normalizedSamples[0] ? persistedOutputPreview : null}
+        </>
       );
     }
 
-    if (selectedNode.node_type === "tokenize") {
+    if (node.node_type === "tokenize") {
       return (
-        <Panel title="预览（基于最近一次项目快照）">
-          <div className="status-panel"><strong>Token 样本</strong><span>{tokenSamples.slice(0, 8).join(" / ") || "暂无 token 样本"}</span></div>
-          <div className="status-panel"><strong>短语命中</strong><span>{phraseSamples.slice(0, 6).join(" / ") || "暂无短语命中"}</span></div>
-        </Panel>
+        <>
+          <Panel title="预览（基于最近一次项目快照）">
+            <div className="status-panel"><strong>Token 样本</strong><span>{tokenSamples.slice(0, 8).join(" / ") || "暂无 token 样本"}</span></div>
+            <div className="status-panel"><strong>短语命中</strong><span>{phraseSamples.slice(0, 6).join(" / ") || "暂无短语命中"}</span></div>
+          </Panel>
+          {!tokenSamples.length ? persistedOutputPreview : null}
+        </>
       );
     }
 
-    if (selectedNode.node_type === "apply_dictionary_rules" || selectedNode.node_type === "filter_terms") {
+    if (node.node_type === "apply_dictionary_rules" || node.node_type === "filter_terms") {
       return (
-        <Panel title="预览（基于最近一次项目快照）">
-          <div className="status-panel"><strong>过滤后词项</strong><span>{filteredSamples.slice(0, 10).join(" / ") || "暂无过滤后词项"}</span></div>
-          <div className="status-panel"><strong>审计命中</strong><span>{project.results.audit_table.length} 条</span></div>
-        </Panel>
+        <>
+          <Panel title="预览（基于最近一次项目快照）">
+            <div className="status-panel"><strong>过滤后词项</strong><span>{filteredSamples.slice(0, 10).join(" / ") || "暂无过滤后词项"}</span></div>
+            <div className="status-panel"><strong>审计命中</strong><span>{project.results.audit_table.length} 条</span></div>
+          </Panel>
+          {!filteredSamples.length ? persistedOutputPreview : null}
+        </>
       );
     }
 
-    if (selectedNode.node_type === "frequency_statistics" || selectedNode.node_type === "analyze_corpus") {
+    if (node.node_type === "frequency_statistics" || node.node_type === "analyze_corpus") {
       return (
         <Panel title="预览（基于最近一次运行结果）">
           <div className="status-panel"><strong>词频 Top 5</strong><span>{project.results.frequency_table.slice(0, 5).map((row) => `${row.term}(${row.tf})`).join(" / ") || "暂无词频结果"}</span></div>
@@ -3439,7 +3636,7 @@ function WorkflowEditorPage() {
       );
     }
 
-    if (selectedNode.node_type === "term_year_analysis") {
+    if (node.node_type === "term_year_analysis") {
       return (
         <Panel title="预览（基于最近一次运行结果）">
           <div className="status-panel"><strong>年份趋势样本</strong><span>{project.results.term_year_table.slice(0, 5).map((row) => `${row.term}(${row.year})`).join(" / ") || "暂无年份结果"}</span></div>
@@ -3447,7 +3644,7 @@ function WorkflowEditorPage() {
       );
     }
 
-    if (selectedNode.node_type === "cooccurrence_analysis") {
+    if (node.node_type === "cooccurrence_analysis") {
       return (
         <Panel title="预览（基于最近一次运行结果）">
           <div className="status-panel"><strong>共现样本</strong><span>{project.results.cooccurrence_table.slice(0, 5).map((row) => `${row.term_a}×${row.term_b}`).join(" / ") || "暂无共现结果"}</span></div>
@@ -3455,7 +3652,15 @@ function WorkflowEditorPage() {
       );
     }
 
-    if (selectedNode.node_type === "keyword_extraction") {
+    if (node.node_type === "similarity_analysis") {
+      return (
+        <Panel title="预览（基于最近一次运行结果）">
+          <div className="status-panel"><strong>相似文档对</strong><span>{(project.results.similarity_table ?? []).slice(0, 5).map((row) => `${String(row.doc_id_a)}~${String(row.doc_id_b)}`).join(" / ") || "暂无相似度结果"}</span></div>
+        </Panel>
+      );
+    }
+
+    if (node.node_type === "keyword_extraction") {
       return (
         <Panel title="预览（基于最近一次运行结果）">
           <div className="status-panel"><strong>项目关键词</strong><span>{project.results.keyword_result.filter((row) => row.scope === "project").slice(0, 5).map((row) => row.keyword).join(" / ") || "暂无项目关键词"}</span></div>
@@ -3463,7 +3668,7 @@ function WorkflowEditorPage() {
       );
     }
 
-    if (selectedNode.node_type === "keyword_clustering") {
+    if (node.node_type === "keyword_clustering") {
       return (
         <Panel title="预览（基于最近一次运行结果）">
           <div className="status-panel"><strong>聚类样本</strong><span>{project.results.keyword_cluster_result.slice(0, 5).map((row) => `${row.topic_label ?? `簇 ${row.cluster_id}`}:${row.term}`).join(" / ") || "暂无聚类结果"}</span></div>
@@ -3471,7 +3676,7 @@ function WorkflowEditorPage() {
       );
     }
 
-    if (selectedNode.node_type === "institution_topic_analysis") {
+    if (node.node_type === "institution_topic_analysis") {
       return (
         <Panel title="预览（基于最近一次运行结果）">
           <div className="status-panel"><strong>机构主题样本</strong><span>{project.results.institution_topic_cooccurrence.slice(0, 5).map((row) => `${row.institution}:${row.topic_label}`).join(" / ") || "暂无机构主题结果"}</span></div>
@@ -3479,7 +3684,7 @@ function WorkflowEditorPage() {
       );
     }
 
-    if (selectedNode.node_type === "save_csv" || selectedNode.node_type === "save_xlsx" || selectedNode.node_type === "save_png" || selectedNode.node_type === "save_html_report" || selectedNode.node_type === "export_results") {
+    if (node.node_type === "save_csv" || node.node_type === "save_xlsx" || node.node_type === "save_png" || node.node_type === "save_html_report" || node.node_type === "export_results") {
       return (
         <Panel title="预览（基于最近一次运行结果）">
           <div className="status-panel"><strong>导出文件</strong><span>{project.results.report_files.length} 个</span></div>
@@ -3492,7 +3697,23 @@ function WorkflowEditorPage() {
       );
     }
 
-    return null;
+    return (
+      <>
+        <Panel title="预览（节点概览）">
+          <div className="status-panel"><strong>节点状态</strong><span>{nodeRuntime ? runtimeStatusLabel(nodeRuntime.status) : "尚未执行"}</span></div>
+          <div className="status-panel"><strong>输出摘要</strong><span>{nodeRuntime?.output_summary ?? "当前还没有节点级结果摘要。"}</span></div>
+          {nodeRuntime?.sample_outputs?.length ? (
+            <div className="status-panel"><strong>样本输出</strong><span>{nodeRuntime.sample_outputs.slice(0, 5).join(" / ")}</span></div>
+          ) : null}
+          {firstResultKey ? (
+            <div className="status-panel"><strong>结果表</strong><span>{firstResultKey} · {firstResultRows.length} 行</span></div>
+          ) : null}
+          <div className="status-panel"><strong>端口</strong><span>{node.inputs.length} 个输入 / {node.outputs.length} 个输出</span></div>
+          <div className="status-panel"><strong>配置</strong><span>{configKeys.slice(0, 6).join(" / ") || "使用默认配置"}</span></div>
+        </Panel>
+        {persistedOutputPreview}
+      </>
+    );
   };
 
   const renderDockContent = () => {
@@ -3510,7 +3731,7 @@ function WorkflowEditorPage() {
             </div>
             <div className="workflow-node-list">
               {sortedNodes.map((node) => {
-                const nodeRuntime = runtimeNodeStates[node.node_id];
+                const nodeRuntime = runtimeStateForNode(node);
                 return (
                     <button
                       key={node.node_id}
@@ -3597,9 +3818,9 @@ function WorkflowEditorPage() {
             </div>
             <div className="workflow-runtime-list">
               {sortedNodes
-                .filter((node) => activeNodeIds.has(node.node_id) || runtimeNodeStates[node.node_id])
+                .filter((node) => activeNodeIds.has(node.node_id) || runtimeStateForNode(node))
                 .map((node) => {
-                  const nodeRuntime = runtimeNodeStates[node.node_id];
+                  const nodeRuntime = runtimeStateForNode(node);
                   return (
                     <div key={`runtime-${node.node_id}`} className={`workflow-runtime-row ${nodeRuntime ? `is-${nodeRuntime.status}` : ""} ${activeRuntimeNode?.node_id === node.node_id ? "is-current" : ""}`.trim()}>
                       <div>
@@ -3642,7 +3863,7 @@ function WorkflowEditorPage() {
                     <div className="status-panel warning"><strong>错误</strong><span>{selectedNodeRuntime.error}</span></div>
                   ) : null}
                 </div>
-                {renderSelectedNodePreview()}
+                {renderNodePreview(selectedNode)}
               </>
             ) : latestRun ? (
               <div className="workflow-validation-stack">
@@ -3826,7 +4047,7 @@ function WorkflowEditorPage() {
                   </svg>
                 {sortedNodes.map((node, index) => {
                   const nodeSelected = selectedNode?.node_id === node.node_id;
-                  const nodeRuntime = runtimeNodeStates[node.node_id];
+                  const nodeRuntime = runtimeStateForNode(node);
                   const nodeStepId = workflowNodeStepId(node);
                   const nodeCanBypass = Boolean(nodeStepId && optionalWorkflowSteps.includes(nodeStepId));
                   const nodeFrame = workflowNodeCanvasFrame(node);
@@ -3944,6 +4165,19 @@ function WorkflowEditorPage() {
                               )}
                             </div>
                           )}
+                          <button
+                            type="button"
+                            className="workflow-node-card-action"
+                            title="预览节点"
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              selectNode(node.node_id);
+                              setPreviewNodeId(node.node_id);
+                            }}
+                          >
+                            预览
+                          </button>
                         </div>
                         <strong>{node.label}</strong>
                         <p>{workflowNodeDescription(node)}</p>
@@ -4027,7 +4261,7 @@ function WorkflowEditorPage() {
                 {sortedNodes.map((node) => (
                   <div
                     key={`mini-${node.node_id}`}
-                    className={`workflow-minimap-node ${selectedNode?.node_id === node.node_id ? "is-active" : ""} ${runtimeNodeStates[node.node_id] ? `is-${runtimeNodeStates[node.node_id].status}` : ""} ${activeRuntimeNode?.node_id === node.node_id ? "is-current" : ""}`.trim()}
+                    className={`workflow-minimap-node ${selectedNode?.node_id === node.node_id ? "is-active" : ""} ${runtimeStateForNode(node) ? `is-${runtimeStateForNode(node)?.status}` : ""} ${activeRuntimeNode?.node_id === node.node_id ? "is-current" : ""}`.trim()}
                     style={{
                       left: (canvasOrigin.x + node.position.x) * miniMap.scale,
                       top: (canvasOrigin.y + node.position.y) * miniMap.scale,
@@ -4048,6 +4282,39 @@ function WorkflowEditorPage() {
               </div>
             </div>
           </div>
+
+          {previewNodeId && previewNode && (
+            <div
+              className="workflow-artifact-modal-backdrop"
+              role="presentation"
+              onMouseDown={() => setPreviewNodeId(null)}
+            >
+              <section
+                className="workflow-artifact-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="workflow-artifact-modal-title"
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                <div className="workflow-artifact-modal-head">
+                  <div>
+                    <span className="eyebrow">节点预览</span>
+                    <h3 id="workflow-artifact-modal-title">{previewNode.label}</h3>
+                  </div>
+                  <button type="button" className="toolbar-button ghost compact" onClick={() => setPreviewNodeId(null)}>
+                    关闭
+                  </button>
+                </div>
+                {renderNodePreview(previewNode)}
+                <ArtifactBrowser
+                  title="本节点产物"
+                  artifacts={previewArtifacts}
+                  loading={false}
+                  onLoadPreview={handleLoadArtifactPreview}
+                />
+              </section>
+            </div>
+          )}
         </section>
       </div>
     </div>
@@ -4637,85 +4904,17 @@ function DictionariesPage() {
   );
 }
 
-function AnalysisPage() {
-  const {
-    state: { snapshot }
-  } = useWorkspace();
-  const project = snapshot.current_project;
-
-  if (!project) {
-    return <EmptyState title="分析结果待生成" body="先运行一次工作流，结果页会自动显示。" />;
-  }
-
-  const trendRows = project.results.term_year_table.slice(0, 24);
-  const trendValues = trendRows.map((item) => item.tf_in_year);
-
-  return (
-    <>
-      <div className="analysis-grid">
-        <Panel title="高频词">
-          <FrequencyTable rows={project.results.frequency_table} />
-        </Panel>
-
-        <Panel title="按年词频趋势">
-          <LineChart values={trendValues} labels={trendRows.map((item) => String(item.year))} />
-          <p className="chart-caption">示例词“分析”的逐年词频变化。</p>
-        </Panel>
-      </div>
-
-      <div className="analysis-grid">
-        <Panel title="共现热项">
-          <PaginatedTable
-            columns={["term_a", "term_b", "cooccurrence_count", "score"]}
-            rows={project.results.cooccurrence_table}
-            rowKey={(row) => `${(row as { term_a: string; term_b: string }).term_a}-${(row as { term_a: string; term_b: string }).term_b}`}
-            pageSize={20}
-          />
-        </Panel>
-        <Panel title="文档聚类分布">
-          <ScatterChart rows={project.results.clustering_result} />
-        </Panel>
-      </div>
-
-      <div className="analysis-grid">
-        <Panel title="特征词与关键词">
-          <KeywordPanel featureTerms={project.results.selected_feature_terms} keywords={project.results.keyword_result} />
-        </Panel>
-
-        <Panel title="机构 × 主题">
-          <TopicPanel rows={project.results.institution_topic_cooccurrence} />
-        </Panel>
-      </div>
-    </>
-  );
-}
-
 function ResultsPage() {
   const {
-    state: { snapshot, loading, lastExport, lastRunDiff },
+    state: { snapshot, loading, lastExport },
     compareRuns,
     exportProject,
     exportProjectBackup,
-    loadArtifactPreview,
     openPath,
     revealPath,
-    resolveReviewTask,
-    runExperimentMatrix,
     saveProjectPackagePath
   } = useWorkspace();
   const project = snapshot.current_project;
-  const experiments = project?.experiment_specs ?? [];
-  const [selectedExperimentId, setSelectedExperimentId] = useState<string | null>(experiments[0]?.experiment_id ?? null);
-
-  useEffect(() => {
-    if (!experiments.length) {
-      setSelectedExperimentId(null);
-      return;
-    }
-    if (!selectedExperimentId || !experiments.some((experiment) => experiment.experiment_id === selectedExperimentId)) {
-      setSelectedExperimentId(experiments[0].experiment_id);
-    }
-  }, [experiments, selectedExperimentId]);
 
   if (!project) {
     return <EmptyState title="还没有结果" body="先完成一次处理，这里就会出现表格、图表和报告。" />;
@@ -4727,8 +4926,6 @@ function ResultsPage() {
   const visibleExport = lastExport?.project_id === project.id ? lastExport : null;
   const exportDirPath = visibleExport?.export_dir ?? fallbackExportDir;
   const exportDirLabel = visibleExport?.relative_export_dir ?? project.paths.exports_dir;
-  const reviewTasks = coerceReviewTasks(project);
-  const artifactRecords = project.artifact_records ?? [];
   const generatedFiles = projectRootPath
     ? project.results.report_files.map((relativePath) => ({
         path: joinFsPath(projectRootPath, relativePath),
@@ -4800,33 +4997,15 @@ function ResultsPage() {
         </div>
       </Panel>
 
-        <div className="two-column">
-          <RunHistoryPanel
-            runs={project.run_history}
-            reviewTasks={reviewTasks}
-            experiments={experiments}
-            loading={loading}
-            onCompareRuns={async (leftRunId, rightRunId) => {
-              await compareRuns(leftRunId, rightRunId);
-            }}
-          />
-          <ArtifactBrowser
-            artifacts={artifactRecords}
-            loading={loading}
-            onLoadPreview={async (artifactId) => {
-              const preview = await loadArtifactPreview(artifactId);
-              if (!preview) {
-                throw new Error("产物预览加载失败");
-              }
-              return preview;
-            }}
-            onOpenArtifact={(artifact) => {
-              if (projectRootPath) {
-                void openPath(joinFsPath(projectRootPath, artifact.path));
-              }
-            }}
-          />
-        </div>
+        <RunHistoryPanel
+          runs={project.run_history}
+          reviewTasks={[]}
+          experiments={[]}
+          loading={loading}
+          onCompareRuns={async (leftRunId, rightRunId) => {
+            await compareRuns(leftRunId, rightRunId);
+          }}
+        />
         <Panel title={visibleExport ? "最近一次导出的文件" : "已生成文件"}>
           <div className="artifact-list">
             {(visibleExport?.files.length ? visibleExport.files : generatedFiles).map((file) => (
@@ -4853,34 +5032,6 @@ function ResultsPage() {
             )}
           </div>
         </Panel>
-        <ReviewQueuePanel
-          tasks={reviewTasks}
-          loading={loading}
-          onResolve={async (reviewId, resolution) => {
-            await resolveReviewTask(reviewId, resolution);
-          }}
-          onReject={async (reviewId, resolution) => {
-            await resolveReviewTask(reviewId, resolution);
-          }}
-        />
-        <ExperimentPanel
-          experiments={experiments}
-          selectedExperimentId={selectedExperimentId}
-          latestDiff={lastRunDiff}
-          loading={loading}
-          onSelectExperiment={setSelectedExperimentId}
-          onRunExperiment={async (experimentId) => {
-            await runExperimentMatrix(experimentId);
-          }}
-        />
-        <RunDiffPanel
-          runs={project.run_history}
-          diff={lastRunDiff}
-          loading={loading}
-          onCompareRuns={async (leftRunId, rightRunId) => {
-            await compareRuns(leftRunId, rightRunId);
-          }}
-        />
       </>
     );
   }

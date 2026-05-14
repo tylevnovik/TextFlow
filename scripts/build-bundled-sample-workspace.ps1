@@ -17,9 +17,15 @@ if (-not (Test-Path $venvPython)) {
   throw "Missing .venv. Run .\scripts\bootstrap-python.ps1 first."
 }
 
-$env:TEXTFLOW_SAMPLE_WOS_SOURCE = $WosSeed
-$env:TEXTFLOW_SAMPLE_INCOPAT_SOURCE = $IncopatSeed
-$env:TEXTFLOW_SAMPLE_SCOPUS_SOURCE = $ScopusSeed
+if ($WosSeed) {
+  $env:TEXTFLOW_SAMPLE_WOS_SOURCE = $WosSeed
+}
+if ($IncopatSeed) {
+  $env:TEXTFLOW_SAMPLE_INCOPAT_SOURCE = $IncopatSeed
+}
+if ($ScopusSeed) {
+  $env:TEXTFLOW_SAMPLE_SCOPUS_SOURCE = $ScopusSeed
+}
 if ($AllowRestrictedSampleData) {
   $env:TEXTFLOW_ALLOW_RESTRICTED_SAMPLE_DATA = "1"
 }

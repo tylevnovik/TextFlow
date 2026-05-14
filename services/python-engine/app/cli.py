@@ -12,7 +12,7 @@ from typing import Any, Callable
 import pandas as pd
 
 from .artifact_store import load_artifact_payload, load_artifact_preview
-from .bundled_sample_workspace import restore_bundled_sample_workspace
+from .bundled_sample_workspace import restore_builtin_sample_projects_from_bundled, restore_bundled_sample_workspace
 from .defaults import deep_copy_manifest, json_ready
 from .experiment_store import list_experiment_specs, run_experiment_matrix, save_experiment_spec
 from .ingestion import ensure_sample_files, import_files, parse_optional_year
@@ -25,6 +25,7 @@ from .project_store import (
     PROJECT_FILENAME,
     backfill_manifest_summary_fields,
     build_project_summary,
+    compact_results_bundle,
     create_project,
     create_project_from_template,
     delete_project,
@@ -51,8 +52,6 @@ from .project_store import (
 )
 from .sample_projects import (
     BUILTIN_SAMPLE_PROJECT_DATA_REVISION,
-    FIRST_BUILTIN_SAMPLE_PROJECT_NAME,
-    reconcile_builtin_sample_projects,
 )
 
 ProgressCallback = Callable[[float, str, dict[str, Any] | None], None]
@@ -102,6 +101,7 @@ def workflow_progress_detail_from_run_record(
             "output_ports": list(node_run.get("output_ports") or []),
             "output_summary": node_run.get("output_summary"),
             "sample_outputs": list(node_run.get("sample_outputs") or []),
+            "output_previews": deepcopy(node_run.get("output_previews") or {}),
             "error": node_run.get("error"),
         }
         for index, node_run in enumerate(node_runs, start=1)
@@ -152,8 +152,9 @@ def ensure_bootstrap_project() -> None:
         return
 
     project_dirs = list_project_dirs()
-    if not project_dirs and not workspace_state.get("bootstrap_completed"):
-        if restore_bundled_sample_workspace(workspace_root()):
+    first_run_needs_samples = not project_dirs and not workspace_state.get("bootstrap_completed")
+    if first_run_needs_samples:
+        if restore_bundled_sample_workspace(workspace_root(), allow_existing_scaffold=True):
             restored_state = load_workspace_state()
             if (
                 restored_state.get("bootstrap_completed")
@@ -162,16 +163,16 @@ def ensure_bootstrap_project() -> None:
                 return
         project_dirs = list_project_dirs()
 
-    created = reconcile_builtin_sample_projects(
+    if restore_builtin_sample_projects_from_bundled(
+        workspace_root(),
         create_missing=not project_dirs and not workspace_state.get("bootstrap_completed"),
-    )
-    if workspace_state.get("current_project_id") is None:
-        starter_manifest = next(
-            (manifest for _project_dir, manifest in created if manifest.get("name") == FIRST_BUILTIN_SAMPLE_PROJECT_NAME),
-            created[0][1] if created else None,
+    ):
+        return
+
+    if first_run_needs_samples and not list_project_dirs():
+        raise RuntimeError(
+            "Bundled sample workspace is missing or unusable; cannot bootstrap the official sample projects."
         )
-        if starter_manifest is not None:
-            remember_project(starter_manifest["id"], set_current=True)
 
     mark_workspace_bootstrapped(builtin_samples_revision=BUILTIN_SAMPLE_PROJECT_DATA_REVISION)
 
@@ -397,6 +398,8 @@ def action_run_workflow(payload: dict[str, Any], progress_callback: ProgressCall
     save_project(project_dir, manifest, corpus, already_normalized=True, dirty_sections={"manifest", "corpus"})
     remember_project(manifest["id"], set_current=True)
     saved_manifest, _saved_corpus = load_project(project_dir)
+    response_project = deepcopy(saved_manifest)
+    response_project["results"] = compact_results_bundle(saved_manifest.get("results"))
     notify(
         progress_callback,
         1.0,
@@ -409,7 +412,7 @@ def action_run_workflow(payload: dict[str, Any], progress_callback: ProgressCall
     )
     return {
         "run": run_record,
-        "project": saved_manifest,
+        "project": response_project,
     }
 
 

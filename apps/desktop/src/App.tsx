@@ -3,7 +3,7 @@ import type { PageId } from "@textflow/shared-types";
 import { useTaskProgress, useWorkspace } from "./store/workspaceStore";
 import { PageView, pageMeta } from "./screens";
 
-const primaryPages: PageId[] = ["home", "project", "data", "dictionaries", "workflow", "analysis", "results", "settings"];
+const primaryPages: PageId[] = ["home", "project", "data", "dictionaries", "workflow", "results", "settings"];
 
 export function App() {
   const {

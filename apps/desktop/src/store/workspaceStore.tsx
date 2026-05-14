@@ -255,6 +255,7 @@ function workflowNodeStatesFromRun(run: RunRecord): Record<string, WorkflowNodeR
       output_ports: nodeRun.output_ports,
       output_summary: nodeRun.output_summary,
       sample_outputs: nodeRun.sample_outputs,
+      output_previews: nodeRun.output_previews,
       error: nodeRun.error
     };
     return accumulator;

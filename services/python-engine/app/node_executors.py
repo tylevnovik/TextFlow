@@ -67,7 +67,7 @@ def _scoped_corpus_from_inputs(context: Any, inputs: dict[str, Any]) -> list[dic
 def _analysis_params(context: Any, patch: dict[str, Any] | None = None) -> dict[str, Any]:
     base = deepcopy(((context.runtime_profile or {}).get("analysis") or {}))
     if patch:
-        base.update(patch)
+        base.update({key: value for key, value in patch.items() if value is not None})
     return base
 
 
@@ -140,8 +140,14 @@ def _join_keys(config: dict[str, Any]) -> list[str]:
 def _report_corpus_progress(context: Any, node: dict[str, Any], completed: int, total: int, stage: str) -> None:
     if not total:
         return
-    if completed == total or completed % 250 == 0:
+    if completed == 1 or completed == total or completed % 250 == 0:
         context.node_progress(node, completed / total, f"{stage} {completed}/{total}")
+
+
+def _report_node_progress(context: Any, node: dict[str, Any], fraction: float, detail: str) -> None:
+    reporter = getattr(context, "node_progress", None)
+    if callable(reporter):
+        reporter(node, fraction, detail)
 
 
 def _feature_term_payload(context: Any, corpus: list[dict[str, Any]], patch: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -183,6 +189,9 @@ def _keyword_payload(
     node: dict[str, Any],
     corpus: list[dict[str, Any]],
     patch: dict[str, Any] | None = None,
+    *,
+    progress_start: float = 0.2,
+    progress_end: float = 0.87,
 ) -> dict[str, Any]:
     analysis_params = _analysis_params(context, patch)
     cache_key = (
@@ -203,10 +212,11 @@ def _keyword_payload(
         corpus,
         analysis_params,
         feature_payload.get("tfidf_bundle"),
-        progress_callback=lambda current, total: context.node_progress(
+        progress_callback=lambda current, total: _report_node_progress(
+            context,
             node,
-            current / max(total, 1),
-            f"关键词提取 {current}/{total}",
+            progress_start + (progress_end - progress_start) * current / max(total, 1),
+            f"关键词提取：处理 {current}/{total} 篇文档",
         ),
     )
     payload = {
@@ -239,10 +249,12 @@ def _topic_lookup_from_cluster_rows(cluster_rows: list[dict[str, Any]]) -> dict[
 def execute_corpus_input(context: Any, node: dict[str, Any], _inputs: dict[str, Any]) -> dict[str, Any]:
     runtime_support = _runtime_support()
     scope = runtime_support.normalize_run_scope(node.get("config") if isinstance(node.get("config"), dict) else {})
+    _report_node_progress(context, node, 0.25, f"语料输入：读取 {len(context.full_corpus)} 篇文档")
     scoped = [item for item in context.full_corpus if runtime_support.document_matches_scope(item, scope)]
     context.shared["run_scope"] = scope
     context.shared["run_scope_summary"] = runtime_support.describe_run_scope(scope, len(context.full_corpus), len(scoped))
     context.shared["scoped_corpus"] = scoped
+    _report_node_progress(context, node, 0.92, f"语料输入：命中 {len(scoped)} 篇文档")
     return {"corpus": scoped}
 
 
@@ -250,16 +262,25 @@ def execute_filter_corpus(context: Any, node: dict[str, Any], inputs: dict[str, 
     runtime_support = _runtime_support()
     scope = runtime_support.normalize_run_scope(node.get("config") if isinstance(node.get("config"), dict) else {})
     corpus = _scoped_corpus_from_inputs(context, inputs)
+    _report_node_progress(context, node, 0.25, f"筛选语料：读取 {len(corpus)} 篇文档")
     scoped = [item for item in corpus if runtime_support.document_matches_scope(item, scope)]
     context.shared["run_scope"] = scope
     context.shared["run_scope_summary"] = runtime_support.describe_run_scope(scope, len(context.full_corpus), len(scoped))
     context.shared["scoped_corpus"] = scoped
+    _report_node_progress(context, node, 0.92, f"筛选语料：命中 {len(scoped)} 篇文档")
     return {"corpus": scoped}
 
 
-def execute_dictionary_input(context: Any, _node: dict[str, Any], _inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_dictionary_input(context: Any, node: dict[str, Any], _inputs: dict[str, Any]) -> dict[str, Any]:
+    _report_node_progress(context, node, 0.35, "词表输入：读取项目词表")
     dictionary_set = deepcopy(context.manifest["dictionary_set"])
     active_dictionary_set = _set_active_dictionary_set(context, dictionary_set)
+    entry_count = sum(
+        len(sheet.get("entries") or [])
+        for sheet in (active_dictionary_set.get("sheets") or {}).values()
+        if isinstance(sheet, dict)
+    )
+    _report_node_progress(context, node, 0.92, f"词表输入：启用 {entry_count} 条词表规则")
     return {"dictionary_set": active_dictionary_set}
 
 
@@ -270,7 +291,9 @@ def execute_merge_corpora(context: Any, node: dict[str, Any], inputs: dict[str, 
     merged: list[dict[str, Any]] = []
     seen_doc_ids: set[str] = set()
     strategy = str((node.get("config") or {}).get("strategy") or "append")
-    for corpus in corpora:
+    list_corpora = [corpus for corpus in corpora if isinstance(corpus, list)]
+    total_corpora = len(list_corpora)
+    for corpus_index, corpus in enumerate(list_corpora, start=1):
         if not isinstance(corpus, list):
             continue
         for item in corpus:
@@ -282,7 +305,14 @@ def execute_merge_corpora(context: Any, node: dict[str, Any], inputs: dict[str, 
             merged.append(item)
             if doc_id:
                 seen_doc_ids.add(doc_id)
+        _report_node_progress(
+            context,
+            node,
+            0.2 + 0.7 * corpus_index / max(total_corpora, 1),
+            f"合并语料：完成 {corpus_index}/{total_corpora} 路输入",
+        )
     context.shared["scoped_corpus"] = merged
+    _report_node_progress(context, node, 0.92, f"合并语料：输出 {len(merged)} 篇文档")
     return {"corpus": merged}
 
 
@@ -370,11 +400,14 @@ def execute_select_dictionary_tables(context: Any, node: dict[str, Any], inputs:
         item.casefold()
         for item in _selected_table_ids(node.get("config") if isinstance(node.get("config"), dict) else {})
     }
+    _report_node_progress(context, node, 0.25, f"选择词表分表：读取 {len(selected_tokens)} 个选择条件")
     if not selected_tokens:
         active_dictionary_set = _set_active_dictionary_set(context, dictionary_set)
+        _report_node_progress(context, node, 0.92, "选择词表分表：沿用全部词表")
         return {"dictionary_set": active_dictionary_set}
     collections = dictionary_set.get("collections") if isinstance(dictionary_set.get("collections"), dict) else {}
-    for kind, collection in collections.items():
+    collection_items = list(collections.items())
+    for index, (kind, collection) in enumerate(collection_items, start=1):
         if not isinstance(collection, dict):
             continue
         tables = collection.get("tables")
@@ -388,7 +421,19 @@ def execute_select_dictionary_tables(context: Any, node: dict[str, Any], inputs:
                     or str(table.get("kind") or kind).strip().casefold() in selected_tokens
                 )
             ]
+        _report_node_progress(
+            context,
+            node,
+            0.25 + 0.55 * index / max(len(collection_items), 1),
+            f"选择词表分表：处理 {index}/{len(collection_items)} 类词表",
+        )
     active_dictionary_set = _set_active_dictionary_set(context, _rebuild_dictionary_sheets(dictionary_set))
+    active_table_count = sum(
+        len(collection.get("tables") or [])
+        for collection in (active_dictionary_set.get("collections") or {}).values()
+        if isinstance(collection, dict)
+    )
+    _report_node_progress(context, node, 0.92, f"选择词表分表：启用 {active_table_count} 张表")
     return {"dictionary_set": active_dictionary_set}
 
 
@@ -396,8 +441,10 @@ def execute_overlay_dictionary_rules(context: Any, node: dict[str, Any], inputs:
     dictionary_set = deepcopy(_active_dictionary_set(context, inputs))
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
     rows = _overlay_rows(config)
+    _report_node_progress(context, node, 0.25, f"叠加临时词表规则：读取 {len(rows)} 条规则")
     if not rows:
         active_dictionary_set = _set_active_dictionary_set(context, dictionary_set)
+        _report_node_progress(context, node, 0.92, "叠加临时词表规则：无临时规则")
         return {"dictionary_set": active_dictionary_set}
     collections = dictionary_set.get("collections") if isinstance(dictionary_set.get("collections"), dict) else {}
     grouped_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -417,6 +464,13 @@ def execute_overlay_dictionary_rules(context: Any, node: dict[str, Any], inputs:
                 "notes": "Runtime overlay node",
             }
         )
+        if index == len(rows) or index % 250 == 0:
+            _report_node_progress(
+                context,
+                node,
+                0.25 + 0.5 * index / max(len(rows), 1),
+                f"叠加临时词表规则：整理 {index}/{len(rows)} 条规则",
+            )
     for kind, entries in grouped_rows.items():
         collection = collections.get(kind)
         if not isinstance(collection, dict):
@@ -439,6 +493,7 @@ def execute_overlay_dictionary_rules(context: Any, node: dict[str, Any], inputs:
         )
         collection["tables"] = tables
     active_dictionary_set = _set_active_dictionary_set(context, _rebuild_dictionary_sheets(dictionary_set))
+    _report_node_progress(context, node, 0.92, f"叠加临时词表规则：写入 {sum(len(entries) for entries in grouped_rows.values())} 条临时规则")
     return {"dictionary_set": active_dictionary_set}
 
 
@@ -587,10 +642,15 @@ def execute_conditional_router(context: Any, node: dict[str, Any], inputs: dict[
     corpus_input = inputs.get("corpus_in")
     corpus = _clone_corpus_rows(corpus_input) if _is_table_rows(corpus_input) else _clone_corpus_rows(_scoped_corpus_from_inputs(context, inputs))
     table_rows = _control_rows_from_inputs(inputs, "table_in", "record_table_in", "comparison_table_in")
+    _report_node_progress(context, node, 0.2, f"条件分流：读取 {len(corpus) or len(table_rows)} 条记录")
 
     matched_corpus = [item for item in corpus if _record_matches_control_condition(item, config)] if corpus else []
+    if corpus:
+        _report_node_progress(context, node, 0.55, f"条件分流：命中 {len(matched_corpus)} 篇文档")
     unmatched_corpus = [item for item in corpus if not _record_matches_control_condition(item, config)] if corpus else []
     matched_table = [item for item in table_rows if _record_matches_control_condition(item, config)] if table_rows else []
+    if table_rows:
+        _report_node_progress(context, node, 0.55, f"条件分流：命中 {len(matched_table)} 行表记录")
     unmatched_table = [item for item in table_rows if not _record_matches_control_condition(item, config)] if table_rows else []
 
     if matched_corpus:
@@ -610,6 +670,7 @@ def execute_conditional_router(context: Any, node: dict[str, Any], inputs: dict[
             "table_input_count": len(table_rows),
         }
     ]
+    _report_node_progress(context, node, 0.92, f"条件分流：输出命中 {matched_count} / 未命中 {unmatched_count}")
     return {
         "matched_corpus": matched_corpus,
         "unmatched_corpus": unmatched_corpus,
@@ -660,10 +721,12 @@ def execute_result_gate(context: Any, node: dict[str, Any], inputs: dict[str, An
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
     metric_rows = _control_rows_from_inputs(inputs, "metric_table_in", "table_in") or _metric_rows_from_context(context, config)
     payload_rows = _control_rows_from_inputs(inputs, "payload_in") or metric_rows
+    _report_node_progress(context, node, 0.25, f"结果闸门：读取 {len(metric_rows)} 条指标")
     metric_row = _select_metric_row(metric_rows, config)
     observed_value = _metric_observed_value(metric_row, config)
     threshold = config.get("threshold")
     passed = _compare_control_value(observed_value, str(config.get("operator") or "gte"), [threshold])
+    _report_node_progress(context, node, 0.72, f"结果闸门：判定 {'通过' if passed else '阻断'}")
     metric_name = str(config.get("metric_name") or config.get("metric_field") or "metric")
     gate_summary = [
         {
@@ -703,11 +766,13 @@ def execute_manual_review_gate(context: Any, node: dict[str, Any], inputs: dict[
     review_id = str(config.get("review_id") or config.get("task_id") or "").strip()
     required_status = str(config.get("required_status") or "resolved").strip().lower()
     on_missing = str(config.get("on_missing") or "block").strip().lower()
+    _report_node_progress(context, node, 0.25, f"人工审核闸门：读取 {len(payload_rows)} 条待审记录")
     manifest = getattr(context, "manifest", {})
     task = _find_review_task(manifest, review_id) if isinstance(manifest, dict) and review_id else None
     current_status = str(task.get("status") or "missing").strip().lower() if isinstance(task, dict) else "missing"
     approved = current_status == required_status or (task is None and on_missing == "pass")
     waiting = not approved
+    _report_node_progress(context, node, 0.72, f"人工审核闸门：状态 {current_status}")
     review_gate_summary = [
         {
             "review_id": review_id,
@@ -729,15 +794,19 @@ def execute_filter_by_metadata(context: Any, node: dict[str, Any], inputs: dict[
     corpus = _clone_corpus_rows(_scoped_corpus_from_inputs(context, inputs))
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
     conditions = _metadata_filter_conditions(config)
+    _report_node_progress(context, node, 0.2, f"元数据过滤：读取 {len(corpus)} 篇文档")
     if not conditions:
         context.shared["scoped_corpus"] = corpus
+        _report_node_progress(context, node, 0.92, "元数据过滤：未配置条件，沿用全部文档")
         return {"filtered_corpus": corpus}
-    filtered = [
-        item
-        for item in corpus
-        if all(_document_matches_condition(item, condition) for condition in conditions)
-    ]
+    filtered: list[dict[str, Any]] = []
+    total = len(corpus)
+    for index, item in enumerate(corpus, start=1):
+        if all(_document_matches_condition(item, condition) for condition in conditions):
+            filtered.append(item)
+        _report_corpus_progress(context, node, index, total, "元数据过滤")
     context.shared["scoped_corpus"] = filtered
+    _report_node_progress(context, node, 0.92, f"元数据过滤：命中 {len(filtered)} 篇文档")
     return {"filtered_corpus": filtered}
 
 
@@ -753,25 +822,33 @@ def execute_deduplicate_documents(context: Any, node: dict[str, Any], inputs: di
         keys = [str(item) for item in dedupe_keys if str(item).strip()]
     else:
         keys = [item.strip() for item in str(config.get("dedupe_keys_text") or "title,year").split(",") if item.strip()]
+    _report_node_progress(context, node, 0.2, f"去重文档：读取 {len(corpus)} 篇文档")
     if not keys:
         context.shared["scoped_corpus"] = corpus
+        _report_node_progress(context, node, 0.92, "去重文档：未配置键，沿用全部文档")
         return {"deduped_corpus": corpus}
     seen: set[tuple[Any, ...]] = set()
     deduped: list[dict[str, Any]] = []
-    for item in corpus:
+    total = len(corpus)
+    for index, item in enumerate(corpus, start=1):
         signature = _dedupe_signature(item, keys)
         if signature in seen:
+            _report_corpus_progress(context, node, index, total, "去重文档")
             continue
         seen.add(signature)
         deduped.append(item)
+        _report_corpus_progress(context, node, index, total, "去重文档")
     context.shared["scoped_corpus"] = deduped
+    _report_node_progress(context, node, 0.92, f"去重文档：保留 {len(deduped)} / {len(corpus)} 篇")
     return {"deduped_corpus": deduped}
 
 
 def execute_sample_corpus(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     corpus = _clone_corpus_rows(_scoped_corpus_from_inputs(context, inputs))
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    _report_node_progress(context, node, 0.2, f"抽样语料：读取 {len(corpus)} 篇文档")
     if not corpus:
+        _report_node_progress(context, node, 0.92, "抽样语料：无文档可抽样")
         return {"sampled_corpus": []}
     seed = int(config.get("seed", 42) or 42)
     sample_ratio = config.get("sample_ratio")
@@ -780,12 +857,14 @@ def execute_sample_corpus(context: Any, node: dict[str, Any], inputs: dict[str, 
         requested = max(0, min(len(corpus), round(len(corpus) * float(sample_ratio))))
     else:
         requested = max(0, min(len(corpus), int(sample_size or len(corpus))))
+    _report_node_progress(context, node, 0.55, f"抽样语料：目标 {requested} 篇")
     if requested >= len(corpus):
         sampled = corpus
     else:
         rng = random.Random(seed)
         sampled = [corpus[index] for index in sorted(rng.sample(range(len(corpus)), requested))]
     context.shared["scoped_corpus"] = sampled
+    _report_node_progress(context, node, 0.92, f"抽样语料：输出 {len(sampled)} 篇")
     return {"sampled_corpus": sampled}
 
 
@@ -820,7 +899,9 @@ def execute_split_corpus(context: Any, node: dict[str, Any], inputs: dict[str, A
     corpus = _clone_corpus_rows(_scoped_corpus_from_inputs(context, inputs))
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
     splits = _normalize_split_definitions(config)
+    _report_node_progress(context, node, 0.2, f"划分语料：读取 {len(corpus)} 篇文档")
     if not corpus or not splits:
+        _report_node_progress(context, node, 0.92, "划分语料：无可用划分")
         return {"split_assignment_table": []}
     seed = int(config.get("seed", 42) or 42)
     rng = random.Random(seed)
@@ -845,7 +926,14 @@ def execute_split_corpus(context: Any, node: dict[str, Any], inputs: dict[str, A
                 }
             )
         offset += len(bucket_indices)
+        _report_node_progress(
+            context,
+            node,
+            0.25 + 0.62 * (index + 1) / max(len(splits), 1),
+            f"划分语料：完成 {index + 1}/{len(splits)} 个集合",
+        )
     assignments.sort(key=lambda item: str(item.get("doc_id") or ""))
+    _report_node_progress(context, node, 0.92, f"划分语料：生成 {len(assignments)} 条分配")
     return {"split_assignment_table": assignments}
 
 
@@ -864,12 +952,15 @@ def execute_bucket_by_time(context: Any, node: dict[str, Any], inputs: dict[str,
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
     field = str(config.get("field") or "year")
     granularity = str(config.get("granularity") or "year")
+    _report_node_progress(context, node, 0.2, f"时间分桶：读取 {len(corpus)} 篇文档")
     assignments: list[dict[str, Any]] = []
-    for item in corpus:
+    total = len(corpus)
+    for index, item in enumerate(corpus, start=1):
         value = _document_field_value(item, field)
         try:
             year = int(value)
         except (TypeError, ValueError):
+            _report_corpus_progress(context, node, index, total, "时间分桶")
             continue
         assignments.append(
             {
@@ -879,6 +970,8 @@ def execute_bucket_by_time(context: Any, node: dict[str, Any], inputs: dict[str,
                 "time_bucket": _bucket_label(year, granularity),
             }
         )
+        _report_corpus_progress(context, node, index, total, "时间分桶")
+    _report_node_progress(context, node, 0.92, f"时间分桶：生成 {len(assignments)} 条分桶")
     return {"time_bucket_table": assignments}
 
 
@@ -1070,45 +1163,95 @@ def execute_filter_terms(context: Any, node: dict[str, Any], inputs: dict[str, A
     params = node.get("config") if isinstance(node.get("config"), dict) else {}
     if params.get("filter_by_pos", False):
         context.warning("当前原生 DAG 运行时尚未实现词性过滤，已按关闭处理。", node)
+    _report_node_progress(context, node, 0.25, f"过滤词项：读取 {len(corpus)} 篇文档")
     text_ops.filter_token_lists(corpus, params, context.manifest["dictionary_set"])
-    context.node_progress(node, 1.0, f"过滤词项 {len(corpus)}/{len(corpus) or 1}")
+    _report_node_progress(context, node, 0.92, f"过滤词项：完成 {len(corpus)} 篇文档")
     context.shared["filtered_corpus"] = corpus
     return {"filtered_token_corpus": corpus}
 
 
-def execute_frequency_statistics(context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_frequency_statistics(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     analysis_ops = _analysis_ops()
     corpus = _scoped_corpus_from_inputs(context, inputs)
+    _report_node_progress(context, node, 0.2, "词频统计：准备词项表")
     df_tokens = _token_frame(context, corpus)
-    return {"frequency_table": analysis_ops.frequency_table(df_tokens)}
+    _report_node_progress(context, node, 0.65, f"词频统计：已展开 {len(df_tokens)} 条词项")
+    rows = analysis_ops.frequency_table(df_tokens)
+    _report_node_progress(context, node, 0.92, f"词频统计：生成 {len(rows)} 行")
+    return {"frequency_table": rows}
 
 
-def execute_term_document_analysis(context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_term_document_analysis(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     analysis_ops = _analysis_ops()
     corpus = _scoped_corpus_from_inputs(context, inputs)
+    _report_node_progress(context, node, 0.2, "词项-文档：准备词项表")
     df_tokens = _token_frame(context, corpus)
-    return {"term_document_table": analysis_ops.term_document_table(df_tokens)}
+    _report_node_progress(context, node, 0.65, f"词项-文档：已展开 {len(df_tokens)} 条词项")
+    rows = analysis_ops.term_document_table(df_tokens)
+    _report_node_progress(context, node, 0.92, f"词项-文档：生成 {len(rows)} 行")
+    return {"term_document_table": rows}
 
 
-def execute_term_year_analysis(context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_term_year_analysis(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     analysis_ops = _analysis_ops()
     corpus = _scoped_corpus_from_inputs(context, inputs)
+    _report_node_progress(context, node, 0.2, "词项-年份：准备词项表")
     df_tokens = _token_frame(context, corpus)
-    return {"term_year_table": analysis_ops.term_year_table(df_tokens)}
+    _report_node_progress(context, node, 0.65, f"词项-年份：已展开 {len(df_tokens)} 条词项")
+    rows = analysis_ops.term_year_table(df_tokens)
+    _report_node_progress(context, node, 0.92, f"词项-年份：生成 {len(rows)} 行")
+    return {"term_year_table": rows}
 
 
 def execute_cooccurrence_analysis(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     analysis_ops = _analysis_ops()
     corpus = _scoped_corpus_from_inputs(context, inputs)
     params = node.get("config") if isinstance(node.get("config"), dict) else {}
+    _report_node_progress(context, node, 0.15, f"共现分析：读取 {len(corpus)} 篇文档")
+    rows = analysis_ops.cooccurrence_table(
+        corpus,
+        int(params.get("cooccurrence_window", 5) or 5),
+        int(params.get("min_cooccurrence", 2) or 2),
+        progress_callback=lambda current, total: _report_node_progress(
+            context,
+            node,
+            0.15 + 0.72 * current / max(total, 1),
+            f"共现分析：处理 {current}/{total} 篇文档",
+        ),
+    )
+    _report_node_progress(context, node, 0.92, f"共现分析：生成 {len(rows)} 行")
     return {
-        "cooccurrence_table": analysis_ops.cooccurrence_table(
-            corpus,
-            int(params.get("cooccurrence_window", 5) or 5),
-            int(params.get("min_cooccurrence", 2) or 2),
-            progress_callback=lambda current, total: context.node_progress(node, current / max(total, 1), f"共现分析 {current}/{total}"),
-        )
+        "cooccurrence_table": rows
     }
+
+
+def execute_similarity_analysis(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    analysis_ops = _analysis_ops()
+    corpus = _scoped_corpus_from_inputs(context, inputs)
+    params = node.get("config") if isinstance(node.get("config"), dict) else {}
+    analysis_params = _analysis_params(
+        context,
+        {
+            "feature_term_count": params.get("feature_term_count"),
+            "similarity_method": params.get("similarity_method"),
+            "min_similarity": params.get("min_similarity"),
+            "similarity_top_k": params.get("similarity_top_k"),
+        },
+    )
+    _report_node_progress(context, node, 0.2, "相似度计算：准备 TF-IDF 特征")
+    payload = _feature_term_payload(
+        context,
+        corpus,
+        {"feature_term_count": analysis_params.get("feature_term_count")},
+    )
+    _report_node_progress(context, node, 0.62, "相似度计算：TF-IDF 特征已生成")
+    rows = analysis_ops.document_similarity_rows(
+        corpus,
+        payload["tfidf_bundle"],
+        analysis_params,
+    )
+    _report_node_progress(context, node, 0.92, f"相似度计算：输出 {len(rows)} 个文档对")
+    return {"similarity_table": rows}
 
 
 def _comparison_groups(config: dict[str, Any], baseline_group: str, available_groups: set[str]) -> list[str]:
@@ -1154,15 +1297,19 @@ def execute_group_compare(context: Any, node: dict[str, Any], inputs: dict[str, 
     group_field = str(config.get("group_field") or "institution").strip()
     baseline_group = str(config.get("baseline_group") or "").strip()
     min_frequency = int(config.get("min_frequency", 1) or 1)
+    _report_node_progress(context, node, 0.15, "分组比较：统计分组词频")
     group_totals, term_counts, doc_sets, terms = _group_term_statistics(corpus, group_field)
     if not group_totals:
+        _report_node_progress(context, node, 0.92, "分组比较：无可比较分组")
         return {"group_metric_table": []}
+    _report_node_progress(context, node, 0.45, f"分组比较：识别 {len(group_totals)} 个分组")
     comparison_groups = _comparison_groups(config, baseline_group, set(group_totals))
     selected_groups = [group for group in [baseline_group, *comparison_groups] if group and group in group_totals]
     if not selected_groups:
         selected_groups = sorted(group_totals)
     rows: list[dict[str, Any]] = []
-    for group_value in selected_groups:
+    total_groups = len(selected_groups)
+    for group_index, group_value in enumerate(selected_groups, start=1):
         total_terms = group_totals.get(group_value, 0)
         if not total_terms:
             continue
@@ -1191,7 +1338,14 @@ def execute_group_compare(context: Any, node: dict[str, Any], inputs: dict[str, 
                     "ratio_vs_baseline": round((normalized_frequency + 1e-9) / (baseline_normalized_frequency + 1e-9), 6),
                 }
             )
+        _report_node_progress(
+            context,
+            node,
+            0.45 + 0.42 * group_index / max(total_groups, 1),
+            f"分组比较：完成 {group_index}/{total_groups} 个分组",
+        )
     rows.sort(key=lambda item: (str(item["group_value"]), -int(item["term_count"]), str(item["term"])))
+    _report_node_progress(context, node, 0.92, f"分组比较：生成 {len(rows)} 行")
     return {"group_metric_table": rows}
 
 
@@ -1231,13 +1385,17 @@ def execute_keyness_analysis(context: Any, node: dict[str, Any], inputs: dict[st
     baseline_group = str(config.get("baseline_group") or "").strip()
     comparison_group = str(config.get("comparison_group") or "").strip()
     min_frequency = int(config.get("min_frequency", 2) or 2)
+    _report_node_progress(context, node, 0.18, "关键性分析：统计分组词频")
     group_totals, term_counts, doc_sets, terms = _group_term_statistics(corpus, group_field)
     comparison_total = group_totals.get(comparison_group, 0)
     baseline_total = group_totals.get(baseline_group, 0)
     if not comparison_total or not baseline_total:
+        _report_node_progress(context, node, 0.92, "关键性分析：缺少基准组或比较组")
         return {"keyness_table": []}
+    _report_node_progress(context, node, 0.45, f"关键性分析：准备比较 {len(terms)} 个词项")
     rows: list[dict[str, Any]] = []
-    for term in sorted(terms):
+    sorted_terms = sorted(terms)
+    for term_index, term in enumerate(sorted_terms, start=1):
         comparison_term_count = term_counts.get((comparison_group, term), 0)
         baseline_term_count = term_counts.get((baseline_group, term), 0)
         if comparison_term_count + baseline_term_count < min_frequency:
@@ -1268,7 +1426,15 @@ def execute_keyness_analysis(context: Any, node: dict[str, Any], inputs: dict[st
                 ),
             }
         )
+        if term_index == len(sorted_terms) or term_index % 250 == 0:
+            _report_node_progress(
+                context,
+                node,
+                0.45 + 0.42 * term_index / max(len(sorted_terms), 1),
+                f"关键性分析：完成 {term_index}/{len(sorted_terms)} 个词项",
+            )
     rows.sort(key=lambda item: (-float(item["llr"]), -float(item["relative_ratio"]), str(item["term"])))
+    _report_node_progress(context, node, 0.92, f"关键性分析：生成 {len(rows)} 行")
     return {"keyness_table": rows}
 
 
@@ -1279,21 +1445,25 @@ def execute_topic_modeling(context: Any, node: dict[str, Any], inputs: dict[str,
     analysis_params = _analysis_params(
         context,
         {
+            "topic_algorithm": config.get("topic_algorithm"),
             "topic_model_k": config.get("topic_model_k"),
             "feature_term_count": config.get("feature_term_count"),
         },
     )
+    _report_node_progress(context, node, 0.18, "主题模型：准备 TF-IDF 特征")
     payload = _feature_term_payload(
         context,
         corpus,
         {"feature_term_count": analysis_params.get("feature_term_count")},
     )
+    _report_node_progress(context, node, 0.55, "主题模型：TF-IDF 特征已生成")
     topic_term_rows, document_topic_rows, topic_summary_rows = analysis_ops.topic_model_tables(
         corpus,
         payload["tfidf_bundle"],
         analysis_params,
         top_terms_per_topic=int(config.get("top_terms_per_topic", 5) or 5),
     )
+    _report_node_progress(context, node, 0.92, f"主题模型：生成 {len(topic_summary_rows)} 个主题")
     return {
         "topic_term_table": topic_term_rows,
         "document_topic_table": document_topic_rows,
@@ -1301,12 +1471,15 @@ def execute_topic_modeling(context: Any, node: dict[str, Any], inputs: dict[str,
     }
 
 
-def execute_cluster_evaluation(context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_cluster_evaluation(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     analysis_ops = _analysis_ops()
     cluster_rows = inputs.get("document_cluster_table_in") or []
     if not isinstance(cluster_rows, list):
         cluster_rows = [cluster_rows] if isinstance(cluster_rows, dict) else []
-    return {"cluster_evaluation_table": analysis_ops.cluster_evaluation_rows(cluster_rows)}
+    _report_node_progress(context, node, 0.35, f"聚类评估：读取 {len(cluster_rows)} 条聚类结果")
+    rows = analysis_ops.cluster_evaluation_rows(cluster_rows)
+    _report_node_progress(context, node, 0.92, f"聚类评估：生成 {len(rows)} 行")
+    return {"cluster_evaluation_table": rows}
 
 
 def execute_join_results(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
@@ -1314,25 +1487,30 @@ def execute_join_results(context: Any, node: dict[str, Any], inputs: dict[str, A
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
     left_rows = _table_rows_from_inputs_or_results(context, inputs, "left_table_in", str(config.get("left_artifact") or ""))
     right_rows = _table_rows_from_inputs_or_results(context, inputs, "right_table_in", str(config.get("right_artifact") or ""))
+    _report_node_progress(context, node, 0.25, f"合并结果表：读取左表 {len(left_rows)} 行 / 右表 {len(right_rows)} 行")
     joined_rows = analysis_ops.join_table_rows(
         left_rows,
         right_rows,
         _join_keys(config),
         join_type=str(config.get("join_type") or "inner"),
     )
+    _report_node_progress(context, node, 0.92, f"合并结果表：生成 {len(joined_rows)} 行")
     return {"joined_table": joined_rows}
 
 
 def execute_feature_term_selection(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     corpus = _scoped_corpus_from_inputs(context, inputs)
     params = node.get("config") if isinstance(node.get("config"), dict) else {}
+    _report_node_progress(context, node, 0.25, "特征词筛选：准备 TF-IDF 特征")
     payload = _feature_term_payload(context, corpus, {"feature_term_count": params.get("feature_term_count")})
+    _report_node_progress(context, node, 0.92, f"特征词筛选：输出 {len(payload['feature_rows'])} 个候选词")
     return {"feature_term_table": payload["feature_rows"]}
 
 
 def execute_keyword_extraction(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     corpus = _scoped_corpus_from_inputs(context, inputs)
     params = node.get("config") if isinstance(node.get("config"), dict) else {}
+    _report_node_progress(context, node, 0.2, f"关键词提取：读取 {len(corpus)} 篇文档")
     payload = _keyword_payload(
         context,
         node,
@@ -1342,6 +1520,7 @@ def execute_keyword_extraction(context: Any, node: dict[str, Any], inputs: dict[
             "top_k_project": params.get("top_k_project"),
         },
     )
+    _report_node_progress(context, node, 0.92, f"关键词提取：生成 {len(payload['keyword_rows'])} 行")
     return {"keyword_table": payload["keyword_rows"]}
 
 
@@ -1353,12 +1532,15 @@ def execute_keyword_clustering(context: Any, node: dict[str, Any], inputs: dict[
     corpus = _scoped_corpus_from_inputs(context, inputs)
     params = node.get("config") if isinstance(node.get("config"), dict) else {}
     selected_count = sum(1 for row in feature_rows if isinstance(row, dict) and row.get("selected"))
+    _report_node_progress(context, node, 0.25, "关键词聚类：准备特征向量")
     payload = _feature_term_payload(context, corpus, {"feature_term_count": selected_count or "all"})
+    _report_node_progress(context, node, 0.62, "关键词聚类：特征向量已生成")
     cluster_rows, topic_lookup = analysis_ops.keyword_clusters(
         feature_rows,
         payload["tfidf_bundle"],
         int(params.get("keyword_cluster_k", 4) or 4),
     )
+    _report_node_progress(context, node, 0.92, f"关键词聚类：生成 {len(cluster_rows)} 行")
     if hasattr(context, "set_shared_value"):
         context.set_shared_value("topic_lookup", topic_lookup)
     else:
@@ -1366,18 +1548,20 @@ def execute_keyword_clustering(context: Any, node: dict[str, Any], inputs: dict[
     return {"keyword_cluster_table": cluster_rows}
 
 
-def execute_institution_keyword_analysis(context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_institution_keyword_analysis(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     analysis_ops = _analysis_ops()
     keyword_rows = inputs.get("keyword_table_in") or []
     if not isinstance(keyword_rows, list):
         keyword_rows = [keyword_rows]
     corpus = _scoped_corpus_from_inputs(context, inputs)
+    _report_node_progress(context, node, 0.35, f"机构-关键词：读取 {len(keyword_rows)} 个关键词")
     institution_keyword_rows, _ = analysis_ops.institution_keyword_and_topic(
         corpus,
         keyword_rows,
         {},
         {},
     )
+    _report_node_progress(context, node, 0.92, f"机构-关键词：生成 {len(institution_keyword_rows)} 行")
     return {"institution_keyword_table": institution_keyword_rows}
 
 
@@ -1395,16 +1579,19 @@ def execute_institution_topic_analysis(context: Any, node: dict[str, Any], input
             if isinstance(row, dict) and str(row.get("term") or "")
         }
     )
+    _report_node_progress(context, node, 0.2, "机构-主题：准备主题特征")
     payload = _feature_term_payload(
         context,
         corpus,
         {"feature_term_count": topic_feature_count or _analysis_params(context).get("feature_term_count")},
     )
+    _report_node_progress(context, node, 0.52, "机构-主题：主题特征已生成")
     _, doc_topics = analysis_ops.nmf_topic_model(
         corpus,
         payload["tfidf_bundle"],
         _analysis_params(context, {"topic_model_k": params.get("topic_model_k")}),
     )
+    _report_node_progress(context, node, 0.78, "机构-主题：文档主题已计算")
     topic_lookup = _topic_lookup_from_cluster_rows(cluster_rows)
     _, institution_topic_rows = analysis_ops.institution_keyword_and_topic(
         corpus,
@@ -1412,6 +1599,7 @@ def execute_institution_topic_analysis(context: Any, node: dict[str, Any], input
         doc_topics,
         topic_lookup,
     )
+    _report_node_progress(context, node, 0.92, f"机构-主题：生成 {len(institution_topic_rows)} 行")
     return {"institution_topic_table": institution_topic_rows}
 
 
@@ -1419,12 +1607,15 @@ def execute_document_clustering(context: Any, node: dict[str, Any], inputs: dict
     analysis_ops = _analysis_ops()
     corpus = _scoped_corpus_from_inputs(context, inputs)
     params = node.get("config") if isinstance(node.get("config"), dict) else {}
+    _report_node_progress(context, node, 0.25, "文档聚类：准备文档向量")
     payload = _feature_term_payload(context, corpus)
+    _report_node_progress(context, node, 0.62, "文档聚类：文档向量已生成")
     rows = analysis_ops.document_clusters(
         corpus,
         payload["tfidf_bundle"],
         int(params.get("document_cluster_k", 4) or 4),
     )
+    _report_node_progress(context, node, 0.92, f"文档聚类：生成 {len(rows)} 行")
     return {"document_cluster_table": rows}
 
 
@@ -1437,19 +1628,24 @@ def execute_build_network(context: Any, node: dict[str, Any], inputs: dict[str, 
     graph_ops = _graph_ops()
     cooccurrence_rows = _table_rows_from_inputs_or_results(context, inputs, "cooccurrence_table_in", "cooccurrence_table")
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    _report_node_progress(context, node, 0.25, f"构建网络：读取 {len(cooccurrence_rows)} 条共现边")
     nodes, edges = graph_ops.build_term_graph_tables(
         cooccurrence_rows,
         min_edge_weight=int(config.get("min_edge_weight", 1) or 1),
         max_edges=int(config.get("max_edges", 5000) or 5000),
     )
+    _report_node_progress(context, node, 0.92, f"构建网络：生成 {len(nodes)} 个节点 / {len(edges)} 条边")
     return {"graph_node_table": nodes, "graph_edge_table": edges}
 
 
-def execute_graph_metrics(context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_graph_metrics(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     graph_ops = _graph_ops()
     nodes = _table_rows_from_inputs_or_results(context, inputs, "graph_node_table_in", "graph_node_table")
     edges = _table_rows_from_inputs_or_results(context, inputs, "graph_edge_table_in", "graph_edge_table")
-    return {"graph_metric_table": graph_ops.graph_metric_rows(nodes, edges)}
+    _report_node_progress(context, node, 0.25, f"图指标：读取 {len(nodes)} 个节点 / {len(edges)} 条边")
+    rows = graph_ops.graph_metric_rows(nodes, edges)
+    _report_node_progress(context, node, 0.92, f"图指标：生成 {len(rows)} 行")
+    return {"graph_metric_table": rows}
 
 
 def execute_community_detection(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
@@ -1457,7 +1653,10 @@ def execute_community_detection(context: Any, node: dict[str, Any], inputs: dict
     nodes = _table_rows_from_inputs_or_results(context, inputs, "graph_node_table_in", "graph_node_table")
     edges = _table_rows_from_inputs_or_results(context, inputs, "graph_edge_table_in", "graph_edge_table")
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
-    return {"community_table": graph_ops.community_rows(nodes, edges, method=str(config.get("community_method", "greedy_modularity")))}
+    _report_node_progress(context, node, 0.25, f"社区发现：读取 {len(nodes)} 个节点 / {len(edges)} 条边")
+    rows = graph_ops.community_rows(nodes, edges, method=str(config.get("community_method", "greedy_modularity")))
+    _report_node_progress(context, node, 0.92, f"社区发现：生成 {len(rows)} 行")
+    return {"community_table": rows}
 
 
 def execute_main_path_analysis(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
@@ -1465,7 +1664,10 @@ def execute_main_path_analysis(context: Any, node: dict[str, Any], inputs: dict[
     nodes = _table_rows_from_inputs_or_results(context, inputs, "graph_node_table_in", "graph_node_table")
     edges = _table_rows_from_inputs_or_results(context, inputs, "graph_edge_table_in", "graph_edge_table")
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
-    return {"main_path_table": graph_ops.main_path_rows(nodes, edges, mode=str(config.get("main_path_mode", "directed_citation_or_weighted_backbone")))}
+    _report_node_progress(context, node, 0.25, f"主路径：读取 {len(nodes)} 个节点 / {len(edges)} 条边")
+    rows = graph_ops.main_path_rows(nodes, edges, mode=str(config.get("main_path_mode", "directed_citation_or_weighted_backbone")))
+    _report_node_progress(context, node, 0.92, f"主路径：生成 {len(rows)} 行")
+    return {"main_path_table": rows}
 
 
 def execute_link_prediction(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
@@ -1473,7 +1675,10 @@ def execute_link_prediction(context: Any, node: dict[str, Any], inputs: dict[str
     nodes = _table_rows_from_inputs_or_results(context, inputs, "graph_node_table_in", "graph_node_table")
     edges = _table_rows_from_inputs_or_results(context, inputs, "graph_edge_table_in", "graph_edge_table")
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
-    return {"link_prediction_table": graph_ops.link_prediction_rows(nodes, edges, top_n=int(config.get("link_prediction_top_n", 200) or 200))}
+    _report_node_progress(context, node, 0.25, f"链接预测：读取 {len(nodes)} 个节点 / {len(edges)} 条边")
+    rows = graph_ops.link_prediction_rows(nodes, edges, top_n=int(config.get("link_prediction_top_n", 200) or 200))
+    _report_node_progress(context, node, 0.92, f"链接预测：生成 {len(rows)} 行")
+    return {"link_prediction_table": rows}
 
 
 def _technology_ops():
@@ -1490,13 +1695,14 @@ def execute_technology_indicators(context: Any, node: dict[str, Any], inputs: di
     if current_year is None:
         import datetime
         current_year = datetime.datetime.now().year
-    return {
-        "technology_indicator_table": tech_ops.technology_indicator_rows(
-            term_year_rows,
-            graph_metric_rows if graph_metric_rows else None,
-            current_year=int(current_year),
-        )
-    }
+    _report_node_progress(context, node, 0.25, f"技术指标：读取 {len(term_year_rows)} 条年度记录")
+    rows = tech_ops.technology_indicator_rows(
+        term_year_rows,
+        graph_metric_rows if graph_metric_rows else None,
+        current_year=int(current_year),
+    )
+    _report_node_progress(context, node, 0.92, f"技术指标：生成 {len(rows)} 行")
+    return {"technology_indicator_table": rows}
 
 
 def execute_technology_classification(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
@@ -1511,9 +1717,10 @@ def execute_technology_classification(context: Any, node: dict[str, Any], inputs
         "declining_growth": config.get("threshold_declining_growth", 0.75),
         "declining_maturity": config.get("threshold_declining_maturity", 0.4),
     }
-    return {
-        "technology_classification_table": tech_ops.technology_classification_rows(indicator_rows, thresholds)
-    }
+    _report_node_progress(context, node, 0.25, f"技术分类：读取 {len(indicator_rows)} 条指标")
+    rows = tech_ops.technology_classification_rows(indicator_rows, thresholds)
+    _report_node_progress(context, node, 0.92, f"技术分类：生成 {len(rows)} 行")
+    return {"technology_classification_table": rows}
 
 
 def _legacy_analysis_bundle(context: Any, node: dict[str, Any], corpus: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1526,6 +1733,7 @@ def _legacy_analysis_bundle(context: Any, node: dict[str, Any], corpus: list[dic
     include_term_document = bool(analysis_params.get("include_term_document_relations", True))
     include_term_year = bool(analysis_params.get("include_term_year_relations", True))
     include_cooccurrence = bool(analysis_params.get("include_cooccurrence_analysis", True))
+    include_similarity = bool(analysis_params.get("include_similarity_analysis", True))
     include_feature_terms = bool(analysis_params.get("include_feature_term_selection", True))
     include_keywords = bool(analysis_params.get("include_keyword_extraction", True))
     include_keyword_clusters = bool(analysis_params.get("include_keyword_clustering", True))
@@ -1538,6 +1746,7 @@ def _legacy_analysis_bundle(context: Any, node: dict[str, Any], corpus: list[dic
         "term_document_table": [],
         "term_year_table": [],
         "cooccurrence_table": [],
+        "similarity_table": [],
         "selected_feature_terms": [],
         "keyword_result": [],
         "keyword_cluster_result": [],
@@ -1548,27 +1757,32 @@ def _legacy_analysis_bundle(context: Any, node: dict[str, Any], corpus: list[dic
     }
 
     if include_frequency or include_term_document or include_term_year:
+        _report_node_progress(context, node, 0.12, "旧版聚合分析：准备词项表")
         df_tokens = _token_frame(context, corpus)
+        _report_node_progress(context, node, 0.2, f"旧版聚合分析：已展开 {len(df_tokens)} 条词项")
         if include_frequency:
             bundle["frequency_table"] = analysis_ops.frequency_table(df_tokens)
         if include_term_document:
             bundle["term_document_table"] = analysis_ops.term_document_table(df_tokens)
         if include_term_year:
             bundle["term_year_table"] = analysis_ops.term_year_table(df_tokens)
+        _report_node_progress(context, node, 0.28, "旧版聚合分析：基础统计已生成")
 
     if include_cooccurrence:
         bundle["cooccurrence_table"] = analysis_ops.cooccurrence_table(
             corpus,
             int(analysis_params.get("cooccurrence_window", 5) or 5),
             int(analysis_params.get("min_cooccurrence", 2) or 2),
-            progress_callback=lambda current, total: context.node_progress(
+            progress_callback=lambda current, total: _report_node_progress(
+                context,
                 node,
-                current / max(total, 1),
-                f"旧版聚合分析 {current}/{total}",
+                0.28 + 0.18 * current / max(total, 1),
+                f"旧版聚合分析：共现 {current}/{total}",
             ),
         )
+        _report_node_progress(context, node, 0.48, f"旧版聚合分析：共现生成 {len(bundle['cooccurrence_table'])} 行")
 
-    needs_feature_payload = include_feature_terms or include_keyword_clusters or include_institution_topics or include_document_clusters
+    needs_feature_payload = include_similarity or include_feature_terms or include_keyword_clusters or include_institution_topics or include_document_clusters
     feature_payload = (
         _feature_term_payload(
             context,
@@ -1578,8 +1792,18 @@ def _legacy_analysis_bundle(context: Any, node: dict[str, Any], corpus: list[dic
         if needs_feature_payload
         else None
     )
+    if feature_payload is not None:
+        _report_node_progress(context, node, 0.56, f"旧版聚合分析：特征词生成 {len(feature_payload['feature_rows'])} 行")
     if include_feature_terms and feature_payload is not None:
         bundle["selected_feature_terms"] = feature_payload["feature_rows"]
+
+    if include_similarity and feature_payload is not None:
+        bundle["similarity_table"] = analysis_ops.document_similarity_rows(
+            corpus,
+            feature_payload["tfidf_bundle"],
+            analysis_params,
+        )
+        _report_node_progress(context, node, 0.62, f"旧版聚合分析：相似度生成 {len(bundle['similarity_table'])} 行")
 
     keyword_payload = (
         _keyword_payload(
@@ -1590,12 +1814,15 @@ def _legacy_analysis_bundle(context: Any, node: dict[str, Any], corpus: list[dic
                 "top_k_per_doc": analysis_params.get("top_k_per_doc"),
                 "top_k_project": analysis_params.get("top_k_project"),
             },
+            progress_start=0.62,
+            progress_end=0.72,
         )
         if include_keywords or include_institution_keywords
         else None
     )
     if include_keywords and keyword_payload is not None:
         bundle["keyword_result"] = keyword_payload["keyword_rows"]
+        _report_node_progress(context, node, 0.74, f"旧版聚合分析：关键词生成 {len(bundle['keyword_result'])} 行")
 
     topic_lookup: dict[int, dict[str, Any]] = {}
     doc_topics: dict[str, dict[str, Any]] = {}
@@ -1610,9 +1837,11 @@ def _legacy_analysis_bundle(context: Any, node: dict[str, Any], corpus: list[dic
             context.set_shared_value("topic_lookup", topic_lookup)
         else:
             context.shared["topic_lookup"] = topic_lookup
+        _report_node_progress(context, node, 0.8, f"旧版聚合分析：关键词聚类生成 {len(cluster_rows)} 行")
 
     if include_institution_topics and feature_payload is not None:
         _, doc_topics = analysis_ops.nmf_topic_model(corpus, feature_payload["tfidf_bundle"], analysis_params)
+        _report_node_progress(context, node, 0.84, "旧版聚合分析：文档主题已计算")
 
     if include_institution_keywords or include_institution_topics:
         institution_keyword_rows, institution_topic_rows = analysis_ops.institution_keyword_and_topic(
@@ -1625,6 +1854,12 @@ def _legacy_analysis_bundle(context: Any, node: dict[str, Any], corpus: list[dic
             bundle["institution_keyword_cooccurrence"] = institution_keyword_rows
         if include_institution_topics:
             bundle["institution_topic_cooccurrence"] = institution_topic_rows
+        _report_node_progress(
+            context,
+            node,
+            0.88,
+            f"旧版聚合分析：机构分析生成 {len(institution_keyword_rows) + len(institution_topic_rows)} 行",
+        )
 
     if include_document_clusters and feature_payload is not None:
         bundle["clustering_result"] = analysis_ops.document_clusters(
@@ -1632,57 +1867,68 @@ def _legacy_analysis_bundle(context: Any, node: dict[str, Any], corpus: list[dic
             feature_payload["tfidf_bundle"],
             int(analysis_params.get("document_cluster_k", 4) or 4),
         )
+        _report_node_progress(context, node, 0.92, f"旧版聚合分析：文档聚类生成 {len(bundle['clustering_result'])} 行")
 
     return bundle
 
 
 def execute_legacy_analyze_corpus(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     corpus = _scoped_corpus_from_inputs(context, inputs)
+    _report_node_progress(context, node, 0.08, f"旧版聚合分析：读取 {len(corpus)} 篇文档")
     bundle = _legacy_analysis_bundle(context, node, corpus)
     context.result_bundle.update(bundle)
+    _report_node_progress(context, node, 0.94, "旧版聚合分析：结果已写入运行上下文")
     return {
         "analysis_bundle": bundle,
         "audit_table": bundle["audit_table"],
     }
 
 
-def execute_legacy_export_results(context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_legacy_export_results(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     analysis_bundle = inputs.get("analysis_bundle_in") or {}
     audit_rows = inputs.get("audit_table_in") or []
+    bundle_count = len(analysis_bundle) if isinstance(analysis_bundle, dict) else 0
+    audit_count = len(audit_rows) if isinstance(audit_rows, list) else 0
+    _report_node_progress(context, node, 0.35, f"导出旧版结果：读取 {bundle_count} 组结果 / {audit_count} 条审计")
     if isinstance(analysis_bundle, dict):
         for key, value in analysis_bundle.items():
             if key in context.result_bundle and isinstance(value, list):
                 context.result_bundle[key] = value
     if isinstance(audit_rows, list):
         context.result_bundle["audit_table"] = audit_rows
+    _report_node_progress(context, node, 0.92, f"导出旧版结果：汇总 {len(context.result_bundle)} 个结果集")
     return {"artifact": {"kind": "legacy_export", "count": len(context.result_bundle)}}
 
 
-def execute_save_csv(_context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_save_csv(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     tables = inputs.get("table_in") or []
     if not isinstance(tables, list):
         tables = [tables]
+    _report_node_progress(context, node, 0.92, f"保存 CSV：接收 {len(tables)} 行")
     return {"artifact": {"kind": "csv", "count": len(tables)}}
 
 
-def execute_save_xlsx(_context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_save_xlsx(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     tables = inputs.get("table_in") or []
     if not isinstance(tables, list):
         tables = [tables]
+    _report_node_progress(context, node, 0.92, f"保存 XLSX：接收 {len(tables)} 行")
     return {"artifact": {"kind": "xlsx", "count": len(tables)}}
 
 
-def execute_save_png(_context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_save_png(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     renderables = inputs.get("render_in") or []
     if not isinstance(renderables, list):
         renderables = [renderables]
+    _report_node_progress(context, node, 0.92, f"保存 PNG：接收 {len(renderables)} 个可视化对象")
     return {"artifact": {"kind": "png", "count": len(renderables)}}
 
 
-def execute_save_html_report(_context: Any, _node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_save_html_report(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     report_inputs = inputs.get("report_in") or []
     if not isinstance(report_inputs, list):
         report_inputs = [report_inputs]
+    _report_node_progress(context, node, 0.92, f"保存 HTML 报告：接收 {len(report_inputs)} 组内容")
     return {"artifact": {"kind": "html", "count": len(report_inputs)}}
 
 
@@ -1717,6 +1963,7 @@ EXECUTORS_BY_TYPE = {
     "term_document_analysis": execute_term_document_analysis,
     "term_year_analysis": execute_term_year_analysis,
     "cooccurrence_analysis": execute_cooccurrence_analysis,
+    "similarity_analysis": execute_similarity_analysis,
     "group_compare": execute_group_compare,
     "keyness_analysis": execute_keyness_analysis,
     "topic_modeling": execute_topic_modeling,

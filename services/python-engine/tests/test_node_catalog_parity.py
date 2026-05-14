@@ -155,6 +155,21 @@ def test_builtin_schema_includes_new_corpus_selection_nodes():
         assert node_type in definitions
 
 
+def test_revised_flow_node_definitions_expose_ngram_similarity_and_topic_algorithm_controls():
+    definitions = {str(definition["type"]): definition for definition in build_builtin_node_definitions()}
+
+    token_params = {str(param["param_id"]) for param in definitions["tokenize"]["params"]}
+    assert {"enable_ngrams", "ngram_min", "ngram_max"} <= token_params
+
+    assert "similarity_analysis" in definitions
+    similarity_outputs = {str(port["port_id"]) for port in definitions["similarity_analysis"]["outputs"]}
+    assert "similarity_table" in similarity_outputs
+
+    topic_params = {str(param["param_id"]): param for param in definitions["topic_modeling"]["params"]}
+    assert "topic_algorithm" in topic_params
+    assert {str(option["value"]) for option in topic_params["topic_algorithm"]["options"]} >= {"nmf", "lda"}
+
+
 def test_non_utility_builtin_nodes_have_explicit_runtime_executors():
     registry = build_node_registry()
 

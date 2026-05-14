@@ -212,6 +212,13 @@ def resolve_text_build_value(
     if matched_key is not None:
         return value
 
+    for rule in field_mappings or []:
+        if str(rule.get("source_field") or "") != str(field):
+            continue
+        matched_key, value = resolve_source_value(record, str(field), rule.get("aliases", []))
+        if matched_key is not None:
+            return value
+
     if not mapped_fields:
         return None
 
@@ -230,6 +237,7 @@ def build_raw_text(
 ) -> str:
     fields = text_build.get("fields") or ["raw_text"]
     values: list[str] = []
+    seen_values: set[str] = set()
 
     for field in fields:
         value = resolve_text_build_value(str(field), record, mapped_fields, field_mappings)
@@ -238,7 +246,11 @@ def build_raw_text(
                 continue
             values.append("")
             continue
-        values.append(str(value))
+        text_value = str(value)
+        if text_value in seen_values:
+            continue
+        values.append(text_value)
+        seen_values.add(text_value)
 
     delimiter = text_build.get("delimiter", "\n\n")
     return delimiter.join(values).strip()

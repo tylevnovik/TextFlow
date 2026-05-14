@@ -102,7 +102,7 @@ TextFlow/
 | `dictionaries` | 词表规则 | 管理 8 类词表: 停用词/自定义/短语/同义/近义/标准/排除/正则 |
 | `workflow` | 处理与分析 | **主入口** — 可视化 DAG 工作流编辑器 |
 | `analysis` | 分析详情 | 词频表/共现/关键词/主题/聚类/散点图 |
-| `results` | 结果导出 | 运行历史/运行对比/工件浏览器/实验矩阵/导出控制 |
+| `results` | 结果导出 | 运行历史/运行对比/实验矩阵/导出控制；产物预览从工作流节点弹窗进入 |
 | `settings` | 设置 | UI 缩放/语言/主题/项目路径 |
 
 ### 3.3 工作流画布
@@ -147,7 +147,7 @@ TextFlow/
 | `create_review_task` / `list_review_tasks` / `resolve_review_task` | 人工复核工作流 |
 | `save_experiment_spec` / `run_experiment_matrix` | 实验管理 |
 | `compare_runs` | 运行对比 |
-| `load_artifact_preview` / `list_run_artifacts` | 工件浏览 |
+| `load_artifact_preview` / `list_run_artifacts` | 节点产物预览 |
 | `open_path` / `reveal_path` | 系统文件管理器集成 |
 
 ---
@@ -160,13 +160,13 @@ TextFlow/
 
 | 分类 | 关键类型 | 说明 |
 |---|---|---|
-| **数据源** | `SourceProfile` (6 种) | generic/literature/wos/patent/incopat/business |
-| **工作流** | `BuiltinWorkflowNodeType` (28 种) | 语料输入/词典/清洗/分词/分析/导出/工具 |
-| **端口类型** | `WorkflowPortType` (25 种) | CorpusResource/CleanCorpus/FrequencyTable 等 |
+| **数据源** | `SourceProfile` (7 种) | generic/literature/wos/scopus/patent/incopat/business_reserved |
+| **工作流** | `BuiltinWorkflowNodeType` | 语料输入/词典/清洗/分词/分析/图分析/技术识别/导出/工具 |
+| **端口类型** | `WorkflowPortType` | CorpusResource/CleanCorpus/FrequencyTable/GraphMetricTable 等 |
 | **运行状态** | `RunStatus` | idle/running/completed/failed/cancelled |
 | **字典类型** | `DictionaryKind` (8 种) | stopwords/synonym/standard_terms 等 |
 | **导出格式** | `ExportFormat` | csv/xlsx/png/html |
-| **页面** | `PageId` (9 个) | home/project/data/workflow/dictionaries/analysis/results/report/settings |
+| **页面** | `PageId` (9 个类型，8 个主导航入口) | home/project/data/workflow/dictionaries/analysis/results/settings；report 仍为非主导航兼容视图 |
 
 ### 4.2 核心接口
 
@@ -179,10 +179,11 @@ TextFlow/
 
 ### 4.3 预置导入模板
 
-为 6 种数据源预定义了字段映射模板:
+为 7 种数据源预定义了字段映射模板:
 - **通用 (generic)**: 自动匹配
 - **文献 (literature)**: 标准学术字段
 - **WOS**: Web of Science 字段码 (UT/TI/AB/PY/SO/AU/C1/DE/WC)
+- **Scopus**: 常见 Scopus 导出字段 (EID/Title/Abstract/Authors/Affiliations)
 - **专利 (patent)**: 标准专利字段
 - **IncoPat**: 中文专利字段 (含大量别名)
 - **商业 (business_reserved)**: 预留
@@ -353,7 +354,7 @@ def register_nodes(builder):
 ├── workspace.json                    # 工作区全局状态
 └── {project-name}.tfproj/
     ├── project.json                  # 项目清单 (ProjectManifest)
-    ├── metadata/corpus.json          # 语料数据
+    ├── project.db                    # 语料与较大运行产物
     ├── dictionaries/                 # 词表数据
     ├── runs/                         # 运行历史与工件
     ├── cache/                        # 节点缓存 (.pkl)
@@ -362,12 +363,13 @@ def register_nodes(builder):
 
 **关键设计**:
 - **脏段感知持久化**: `write_project_payload()` 仅写入变更段
+- **SQLite 项目存储**: 新项目将 corpus rows 和 artifact payload 写入 `project.db`；旧 `metadata/corpus.json` 会在加载时迁移
 - **字典增量存储**: 内置词表仅存储用户覆盖部分，自定义词表全量存储
 - **导入/导出**: Zip 格式的 .tfproj 包，支持 ID 冲突处理
 
 ### 6.2 文件导入 (`ingestion.py`, ~445 行)
 
-支持格式: **CSV / XLSX / JSON / TXT**
+支持格式: **CSV / XLSX / XLS / JSON / TXT**
 
 - `map_record_fields()`: 别名感知字段映射 (大小写折叠 + Unicode 归一化)
 - `build_raw_text()`: 可配置的多字段文本拼接
@@ -440,35 +442,27 @@ DictionarySet (项目级)
 
 ## 九、示例项目系统
 
-### 9.1 9 个内置示例项目
+### 9.1 3 个内置 revised-flow 示例项目
 
-首次空工作区加载时自动注入，基于**真实公开数据** (非模拟)。
+首次空工作区加载时自动注入。样例从 WoS/IncoPat seed 预构建为已经导入的 `.tfproj` 项目，语料位于 `project.db`，打包模板不保留 raw seed。
 
-| # | 名称 | 数据源 | 核心功能 | 规模 |
-|---|---|---|---|---|
-| 1 | 基础文本预处理 | Wikipedia | 清洗/归一化/分词/词频 | 20K 行 |
-| 2 | 词表治理与词频统计 | UN 并行语料 | 词典覆盖/同义词/停用词 | 10K 行 |
-| 3 | 学术摘要关键词与主题 | OpenAlex | 关键词提取/主题建模/文档聚类 | 10K 行 |
-| 4 | 机构主题与技术方向 | OpenAlex | 机构-关键词/主题分析 | 10K 行 |
-| 5 | 复核实验与增量运行 | UN 并行语料 | 复核任务/实验矩阵/增量运行 | 10K 行 |
-| 6 | 多来源语料合并与抽样 | Wiki + OpenAlex | 多格式合并/去重/抽样 | 10K 行 |
-| 7 | 分组比较与关键性分析 | OpenAlex | 分组词频比较/显著性分析 | 10K 行 |
-| 8 | 切分评估与结果拼接 | Wikipedia | 训练/测试拆分/聚类评估 | 10K 行 |
-| 9 | 条件路由与人工门禁 | UN + OpenAlex | 条件路由/指标门禁/人工复核 | 10K 行 |
+| # | 名称 | Source profile | 核心功能 |
+|---|---|---|---|
+| 1 | WoS论文关键词与主题流程 | `wos` | 字段映射、主文本拼接、元数据标准化、关键词、主题、年份趋势、共现、导出 |
+| 2 | IncoPat专利技术识别与图分析 | `incopat` | 专利元数据、claims 文本、图指标、社区、主路径、链接预测、技术识别 |
+| 3 | 论文专利融合分析流程 | `wos + incopat` | 多来源融合、机构关键词/主题、跨来源统计、图谱与技术输出 |
 
-**数据特性**: 严格 1:1 英中比例，最低 10,000 文档，来源于 Wikimedia/UN/OpenAlex 真实数据。
-
-### 9.2 数据流水线
+### 9.2 Seed 与数据流水线
 
 ```
-外部 API (Wikipedia/UN/OpenAlex)
-    ↓ fetch-public-sample-data.ps1
-public_sample_cache/ (gzip JSONL)
-    ↓ sample_dataset_cache.py
-语言均衡采样 -> 短语交错 -> 种子文件 (CSV/XLSX/JSON/TXT)
+WoS/IncoPat seed (local/private or approved)
+    ↓ sample_seed_sources.py 授权 gate
     ↓ bundled_sample_workspace.py
-预构建工作区模板 -> 首次启动时恢复
+source profile 导入 -> project.db -> 预构建工作区模板
+    ↓ 首次启动时恢复
 ```
+
+Scopus 已有导入 profile 和测试夹具，但没有内置样例。
 
 ---
 
@@ -490,8 +484,10 @@ public_sample_cache/ (gzip JSONL)
 scripts/bootstrap-frontend.ps1      # npm install
 scripts/bootstrap-python.ps1        # 创建 .venv, 安装引擎
 
-# 2. 刷新公共数据缓存 (可选)
-scripts/fetch-public-sample-data.ps1 -All
+# 2. 配置样例 seed (本地/私有构建)
+$env:TEXTFLOW_SAMPLE_WOS_SOURCE = "C:\path\to\wos.xls"
+$env:TEXTFLOW_SAMPLE_INCOPAT_SOURCE = "C:\path\to\incopat.xlsx"
+$env:TEXTFLOW_ALLOW_RESTRICTED_SAMPLE_DATA = "1"
 
 # 3. 构建 Python Sidecar
 scripts/build-python-sidecar.ps1    # PyInstaller -> dist/textflow-engine/
@@ -523,7 +519,6 @@ npm run tauri:build                 # -> NSIS 安装程序
 | `build-python-sidecar.ps1` | PyInstaller 构建 sidecar |
 | `build-bundled-sample-workspace.ps1` | 构建示例工作区模板 |
 | `build-desktop-release.ps1` | 构建完整桌面发布包 |
-| `fetch-public-sample-data.ps1` | 拉取公共数据集 |
 | `test-engine.ps1` | 运行引擎测试 (fast/full) |
 | `update-builtin-dictionaries.ps1` | 更新内置词表快照 |
 | `run-large-benchmark.ps1` | 大规模基准测试 |
@@ -545,16 +540,14 @@ npm run tauri:build                 # -> NSIS 安装程序
 |---|---|---|
 | `test_workflow_runner.py` | 22 | 端到端工作流/导出/缓存/作用域/增量/并行 |
 | `test_workspace_cli.py` | 23 | 项目 CRUD/工作区快照/导入导出/插件加载 |
-| `test_sample_projects.py` | 14 | 9 个示例规范/引导元数据/工作流覆盖/运行验证 |
+| `test_sample_projects.py` | 14 | 3 个 revised-flow 示例规范/引导元数据/工作流覆盖/运行验证 |
 | `test_ingestion.py` | 5 | CSV/JSON/TXT/XLSX 导入/字段映射/IncoPat 模板 |
 | `test_modeling_nodes.py` | 3 | 主题建模/聚类评估/结果合并 |
 | `test_node_catalog_parity.py` | 4 | **TS<->Python 节点定义一致性校验** |
 | `test_control_flow_nodes.py` | 3 | 条件路由/结果门禁/人工复核门禁 |
 | `test_comparison_nodes.py` | 4 | 词表选择/覆盖规则/分组比较/关键性分析 |
 | `test_incremental_runtime.py` | 3 | 单文档失效/增量作用域/词典覆盖失效 |
-| `test_public_sample_data_builder.py` | 5 | OpenAlex/Wikipedia/UN TEI 解析与标准化 |
-| `test_sample_dataset_cache.py` | 4 | 缓存读写/语言均衡加载/缺失缓存/奇数拒绝 |
-| `test_sample_dataset_sources.py` | 5 | 源注册表/语言支持/行标准化/缺失字段拒绝 |
+| `test_sample_seed_sources.py` | 2 | WoS/IncoPat seed 授权 gate 与 restricted override |
 | `test_review_store.py` | 3 | 关键词合并/词表回写/文档补丁 |
 | `test_artifact_store.py` | 1 | 工件预览 (前 50 行) |
 | `test_bundled_sample_workspace.py` | 3 | 元数据匹配/行限制拒绝/引导状态 |
@@ -623,9 +616,9 @@ npm run tauri:build                 # -> NSIS 安装程序
 - 原生 DAG 执行 + 并行调度
 - 节点级缓存 (.pkl)
 - 语料视图/工件记录/复核任务/实验规格
-- 资源浏览器/工件浏览器/复核队列/实验矩阵/运行对比
+- 资源浏览器/节点产物弹窗/复核队列/实验矩阵/运行对比
 - 本地 Python 插件节点
-- 9 个预构建示例项目
+- 3 个 revised-flow 预构建示例项目
 
 ### 13.3 已知差距
 

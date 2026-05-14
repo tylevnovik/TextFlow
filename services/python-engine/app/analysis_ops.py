@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import yake
 from sklearn.cluster import MiniBatchKMeans
-from sklearn.decomposition import NMF, TruncatedSVD
+from sklearn.decomposition import LatentDirichletAllocation, NMF, TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import davies_bouldin_score, silhouette_score
 
@@ -134,7 +134,7 @@ def cooccurrence_table(
             unique_window = sorted(set(window))
             for a, b in itertools.combinations(unique_window, 2):
                 counter[(a, b)] += 1
-        if progress_callback is not None and (index == total or index % 250 == 0):
+        if progress_callback is not None and (index == 1 or index == total or index % 250 == 0):
             progress_callback(index, total)
 
     rows = [
@@ -348,7 +348,7 @@ def _yake_keyword_rows_serial(
             ranked=ranked,
             top_k_doc=top_k_doc,
         )
-        if progress_callback is not None and (index == total or index % 100 == 0):
+        if progress_callback is not None and (index == 1 or index == total or index % 100 == 0):
             progress_callback(index, total)
 
     return [*doc_keyword_rows, *_project_keyword_rows(project_scores, top_k_project)]
@@ -463,7 +463,7 @@ def tfidf_keyword_rows(
             top_k_doc=top_k_doc,
         )
 
-        if progress_callback is not None and (index == total or index % 250 == 0):
+        if progress_callback is not None and (index == 1 or index == total or index % 250 == 0):
             progress_callback(index, total)
 
     return [*doc_keyword_rows, *_project_keyword_rows(project_scores, top_k_project)]
@@ -530,6 +530,60 @@ def tfidf_analysis(
     return feature_rows, keyword_rows, tfidf_bundle
 
 
+def document_similarity_rows(
+    corpus: list[dict[str, Any]],
+    tfidf_bundle: TfidfAnalysisBundle,
+    analysis_params: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if tfidf_bundle.empty:
+        return []
+    matrix = tfidf_bundle.matrix
+    if matrix is None or matrix.shape[0] < 2:
+        return []
+
+    method = str(analysis_params.get("similarity_method") or "cosine").lower()
+    if method != "cosine":
+        method = "cosine"
+    min_similarity = float(analysis_params.get("min_similarity", 0.2) or 0.0)
+    top_k = int(analysis_params.get("similarity_top_k", 200) or 200)
+
+    similarity_matrix = matrix @ matrix.T
+    if hasattr(similarity_matrix, "toarray"):
+        similarity_matrix = similarity_matrix.toarray()
+    similarity_matrix = np.asarray(similarity_matrix)
+    doc_lookup = {
+        str(item.get("doc_id") or item.get("id") or ""): item
+        for item in corpus
+    }
+
+    rows: list[dict[str, Any]] = []
+    for left_index, doc_id_a in enumerate(tfidf_bundle.doc_ids):
+        for right_index in range(left_index + 1, len(tfidf_bundle.doc_ids)):
+            score = float(similarity_matrix[left_index, right_index])
+            if score < min_similarity:
+                continue
+            doc_id_b = tfidf_bundle.doc_ids[right_index]
+            doc_a = doc_lookup.get(doc_id_a, {})
+            doc_b = doc_lookup.get(doc_id_b, {})
+            rows.append(
+                {
+                    "doc_id_a": doc_id_a,
+                    "doc_id_b": doc_id_b,
+                    "title_a": str(doc_a.get("title") or ""),
+                    "title_b": str(doc_b.get("title") or ""),
+                    "year_a": doc_a.get("year"),
+                    "year_b": doc_b.get("year"),
+                    "institution_a": doc_a.get("institution"),
+                    "institution_b": doc_b.get("institution"),
+                    "similarity": round(score, 6),
+                    "similarity_method": method,
+                }
+            )
+
+    rows.sort(key=lambda row: (-float(row["similarity"]), str(row["doc_id_a"]), str(row["doc_id_b"])))
+    return rows[:top_k] if top_k > 0 else rows
+
+
 def _reduced_cluster_matrix(matrix: Any, cluster_count: int, *, max_components: int) -> np.ndarray:
     if matrix is None or not hasattr(matrix, "shape"):
         dense = np.asarray(matrix if matrix is not None else [])
@@ -567,7 +621,7 @@ def nmf_topic_model(
     tfidf_bundle: TfidfAnalysisBundle,
     analysis_params: dict[str, Any],
 ) -> tuple[dict[int, dict[str, Any]], dict[str, dict[str, Any]]]:
-    model, doc_topic_matrix, topic_lookup = _fit_nmf_topic_model(tfidf_bundle, analysis_params)
+    model, doc_topic_matrix, topic_lookup = _fit_topic_model(tfidf_bundle, {**analysis_params, "topic_algorithm": "nmf"})
     if model is None or doc_topic_matrix is None:
         return {}, {}
 
@@ -585,10 +639,10 @@ def nmf_topic_model(
     return topic_lookup, doc_topics
 
 
-def _fit_nmf_topic_model(
+def _fit_topic_model(
     tfidf_bundle: TfidfAnalysisBundle,
     analysis_params: dict[str, Any],
-) -> tuple[NMF | None, np.ndarray | None, dict[int, dict[str, Any]]]:
+) -> tuple[Any | None, np.ndarray | None, dict[int, dict[str, Any]]]:
     if tfidf_bundle.empty:
         return None, None, {}
 
@@ -598,8 +652,18 @@ def _fit_nmf_topic_model(
 
     requested_topics = int(analysis_params.get("topic_model_k", analysis_params.get("keyword_cluster_k", 4)))
     topic_count = max(1, min(requested_topics, document_matrix.shape[0], document_matrix.shape[1]))
-    init = "nndsvda" if topic_count <= min(document_matrix.shape) else "random"
-    model = NMF(n_components=topic_count, init=init, random_state=42, max_iter=400)
+    algorithm = str(analysis_params.get("topic_algorithm") or "nmf").lower()
+    if algorithm == "lda":
+        model = LatentDirichletAllocation(
+            n_components=topic_count,
+            random_state=42,
+            learning_method="batch",
+            max_iter=20,
+        )
+    else:
+        algorithm = "nmf"
+        init = "nndsvda" if topic_count <= min(document_matrix.shape) else "random"
+        model = NMF(n_components=topic_count, init=init, random_state=42, max_iter=400)
     doc_topic_matrix = model.fit_transform(document_matrix)
 
     topic_lookup: dict[int, dict[str, Any]] = {}
@@ -611,6 +675,7 @@ def _fit_nmf_topic_model(
         topic_lookup[topic_id] = {
             "label": " / ".join(label_terms),
             "terms": top_terms,
+            "algorithm": algorithm,
         }
 
     return model, doc_topic_matrix, topic_lookup
@@ -623,7 +688,7 @@ def topic_model_tables(
     *,
     top_terms_per_topic: int = 5,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    model, doc_topic_matrix, topic_lookup = _fit_nmf_topic_model(tfidf_bundle, analysis_params)
+    model, doc_topic_matrix, topic_lookup = _fit_topic_model(tfidf_bundle, analysis_params)
     if model is None or doc_topic_matrix is None:
         return [], [], []
 
@@ -644,6 +709,7 @@ def topic_model_tables(
                     "term": humanize_term(term),
                     "weight": round(weight, 6),
                     "rank": rank,
+                    "topic_algorithm": topic_lookup[topic_id].get("algorithm", "nmf"),
                 }
             )
 
@@ -665,6 +731,7 @@ def topic_model_tables(
                 "topic_id": topic_id,
                 "topic_label": topic_lookup[topic_id]["label"],
                 "topic_score": round(score, 6),
+                "topic_algorithm": topic_lookup[topic_id].get("algorithm", "nmf"),
             }
         )
 
@@ -672,6 +739,7 @@ def topic_model_tables(
         {
             "topic_id": topic_id,
             "topic_label": payload["label"],
+            "topic_algorithm": payload.get("algorithm", "nmf"),
             "document_count": int(topic_document_counts.get(topic_id, 0)),
             "average_topic_score": round(
                 float(topic_score_totals.get(topic_id, 0.0)) / max(int(topic_document_counts.get(topic_id, 0)), 1),

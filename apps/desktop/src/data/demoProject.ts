@@ -716,6 +716,18 @@ const manifest: ProjectManifest = {
     selected_feature_terms: featureTerms,
     keyword_result: keywordRows,
     keyword_cluster_result: keywordClusters,
+    topic_summary_table: [
+      { topic_id: 0, topic_label: "生成式写作 / 学术规范", representative_terms: ["生成式", "学术规范"], document_count: 1 },
+      { topic_id: 1, topic_label: "专利供应链 / 回收", representative_terms: ["patent", "recycling"], document_count: 1 }
+    ],
+    topic_term_table: [
+      { topic_id: 0, term: "生成式", weight: 0.42 },
+      { topic_id: 1, term: "patent", weight: 0.38 }
+    ],
+    document_topic_table: [
+      { doc_id: "DOC-001", topic_id: 0, score: 0.74 },
+      { doc_id: "DOC-002", topic_id: 1, score: 0.69 }
+    ],
     institution_keyword_cooccurrence: [
       { institution: "复旦大学", keyword: "学术规范", cooccurrence_count: 2, year: 2024, score: 0.62 },
       { institution: "上海交通大学", keyword: "智能制造", cooccurrence_count: 3, year: 2025, score: 0.88 }
@@ -728,6 +740,35 @@ const manifest: ProjectManifest = {
       { doc_id: "DOC-001", cluster_id: 0, x: -0.4, y: 0.3, title: "生成式 AI 在学术写作支持中的应用边界", year: 2024, source: "Journal of Digital Humanities" },
       { doc_id: "DOC-002", cluster_id: 1, x: 0.6, y: 0.4, title: "Patent intelligence mining for battery supply chains", year: 2023, source: "WoS" },
       { doc_id: "DOC-003", cluster_id: 2, x: 0.1, y: -0.5, title: "智能制造语料中的工艺知识抽取", year: 2025, source: "IncoPat" }
+    ],
+    graph_node_table: [
+      { node: "patent", weight: 3 },
+      { node: "recycling", weight: 2 }
+    ],
+    graph_edge_table: [
+      { source: "patent", target: "recycling", weight: 2 }
+    ],
+    graph_metric_table: [
+      { node: "patent", degree: 2, pagerank: 0.31 },
+      { node: "recycling", degree: 1, pagerank: 0.22 }
+    ],
+    community_table: [
+      { node: "patent", community_id: 0 }
+    ],
+    main_path_table: [
+      { source: "patent", target: "recycling", weight: 2, rank: 1 }
+    ],
+    link_prediction_table: [
+      { source: "battery", target: "recycling", score: 0.48 }
+    ],
+    technology_indicator_table: [
+      { term: "recycling", novelty_score: 0.7, growth_ratio: 1.6, disruption_score: 0.4, maturity_score: 0.3 }
+    ],
+    technology_classification_table: [
+      { term: "recycling", technology_label: "emerging", confidence: 0.72 }
+    ],
+    metadata_audit_table: [
+      { doc_id: "DOC-001", field: "institution", original_value: "Fudan Univ.", normalized_value: "复旦大学", rule: "alias" }
     ],
     audit_table: [
       { doc_id: "DOC-001", position: 1, source_term: "generative ai", target_term: "生成式", rule_type: "synonym_map", rule_source: "synonym_map.csv", rule_key: "generative ai", action: "replace" },

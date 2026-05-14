@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 
 from app.node_executors import (
+    EXECUTORS_BY_TYPE,
     execute_cluster_evaluation,
+    execute_frequency_statistics,
     execute_join_results,
     execute_topic_modeling,
 )
@@ -69,6 +71,91 @@ def _context(result_bundle: dict[str, object] | None = None) -> SimpleNamespace:
     )
 
 
+def _progress_context() -> tuple[SimpleNamespace, list[tuple[str, float, str]]]:
+    events: list[tuple[str, float, str]] = []
+    context = _context()
+
+    def node_progress(node: dict[str, object], fraction: float, detail: str | None = None) -> None:
+        events.append((str(node.get("node_id") or node.get("node_type") or ""), float(fraction), detail or ""))
+
+    context.node_progress = node_progress
+    return context, events
+
+
+def test_workflow_nodes_emit_real_stage_progress_before_completion():
+    corpus = _filtered_token_corpus()
+
+    frequency_context, frequency_events = _progress_context()
+    execute_frequency_statistics(
+        frequency_context,
+        {"node_id": "node-frequency", "node_type": "frequency_statistics", "config": {}},
+        {"token_corpus_in": corpus},
+    )
+
+    similarity_context, similarity_events = _progress_context()
+    EXECUTORS_BY_TYPE["similarity_analysis"](
+        similarity_context,
+        {"node_id": "node-similarity", "node_type": "similarity_analysis", "config": {"min_similarity": 0.01}},
+        {"token_corpus_in": corpus},
+    )
+
+    topic_context, topic_events = _progress_context()
+    execute_topic_modeling(
+        topic_context,
+        {"node_id": "node-topic", "node_type": "topic_modeling", "config": {"topic_model_k": 2}},
+        {"token_corpus_in": corpus},
+    )
+
+    cooccurrence_context, cooccurrence_events = _progress_context()
+    EXECUTORS_BY_TYPE["cooccurrence_analysis"](
+        cooccurrence_context,
+        {"node_id": "node-cooccurrence", "node_type": "cooccurrence_analysis", "config": {"min_cooccurrence": 1}},
+        {"token_corpus_in": corpus},
+    )
+
+    keyword_context, keyword_events = _progress_context()
+    EXECUTORS_BY_TYPE["keyword_extraction"](
+        keyword_context,
+        {"node_id": "node-keyword", "node_type": "keyword_extraction", "config": {"top_k_per_doc": 2}},
+        {"token_corpus_in": corpus},
+    )
+
+    filter_context, filter_events = _progress_context()
+    EXECUTORS_BY_TYPE["filter_by_metadata"](
+        filter_context,
+        {"node_id": "node-filter", "node_type": "filter_by_metadata", "config": {"field": "source", "values": ["paper"]}},
+        {"corpus_in": corpus},
+    )
+
+    dedupe_context, dedupe_events = _progress_context()
+    EXECUTORS_BY_TYPE["deduplicate_documents"](
+        dedupe_context,
+        {"node_id": "node-dedupe", "node_type": "deduplicate_documents", "config": {"dedupe_keys_text": "title,year"}},
+        {"corpus_in": corpus},
+    )
+
+    split_context, split_events = _progress_context()
+    EXECUTORS_BY_TYPE["split_corpus"](
+        split_context,
+        {"node_id": "node-split", "node_type": "split_corpus", "config": {"splits_text": "train:0.5\ntest:0.5"}},
+        {"corpus_in": corpus},
+    )
+
+    for node_id, events in [
+        ("node-frequency", frequency_events),
+        ("node-similarity", similarity_events),
+        ("node-topic", topic_events),
+        ("node-cooccurrence", cooccurrence_events),
+        ("node-keyword", keyword_events),
+        ("node-filter", filter_events),
+        ("node-dedupe", dedupe_events),
+        ("node-split", split_events),
+    ]:
+        node_events = [event for event in events if event[0] == node_id]
+        assert node_events
+        assert any(0.0 < fraction < 1.0 for _event_node_id, fraction, _detail in node_events)
+
+
 def test_topic_modeling_node_outputs_topic_term_and_doc_topic_tables():
     context = _context()
     corpus = _filtered_token_corpus()
@@ -88,6 +175,22 @@ def test_topic_modeling_node_outputs_topic_term_and_doc_topic_tables():
     assert all(row["topic_label"] for row in document_topic_rows)
     assert any(row["term"] in {"battery", "writing", "citation"} for row in topic_term_rows)
     assert all("document_count" in row for row in topic_summary_rows)
+
+
+def test_similarity_analysis_node_outputs_ranked_document_pairs():
+    corpus = _filtered_token_corpus()
+    executor = EXECUTORS_BY_TYPE["similarity_analysis"]
+
+    result = executor(
+        _context(),
+        {"node_id": "node-similarity", "config": {"min_similarity": 0.01, "similarity_top_k": 4}},
+        {"token_corpus_in": corpus},
+    )
+
+    rows = result["similarity_table"]
+    assert rows
+    assert rows == sorted(rows, key=lambda row: (-row["similarity"], row["doc_id_a"], row["doc_id_b"]))
+    assert {"doc_id_a", "doc_id_b", "similarity"} <= set(rows[0])
 
 
 def test_cluster_evaluation_node_outputs_silhouette_and_cluster_sizes():

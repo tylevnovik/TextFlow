@@ -5,6 +5,7 @@ This directory contains sample seed data used to build bundled example projects.
 ## Licensing Gate
 
 - `private/` is gitignored and must not be committed. It is for local development seed files only.
+- Spreadsheet/CSV seed files placed directly in this folder are also gitignored for local discovery during private builds.
 - WoS, Scopus, and IncoPat exports are typically restricted by subscription agreements.
 - Do not redistribute restricted seed files in public releases.
 

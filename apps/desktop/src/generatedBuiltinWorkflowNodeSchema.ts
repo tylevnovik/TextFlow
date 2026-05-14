@@ -267,6 +267,21 @@ export const builtinWorkflowNodeSchema: Record<WorkflowNodeType, GeneratedWorkfl
     ],
     stepId: "analysis"
   },
+  similarity_analysis: {
+    label: "相似度计算",
+    description: "基于词项表示计算文档间相似度，输出可审计的文档对得分。",
+    category: "analysis",
+    inputs: [{ port_id: "token_corpus_in", port_type: "FilteredTokenCorpus", label: "分析词项" }],
+    outputs: [
+      {
+        port_id: "similarity_table",
+        port_type: "AnyTable",
+        label: "相似度表",
+        result_bundle_key: "similarity_table"
+      }
+    ],
+    stepId: "analysis"
+  },
   group_compare: {
     label: "分组比较",
     description: "按指定分组字段比较词项在不同群组中的频次、文档覆盖和归一化占比。",
@@ -299,7 +314,7 @@ export const builtinWorkflowNodeSchema: Record<WorkflowNodeType, GeneratedWorkfl
   },
   topic_modeling: {
     label: "主题建模",
-    description: "使用 NMF 对语料做轻量主题建模，输出主题词项、文档主题和主题摘要。",
+    description: "使用 NMF 或 LDA 对语料做轻量主题建模，输出主题词项、文档主题和主题摘要。",
     category: "analysis",
     inputs: [{ port_id: "token_corpus_in", port_type: "FilteredTokenCorpus", label: "分析词项" }],
     outputs: [
@@ -518,7 +533,8 @@ export const builtinWorkflowNodeSchema: Record<WorkflowNodeType, GeneratedWorkfl
     description: "基于词项年份趋势和网络指标计算新颖度、颠覆度和成熟度。",
     category: "analysis",
     inputs: [
-      { port_id: "term_year_table_in", port_type: "TermYearTable", label: "词项年份表输入" }
+      { port_id: "term_year_table_in", port_type: "TermYearTable", label: "词项年份表输入" },
+      { port_id: "graph_metric_table_in", port_type: "GraphMetricTable", label: "网络指标输入" }
     ],
     outputs: [
       { port_id: "technology_indicator_table", port_type: "TechnologyIndicatorTable", label: "技术指标表", result_bundle_key: "technology_indicator_table" }

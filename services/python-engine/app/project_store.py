@@ -27,10 +27,15 @@ from .defaults import (
 from .node_registry import builtin_node_definitions
 from .project_database import (
     initialize_project_database,
+    list_artifact_records,
     load_corpus_rows,
+    load_dictionary_set,
+    load_result_bundle,
     migrate_corpus_from_json,
     project_database_integrity_check,
     replace_corpus_rows,
+    replace_dictionary_set,
+    replace_result_bundle,
 )
 from .runtime_support import workflow_runtime_profile
 
@@ -568,13 +573,6 @@ def normalize_dictionary_set_record(dictionary_set: dict[str, Any] | None) -> di
     baseline = default_dictionary_set_seed()
     if not isinstance(dictionary_set, dict):
         return baseline
-    if is_hydrated_dictionary_set(dictionary_set, baseline):
-        dictionary_set["id"] = str(dictionary_set.get("id") or baseline.get("id") or "dict-default")
-        dictionary_set["name"] = str(dictionary_set.get("name") or baseline.get("name") or "默认词表集")
-        dictionary_set["version"] = str(dictionary_set.get("version") or baseline.get("version") or "2.0.0")
-        dictionary_set["bound_to_project"] = bool(dictionary_set.get("bound_to_project", baseline.get("bound_to_project", True)))
-        return dictionary_set
-
     normalized = {
         "id": str(dictionary_set.get("id") or baseline.get("id") or "dict-default"),
         "name": str(dictionary_set.get("name") or baseline.get("name") or "默认词表集"),
@@ -797,6 +795,107 @@ def serialize_dictionary_set_for_storage(dictionary_set: dict[str, Any] | None) 
     return serialized
 
 
+def dictionary_set_manifest_reference(dictionary_set: dict[str, Any]) -> dict[str, Any]:
+    collections: dict[str, Any] = {}
+    for kind, collection in dictionary_set.get("collections", {}).items():
+        if not isinstance(collection, dict):
+            continue
+        tables = collection.get("tables", []) if isinstance(collection.get("tables"), list) else []
+        entry_delta_count = 0
+        for table in tables:
+            if isinstance(table, dict) and isinstance(table.get("entries"), list):
+                entry_delta_count += len(table["entries"])
+        collections[kind] = {
+            "kind": str(collection.get("kind") or kind),
+            "name": str(collection.get("name") or kind),
+            "description": str(collection.get("description") or ""),
+            "table_count": len(tables),
+            "entry_count": entry_delta_count,
+        }
+    return {
+        "id": str(dictionary_set.get("id") or "dict-default"),
+        "name": str(dictionary_set.get("name") or "默认词表集"),
+        "version": str(dictionary_set.get("version") or "2.0.0"),
+        "bound_to_project": bool(dictionary_set.get("bound_to_project", True)),
+        "storage": "project.db",
+        "table": "dictionary_tables",
+        "collections": collections,
+    }
+
+
+def load_dictionary_set_from_database(project_dir: Path) -> dict[str, Any] | None:
+    db_path = project_dir / PROJECT_DATABASE_FILENAME
+    if not db_path.exists():
+        return None
+    db = initialize_project_database(db_path)
+    return load_dictionary_set(db)
+
+
+def load_dictionary_set_payload(project_dir: Path, manifest: dict[str, Any]) -> dict[str, Any] | None:
+    db_dictionary_set = load_dictionary_set_from_database(project_dir)
+    if db_dictionary_set is not None:
+        return db_dictionary_set
+
+    manifest_dictionary_set = manifest.get("dictionary_set")
+    payload = deepcopy(manifest_dictionary_set) if isinstance(manifest_dictionary_set, dict) else {}
+    collections: dict[str, Any] = {}
+    manifest_collections = payload.get("collections") if isinstance(payload.get("collections"), dict) else {}
+    baseline_collections = default_dictionary_set_seed().get("collections", {})
+    collection_kinds = [
+        *[kind for kind in baseline_collections.keys()],
+        *[kind for kind in manifest_collections.keys() if kind not in baseline_collections],
+    ]
+
+    for kind in collection_kinds:
+        manifest_collection = manifest_collections.get(kind) if isinstance(manifest_collections, dict) else None
+        relative_path = (
+            str(manifest_collection.get("path"))
+            if isinstance(manifest_collection, dict) and manifest_collection.get("path")
+            else f"dictionaries/{kind}.json"
+        )
+        collection_path = project_dir / relative_path
+        if collection_path.exists():
+            loaded_collection = read_json(collection_path)
+            if isinstance(loaded_collection, dict):
+                collections[kind] = loaded_collection
+                continue
+        if isinstance(manifest_collection, dict) and isinstance(manifest_collection.get("tables"), list):
+            collections[kind] = manifest_collection
+
+    if collections:
+        payload["collections"] = collections
+        payload.pop("storage", None)
+        payload.pop("table", None)
+        return payload
+    return manifest_dictionary_set if isinstance(manifest_dictionary_set, dict) else None
+
+
+def result_bundle_manifest_reference(project_dir: Path, results: dict[str, Any]) -> dict[str, Any]:
+    keys: dict[str, Any] = {}
+    for key, value in normalize_results_bundle(results).items():
+        if isinstance(value, list):
+            row_count = len(value)
+            preview_rows = min(row_count, 50)
+        else:
+            row_count = 1 if value not in (None, "") else 0
+            preview_rows = row_count
+        keys[str(key)] = {"row_count": row_count, "preview_rows": preview_rows}
+    return {"storage": "project.db", "table": "result_tables", "keys": keys}
+
+
+def load_results_payload(project_dir: Path, manifest: dict[str, Any]) -> dict[str, Any] | None:
+    db_path = project_dir / PROJECT_DATABASE_FILENAME
+    if db_path.exists():
+        db = initialize_project_database(db_path)
+        results = load_result_bundle(db)
+        if results is not None:
+            return results
+    manifest_results = manifest.get("results")
+    if isinstance(manifest_results, dict) and manifest_results.get("storage") == "project.db":
+        return None
+    return manifest_results if isinstance(manifest_results, dict) else None
+
+
 def editable_dictionary_table_for_kind(dictionary_set: dict[str, Any], kind: str) -> dict[str, Any]:
     collection = dictionary_set.get("collections", {}).get(kind)
     if not isinstance(collection, dict):
@@ -826,12 +925,25 @@ def write_project_payload(
         if key == "dictionary_set":
             continue
         if key == "results":
-            storage_manifest[key] = compact_results_bundle(
-                manifest.get("results") if "results" in manifest else value
+            storage_manifest[key] = result_bundle_manifest_reference(
+                project_dir,
+                manifest.get("results") if isinstance(manifest.get("results"), dict) else value,
             )
             continue
+        if key == "artifact_records":
+            storage_manifest[key] = {
+                "storage": "project.db",
+                "table": "artifacts",
+                "current_run_artifact_count": len(
+                    manifest.get("artifact_records") if isinstance(manifest.get("artifact_records"), list) else []
+                ),
+            }
+            continue
         storage_manifest[key] = deepcopy(manifest[key]) if key in manifest else deepcopy(value)
-    storage_manifest["dictionary_set"] = serialize_dictionary_set_for_storage(manifest.get("dictionary_set"))
+    serialized_dictionary_set = serialize_dictionary_set_for_storage(manifest.get("dictionary_set"))
+    storage_manifest["dictionary_set"] = dictionary_set_manifest_reference(
+        manifest.get("dictionary_set") if isinstance(manifest.get("dictionary_set"), dict) else serialized_dictionary_set
+    )
     storage_manifest["incremental_state"] = deepcopy(
         manifest.get("incremental_state") if isinstance(manifest.get("incremental_state"), dict) else {}
     )
@@ -850,8 +962,18 @@ def write_project_payload(
     if normalized_dirty is None or "import_template" in normalized_dirty:
         write_json(project_dir / "metadata/import_template.json", manifest["import_template"])
     if normalized_dirty is None or "dictionary_set" in normalized_dirty:
-        for kind, collection in storage_manifest["dictionary_set"].get("collections", {}).items():
-            write_json(project_dir / f"dictionaries/{kind}.json", collection)
+        db_path = project_dir / PROJECT_DATABASE_FILENAME
+        db = initialize_project_database(db_path)
+        replace_dictionary_set(db, manifest.get("dictionary_set") or default_dictionary_set_seed())
+        for path in (project_dir / "dictionaries").glob("*.json"):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    if normalized_dirty is None or "results" in normalized_dirty or "manifest" in normalized_dirty:
+        db_path = project_dir / PROJECT_DATABASE_FILENAME
+        db = initialize_project_database(db_path)
+        replace_result_bundle(db, normalize_results_bundle(manifest.get("results")))
     if normalized_dirty is None or "corpus_views" in normalized_dirty:
         write_json(project_dir / CORPUS_VIEWS_FILENAME, storage_manifest.get("corpus_views", []))
     if normalized_dirty is None or "ingestion_specs" in normalized_dirty:
@@ -1260,6 +1382,17 @@ def load_project(project_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]
         manifest["corpus_views"] = read_json(project_dir / CORPUS_VIEWS_FILENAME)
     if (project_dir / INGESTION_SPECS_FILENAME).exists():
         manifest["ingestion_specs"] = read_json(project_dir / INGESTION_SPECS_FILENAME)
+    dictionary_set_payload = load_dictionary_set_payload(project_dir, manifest)
+    if dictionary_set_payload is not None:
+        manifest["dictionary_set"] = dictionary_set_payload
+    results_payload = load_results_payload(project_dir, manifest)
+    if results_payload is not None:
+        manifest["results"] = results_payload
+    if db_path.exists():
+        db = initialize_project_database(db_path)
+        artifact_records = list_artifact_records(db)
+        if artifact_records:
+            manifest["artifact_records"] = artifact_records
     manifest = normalize_project_manifest(manifest, corpus, project_dir)
     return manifest, corpus
 

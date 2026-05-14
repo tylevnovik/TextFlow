@@ -25,3 +25,18 @@ def test_all_analysis_output_ports_are_compatible_with_any_table_or_renderable()
                 missing.append((node_type, port_type))
 
     assert not missing, f"Missing workflow_port_compatible mapping for: {missing}"
+
+
+def test_technology_indicators_declares_graph_metric_input():
+    definitions = {
+        str(definition.get("type") or ""): definition
+        for definition in build_builtin_node_definitions()
+    }
+    technology_inputs = {
+        str(port.get("port_id") or ""): str(port.get("port_type") or "")
+        for port in definitions["technology_indicators"].get("inputs", [])
+        if isinstance(port, dict)
+    }
+
+    assert technology_inputs["term_year_table_in"] == "TermYearTable"
+    assert technology_inputs["graph_metric_table_in"] == "GraphMetricTable"

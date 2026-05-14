@@ -1322,18 +1322,58 @@ button {
   box-shadow: 0 18px 48px rgba(30, 84, 52, 0.34);
 }
 
-.workflow-inspector-drawer {
-  position: absolute;
-  top: calc(var(--workflow-overlay-offset, 128px) + 0.25rem);
-  right: 1rem;
-  bottom: 11.5rem;
-  z-index: 4;
-  width: min(380px, calc(100% - 2rem));
+.workflow-artifact-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
   display: grid;
-  gap: 0.85rem;
-  align-content: start;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  place-items: center;
+  padding: clamp(1rem, 3vw, 2.5rem);
+  background: rgba(7, 10, 15, 0.66);
+  backdrop-filter: blur(6px);
+}
+
+.workflow-artifact-modal {
+  width: min(1120px, calc(100vw - 2rem));
+  max-height: min(840px, calc(100vh - 2rem));
+  overflow: auto;
+  display: grid;
+  gap: 0.9rem;
+  padding: clamp(1rem, 2vw, 1.35rem);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(180deg, rgba(18, 22, 30, 0.98), rgba(11, 14, 20, 0.98));
+  box-shadow: 0 28px 92px rgba(3, 5, 9, 0.52);
+  color: #eef5fb;
+}
+
+.workflow-artifact-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.workflow-artifact-modal-head h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 1.08rem;
+}
+
+.workflow-artifact-modal .panel {
+  box-shadow: none;
+}
+
+.workflow-artifact-modal .artifact-browser-panel {
+  margin: 0;
+}
+
+.workflow-artifact-modal .artifact-browser-layout {
+  grid-template-columns: minmax(240px, 0.85fr) minmax(0, 1.15fr);
+}
+
+.workflow-artifact-modal .artifact-preview-table {
+  max-height: min(46vh, 420px);
 }
 
 .workflow-editor-shell .panel {
@@ -1365,9 +1405,6 @@ button {
     grid-template-columns: 64px 0 minmax(0, 1fr);
   }
 
-  .workflow-inspector-drawer {
-    width: min(340px, calc(100% - 2rem));
-  }
 }
 
 @media (max-width: 1180px) {
@@ -1418,12 +1455,13 @@ button {
     min-height: 70vh;
   }
 
-  .workflow-inspector-drawer {
-    top: auto;
-    right: 1rem;
-    left: 1rem;
-    bottom: 11rem;
-    width: auto;
+  .workflow-artifact-modal {
+    width: calc(100vw - 1rem);
+    max-height: calc(100vh - 1rem);
+  }
+
+  .workflow-artifact-modal .artifact-browser-layout {
+    grid-template-columns: 1fr;
   }
 }
 

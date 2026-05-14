@@ -92,7 +92,10 @@ export function defaultWorkflowRuntimeProfile(): WorkflowRuntimeProfile {
       split_slash_terms: false,
       normalize_camel_case: true,
       keep_original_order: true,
-      min_token_length_before_filter: 1
+      min_token_length_before_filter: 1,
+      enable_ngrams: false,
+      ngram_min: 2,
+      ngram_max: 2
     },
     dictionary: {
       apply_standard_terms: true,
@@ -116,6 +119,10 @@ export function defaultWorkflowRuntimeProfile(): WorkflowRuntimeProfile {
       feature_term_count: 1000,
       top_k_per_doc: 10,
       top_k_project: 100,
+      similarity_method: "cosine",
+      min_similarity: 0.2,
+      similarity_top_k: 200,
+      topic_algorithm: "nmf",
       topic_model_k: 4,
       keyword_cluster_k: 4,
       document_cluster_k: 4,
@@ -123,6 +130,7 @@ export function defaultWorkflowRuntimeProfile(): WorkflowRuntimeProfile {
       include_term_document_relations: true,
       include_term_year_relations: true,
       include_cooccurrence_analysis: true,
+      include_similarity_analysis: true,
       include_feature_term_selection: true,
       include_keyword_extraction: true,
       include_keyword_clustering: true,
@@ -368,6 +376,7 @@ function analysisStarterNodes(): WorkflowNodeType[] {
     "term_document_analysis",
     "term_year_analysis",
     "cooccurrence_analysis",
+    "similarity_analysis",
     "feature_term_selection",
     "keyword_extraction",
     "keyword_clustering",
@@ -492,10 +501,10 @@ function buildStarterWorkflowEdges(nodes: WorkflowNodeInstance[], runtimeProfile
   }
 
   const sinkMappings: Array<[WorkflowNodeType, WorkflowNodeType[]]> = [
-    ["save_csv", ["frequency_statistics", "term_document_analysis", "term_year_analysis", "cooccurrence_analysis", "feature_term_selection", "keyword_extraction", "keyword_clustering", "institution_keyword_analysis", "institution_topic_analysis", "document_clustering"]],
-    ["save_xlsx", ["frequency_statistics", "term_document_analysis", "term_year_analysis", "cooccurrence_analysis", "feature_term_selection", "keyword_extraction", "keyword_clustering", "institution_keyword_analysis", "institution_topic_analysis", "document_clustering"]],
+    ["save_csv", ["frequency_statistics", "term_document_analysis", "term_year_analysis", "cooccurrence_analysis", "similarity_analysis", "feature_term_selection", "keyword_extraction", "keyword_clustering", "institution_keyword_analysis", "institution_topic_analysis", "document_clustering"]],
+    ["save_xlsx", ["frequency_statistics", "term_document_analysis", "term_year_analysis", "cooccurrence_analysis", "similarity_analysis", "feature_term_selection", "keyword_extraction", "keyword_clustering", "institution_keyword_analysis", "institution_topic_analysis", "document_clustering"]],
     ["save_png", ["frequency_statistics", "keyword_extraction", "keyword_clustering", "institution_topic_analysis", "document_clustering"]],
-    ["save_html_report", ["frequency_statistics", "term_document_analysis", "term_year_analysis", "cooccurrence_analysis", "feature_term_selection", "keyword_extraction", "keyword_clustering", "institution_keyword_analysis", "institution_topic_analysis", "document_clustering"]]
+    ["save_html_report", ["frequency_statistics", "term_document_analysis", "term_year_analysis", "cooccurrence_analysis", "similarity_analysis", "feature_term_selection", "keyword_extraction", "keyword_clustering", "institution_keyword_analysis", "institution_topic_analysis", "document_clustering"]]
   ];
 
   for (const [sinkType, sourceTypes] of sinkMappings) {
@@ -1033,8 +1042,8 @@ export function autoLayoutWorkflow(workflow: WorkflowDefinition): WorkflowDefini
   const categoryColumns: Array<Array<WorkflowNodeType>> = [
     ["corpus_input", "dictionary_input"],
     ["merge_corpora", "clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms"],
-    ["frequency_statistics", "term_document_analysis", "term_year_analysis", "cooccurrence_analysis", "feature_term_selection"],
-    ["keyword_extraction", "keyword_clustering", "institution_keyword_analysis", "institution_topic_analysis", "document_clustering"],
+    ["frequency_statistics", "term_document_analysis", "term_year_analysis", "cooccurrence_analysis", "similarity_analysis", "feature_term_selection"],
+    ["keyword_extraction", "keyword_clustering", "topic_modeling", "institution_keyword_analysis", "institution_topic_analysis", "document_clustering"],
     ["save_csv", "save_xlsx", "save_png", "save_html_report"],
     ["note", "group"]
   ];

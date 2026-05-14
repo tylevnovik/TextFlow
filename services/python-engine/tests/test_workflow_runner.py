@@ -17,7 +17,12 @@ from app.analysis_ops import (
 )
 from app.artifact_store import load_artifact_preview
 from app.builtin_dictionary_data import builtin_dictionary_table_specs
-from app.dag_runtime import _export_selection_from_active_graph, dag_parallel_worker_count
+from app.dag_runtime import (
+    NodeExecutionState,
+    WorkflowExecutionContext,
+    _export_selection_from_active_graph,
+    dag_parallel_worker_count,
+)
 from app.defaults import default_workflow_definition, empty_result_bundle, workflow_payload_hash
 from app.incremental_runtime import select_incremental_scope
 from app.node_registry import build_node_registry
@@ -857,6 +862,50 @@ def test_manual_workflow_progress_details_emit_full_node_state_sync(isolated_wor
     assert all(detail.get("full_node_state_sync") is True for detail in runtime_details)
 
 
+def test_runtime_context_does_not_synthesize_node_progress_without_executor_updates(tmp_path):
+    progress_details: list[dict[str, Any]] = []
+
+    def progress_callback(_progress: float, _message: str, detail: dict[str, Any] | None = None) -> None:
+        if detail and detail.get("kind") == "workflow_run":
+            progress_details.append(deepcopy(detail))
+
+    node = {"node_id": "node-slow-analysis", "node_type": "frequency_statistics", "label": "慢速分析"}
+    context = WorkflowExecutionContext(
+        project_dir=tmp_path,
+        manifest={"name": "heartbeat"},
+        workflow_definition={"workflow_id": "workflow-heartbeat", "name": "heartbeat"},
+        runtime_profile={},
+        full_corpus=[],
+        logs=[],
+        warnings=[],
+        errors=[],
+        run_id="run-heartbeat",
+        progress_callback=progress_callback,
+        total_nodes=1,
+    )
+    start_clock = time.perf_counter()
+    _node_id, started_at = context.begin_node(node, 1)
+
+    time.sleep(0.7)
+
+    context.finish_node(
+        node,
+        node_index=1,
+        state=NodeExecutionState(outputs={}, output_hashes={}, cache_hit=False),
+        started_at=started_at,
+        start_clock=start_clock,
+        status="completed",
+    )
+
+    running_progress_values = [
+        float(((detail.get("node_states") or {}).get("node-slow-analysis") or {}).get("progress") or 0.0)
+        for detail in progress_details
+        if ((detail.get("node_states") or {}).get("node-slow-analysis") or {}).get("status") == "running"
+    ]
+    assert running_progress_values
+    assert all(progress == 0.0 for progress in running_progress_values)
+
+
 def test_dag_parallel_worker_count_respects_env_overrides(monkeypatch):
     registry = build_node_registry()
     nodes = [
@@ -1521,6 +1570,33 @@ def test_artifact_preview_loads_without_materializing_full_payload(isolated_work
 
     assert "rows" in preview
     assert preview["rows"]
+
+
+def test_non_artifact_node_runs_persist_lightweight_output_previews(isolated_workspace):
+    project_name = f"pytest-{uuid4().hex[:8]}"
+    project_dir, manifest, corpus = _create_test_project(project_name, "node output preview persistence")
+
+    manifest, processed_corpus, run_record = run_project_workflow(project_dir, manifest, corpus)
+
+    clean_node_run = next(node_run for node_run in run_record["node_runs"] if node_run["node_type"] == "clean_text")
+    output_previews = clean_node_run.get("output_previews")
+    assert isinstance(output_previews, dict)
+    clean_preview = output_previews.get("clean_corpus")
+    assert isinstance(clean_preview, dict)
+    assert clean_preview["kind"] == "table"
+    assert clean_preview["row_count"] == len(processed_corpus)
+    assert clean_preview["rows"]
+    assert clean_preview["rows"][0].get("clean_text")
+
+    save_project(project_dir, manifest, processed_corpus, already_normalized=True)
+    reloaded_manifest, reloaded_corpus = load_project(project_dir)
+    assert all(not item.get("clean_text") for item in reloaded_corpus)
+    reloaded_clean_node_run = next(
+        node_run
+        for node_run in reloaded_manifest["run_history"][-1]["node_runs"]
+        if node_run["node_type"] == "clean_text"
+    )
+    assert reloaded_clean_node_run["output_previews"]["clean_corpus"]["rows"][0].get("clean_text")
 
 
 def test_incremental_scope_can_limit_workflow_to_changed_documents(isolated_workspace):

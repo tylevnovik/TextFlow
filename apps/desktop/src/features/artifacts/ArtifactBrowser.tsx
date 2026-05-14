@@ -15,6 +15,7 @@ export interface ArtifactBrowserProps {
   loading?: boolean;
   onLoadPreview: (artifactId: string) => Promise<ArtifactPreview>;
   onOpenArtifact?: (artifact: ArtifactRecord) => void;
+  title?: string;
 }
 
 function printableValue(value: unknown): string {
@@ -31,7 +32,8 @@ export function ArtifactBrowser({
   artifacts,
   loading = false,
   onLoadPreview,
-  onOpenArtifact
+  onOpenArtifact,
+  title = "节点产物"
 }: ArtifactBrowserProps) {
   const [preview, setPreview] = useState<ArtifactPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState<string | null>(null);
@@ -61,10 +63,10 @@ export function ArtifactBrowser({
   };
 
   return (
-    <Panel title="产物浏览器" className="artifact-browser-panel">
+    <Panel title={title} className="artifact-browser-panel">
       <div className="surface-metric-row">
         <MiniMetric label="产物" value={String(artifacts.length)} />
-        <MiniMetric label="可预览" value={String(artifacts.filter((artifact) => artifact.preview_path).length)} />
+        <MiniMetric label="可预览" value={String(artifacts.length)} />
         <MiniMetric label="总行数" value={String(artifacts.reduce((total, artifact) => total + (artifact.row_count ?? 0), 0))} />
       </div>
 
@@ -77,7 +79,7 @@ export function ArtifactBrowser({
                   <h4>{artifact.artifact_id}</h4>
                   <span className="pill">{artifact.kind}</span>
                 </div>
-                <p className="project-path">{artifact.path}</p>
+                {artifact.path && <p className="project-path">{artifact.path}</p>}
                 <p className="muted">
                   run {artifact.run_id} · node {artifact.node_id} · {artifact.row_count ?? "未知"} 行
                 </p>

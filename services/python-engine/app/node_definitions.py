@@ -593,6 +593,21 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
                     "切词前最短长度",
                     int(runtime_profile_definition["tokenization"].get("min_token_length_before_filter", 1)),
                 ),
+                _bool_param(
+                    "enable_ngrams",
+                    "生成 n-gram",
+                    bool(runtime_profile_definition["tokenization"].get("enable_ngrams", False)),
+                ),
+                _number_param(
+                    "ngram_min",
+                    "最小 n-gram",
+                    int(runtime_profile_definition["tokenization"].get("ngram_min", 2)),
+                ),
+                _number_param(
+                    "ngram_max",
+                    "最大 n-gram",
+                    int(runtime_profile_definition["tokenization"].get("ngram_max", 2)),
+                ),
             ],
             "runtime": _runtime("tokenization", "workflow.tokenize", cacheable=True, previewable=True),
         },
@@ -755,6 +770,32 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
             executor="analysis.cooccurrence",
         ),
         _analysis_node(
+            "similarity_analysis",
+            "相似度计算",
+            "基于词项表示计算文档间相似度，输出可审计的文档对得分。",
+            inputs=[_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
+            outputs=[
+                _port(
+                    "similarity_table",
+                    "AnyTable",
+                    "相似度表",
+                    result_bundle_key="similarity_table",
+                )
+            ],
+            params=[
+                _enum_param(
+                    "similarity_method",
+                    "相似度算法",
+                    str(analysis.get("similarity_method", "cosine")),
+                    [("cosine", "Cosine")],
+                ),
+                _number_param("min_similarity", "最小相似度", float(analysis.get("min_similarity", 0.2))),
+                _number_param("similarity_top_k", "最多文档对", int(analysis.get("similarity_top_k", 200))),
+                _string_param("feature_term_count", "特征词数量", str(analysis.get("feature_term_count", 1000))),
+            ],
+            executor="analysis.similarity",
+        ),
+        _analysis_node(
             "group_compare",
             "分组比较",
             "按指定分组字段比较词项在不同群组中的频次、文档覆盖和归一化占比。",
@@ -799,7 +840,7 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
         _analysis_node(
             "topic_modeling",
             "主题建模",
-            "使用 NMF 对语料做轻量主题建模，输出主题词项、文档主题和主题摘要。",
+            "使用 NMF 或 LDA 对语料做轻量主题建模，输出主题词项、文档主题和主题摘要。",
             inputs=[_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
             outputs=[
                 _port(
@@ -822,6 +863,12 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
                 ),
             ],
             params=[
+                _enum_param(
+                    "topic_algorithm",
+                    "主题算法",
+                    str(analysis.get("topic_algorithm", "nmf")),
+                    [("nmf", "NMF"), ("lda", "LDA")],
+                ),
                 _number_param("topic_model_k", "主题数量", int(analysis.get("topic_model_k", 4))),
                 _number_param("top_terms_per_topic", "每主题词项数", 5),
             ],
@@ -1079,6 +1126,7 @@ def build_builtin_node_definitions(runtime_profile: dict[str, Any] | None = None
             "基于词项年份趋势和网络指标计算新颖度、颠覆度和成熟度。",
             inputs=[
                 _port("term_year_table_in", "TermYearTable", "词项年份表输入"),
+                _port("graph_metric_table_in", "GraphMetricTable", "网络指标输入"),
             ],
             outputs=[
                 _port("technology_indicator_table", "TechnologyIndicatorTable", "技术指标表", result_bundle_key="technology_indicator_table"),

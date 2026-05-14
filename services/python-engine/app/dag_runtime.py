@@ -172,6 +172,129 @@ def _summarize_runtime_outputs(outputs: dict[str, Any]) -> tuple[str, list[str]]
     return "；".join(summaries[:3]), samples[:5]
 
 
+RUNTIME_PREVIEW_ROW_KEYS = (
+    "doc_id",
+    "title",
+    "source",
+    "institution",
+    "year",
+    "raw_text",
+    "clean_text",
+    "normalized_text",
+    "tokens",
+    "phrase_hits",
+    "filtered_tokens",
+    "term",
+    "keyword",
+    "topic_label",
+    "cluster_id",
+    "source_term",
+    "target_term",
+    "term_a",
+    "term_b",
+    "doc_id_a",
+    "doc_id_b",
+    "score",
+    "tf",
+    "df",
+    "count",
+    "action",
+)
+
+
+def _compact_runtime_preview_scalar(value: Any, limit: int = 160) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return _json_ready(value)
+    text = str(value or "").strip().replace("\n", " ").replace("\r", " ")
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(0, limit - 1)].rstrip()}…"
+
+
+def _compact_runtime_preview_row(row: Any) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        return {"value": _compact_runtime_preview_scalar(row)}
+
+    ordered_keys = [
+        key
+        for key in RUNTIME_PREVIEW_ROW_KEYS
+        if key in row
+    ]
+    ordered_keys.extend(
+        str(key)
+        for key in row.keys()
+        if str(key) not in ordered_keys
+    )
+
+    compacted: dict[str, Any] = {}
+    for key in ordered_keys:
+        if len(compacted) >= 12:
+            break
+        value = row.get(key)
+        if value in (None, "", []):
+            continue
+        if isinstance(value, dict):
+            compacted[key] = {
+                str(item_key): _compact_runtime_preview_scalar(item_value, 80)
+                for item_key, item_value in list(value.items())[:6]
+            }
+        elif isinstance(value, (list, tuple, set)):
+            compacted[key] = [
+                _compact_runtime_preview_scalar(item, 80)
+                for item in list(value)[:12]
+            ]
+        else:
+            compacted[key] = _compact_runtime_preview_scalar(value)
+    return compacted
+
+
+def _preview_runtime_value(value: Any) -> dict[str, Any]:
+    normalized = _json_ready(value)
+    if isinstance(normalized, list):
+        if not normalized:
+            return {"kind": "empty", "row_count": 0}
+        if all(isinstance(item, dict) for item in normalized):
+            return {
+                "kind": "table",
+                "row_count": len(normalized),
+                "rows": [_compact_runtime_preview_row(item) for item in normalized[:5]],
+            }
+        return {
+            "kind": "list",
+            "row_count": len(normalized),
+            "items": [_compact_runtime_preview_scalar(item, 120) for item in normalized[:12]],
+        }
+    if isinstance(normalized, dict):
+        return {
+            "kind": "object",
+            "row_count": len(normalized),
+            "keys": [str(key) for key in list(normalized.keys())[:12]],
+            "value": _compact_runtime_preview_row(normalized),
+        }
+    if normalized is None:
+        return {"kind": "empty", "row_count": 0}
+    if isinstance(normalized, str):
+        if not normalized.strip():
+            return {"kind": "empty", "row_count": 0}
+        return {
+            "kind": "text",
+            "row_count": 1,
+            "text": _compact_runtime_preview_scalar(normalized, 500),
+        }
+    return {
+        "kind": "scalar",
+        "row_count": 1,
+        "value": _compact_runtime_preview_scalar(normalized, 160),
+    }
+
+
+def _preview_runtime_outputs(outputs: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(port_id): _preview_runtime_value(value)
+        for port_id, value in outputs.items()
+    }
+
+
 def _hash_port_value(port_type: str, value: Any) -> str:
     if port_type in CORPUS_PORT_TYPES and isinstance(value, list):
         normalized_rows: list[dict[str, Any]] = []
@@ -826,6 +949,7 @@ class WorkflowExecutionContext:
                 self._node_started_clocks[node_id] = perf_counter()
                 state = self.node_runtime_states[node_id]
             previous_fraction = float(state.get("progress") or 0.0)
+            bounded_fraction = max(bounded_fraction, previous_fraction)
             previous_detail = str(state.get("detail") or "")
             started_clock = self._node_started_clocks.get(node_id)
             duration_ms = round((perf_counter() - float(started_clock)) * 1000, 3) if isinstance(started_clock, (int, float)) else None
@@ -863,6 +987,7 @@ class WorkflowExecutionContext:
         ended_at = utc_now_iso()
         duration_ms = round((perf_counter() - start_clock) * 1000, 3)
         output_summary, sample_outputs = _summarize_runtime_outputs(state.outputs)
+        output_previews = _preview_runtime_outputs(state.outputs)
         with self._lock:
             runtime_state = self.node_runtime_states.get(node_id) or {
                 "node_id": node_id,
@@ -883,6 +1008,7 @@ class WorkflowExecutionContext:
                 "output_ports": list(state.outputs.keys()),
                 "output_summary": output_summary,
                 "sample_outputs": sample_outputs,
+                "output_previews": output_previews,
                 "detail": output_summary,
                 "error": error,
             })
@@ -1084,6 +1210,7 @@ def _record_completed_node(
 
     ended_at = utc_now_iso()
     output_summary, sample_outputs = _summarize_runtime_outputs(state.outputs)
+    output_previews = _preview_runtime_outputs(state.outputs)
     context.node_runs.append(
         {
             "node_id": prepared.node_id,
@@ -1099,6 +1226,7 @@ def _record_completed_node(
             "output_ports": list(state.outputs.keys()),
             "output_summary": output_summary,
             "sample_outputs": sample_outputs,
+            "output_previews": output_previews,
         }
     )
     context.finish_node(
@@ -1377,7 +1505,7 @@ def run_project_workflow_native(
         db = initialize_project_database(db_path)
         cleared = clear_artifacts_except_run(db, run_record["run_id"])
         if cleared:
-            context.warning(f"已清理 {cleared} 条历史 artifact 记录")
+            context.log({}, f"已清理 {cleared} 条历史 artifact 记录")
 
     run_artifact_records: list[dict[str, Any]] = []
     for result_key, value in result_bundle_table_entries(context.result_bundle):

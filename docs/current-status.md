@@ -1,6 +1,6 @@
 # 当前现状
 
-本文档描述截至 `2026-04-28` 的仓库事实，用来回答“现在项目做到哪一步了”。
+本文档描述截至 `2026-05-06` 的仓库事实，用来回答“现在项目做到哪一步了”。
 
 ## 一句话结论
 
@@ -11,31 +11,31 @@ TextFlow 已经完成了一个可运行的本地桌面应用主链，不再只�
 | 领域 | 当前状态 | 说明 |
 | --- | --- | --- |
 | 桌面壳与前后端通信 | 可用 | Tauri 启动常驻 Python sidecar，本地通过任务接口和进度轮询通信；高频 workflow 进度已改成增量节点状态回传。 |
-| 工作区与项目管理 | 可用 | 已支持创建、打开、复制、删除、导入项目包、导出项目包、最近项目和当前项目持久化；首次启动会恢复 9 个基于真实公开数据预构建的场景样例项目。 |
-| 语料导入与审查 | 可用 | 已支持 `txt/csv/xlsx/json` 导入、source profile、字段映射、主文本拼接、文档级预览、编辑、删除。 |
+| 工作区与项目管理 | 可用 | 已支持创建、打开、复制、删除、导入项目包、导出项目包、最近项目和当前项目持久化；首次启动会恢复 3 个 revised-flow 场景样例项目，缺少打包样例模板时会显式失败。 |
+| 语料导入与审查 | 可用 | 已支持 `txt/csv/xlsx/xls/json` 导入、source profile、字段映射、主文本拼接、文档级预览、编辑、删除。 |
 | 词表中心 | 可用 | 已支持 `collections + tables + sheets` 结构、项目自定义表、内置词表快照、导入导出。 |
 | 工作流处理链 | 可用 | 清洗、标准化、切词、词表规则、过滤、分析、导出均可实际运行。 |
-| 分析与导出 | 可用 | 已输出词频、词文档、词年份、共现、特征词、关键词、关键词聚类、机构关键词、机构主题、文档聚类，以及 CSV/XLSX/PNG/HTML。 |
+| 分析与导出 | 可用 | 已输出词频、词文档、词年份、共现、相似度、特征词、关键词、NMF/LDA 主题、关键词聚类、机构关键词、机构主题、文档聚类、图分析和技术识别，以及 CSV/XLSX/PNG/HTML。 |
 | 运行留痕 | 可用 | `run_history`、`params_snapshot.json`、`logs.json`、`logs.txt`、`corpus_snapshot.json` 已落盘。 |
 | workflow 画布 | 可用但仍在打磨 | 当前已经是主流程入口，支持节点、连线、视口恢复、工具箱、mini-map 和节点内配置。 |
 | native DAG 执行 | 已接入主链 | 当前 workflow 运行统一进入 native DAG；legacy 聚合节点也在图运行时内兼容执行，同层就绪的并行安全节点已支持并发调度。 |
 | 节点缓存 | 已接入 | 当前是节点级 `.pkl` 缓存，已在 benchmark 中体现二次运行收益。 |
-| 资源、产物、复核和实验 surfaces | 可用 | 项目模型、bridge/store 和桌面结果页已接入语料视图、导入规格、artifact preview、review queue、experiment matrix 和 run diff。 |
-| 插件节点 | Alpha | 已支持本地纯 Python 节点插件扫描、注册 definition/compiler/executor，并可通过 `artifact_kind` 输出口写入 artifact store。 |
+| 资源、产物、复核和实验 surfaces | 可用 | 项目模型、bridge/store 和桌面结果页已接入语料视图、导入规格、review queue、experiment matrix 和 run diff；artifact preview 改为从已运行 workflow 节点弹窗查看。 |
+| 插件节点 | Alpha | 已支持本地纯 Python 节点插件扫描、注册 definition/compiler/executor，并可通过 `artifact_kind` 输出口写入项目 artifact store。 |
 | Windows 安装包 | 已通过本地打包验证 | Tauri NSIS bundling 已配置，sidecar 会随安装包带上；本地已产出 `TextFlow Studio_0.1.1_x64-setup.exe`。 |
 | macOS 可移植性 | 保持约束，未完成验证 | 路径、字体、工作区根目录选择都在照顾可移植性，但当前没有成体系的 macOS 构建验证。 |
 
 ## 当前已经稳定的主链
 
 - 项目目录采用 `.tfproj` 目录结构，用户工作区默认放在系统本地数据目录，也支持 `TEXTFLOW_WORKSPACE_ROOT` 覆盖。
-- 启动空工作区时，系统会优先恢复打包内置的 9 个场景样例项目；这些项目由 Python sidecar 基于真实公开数据缓存预构建，并保持严格英中 `1:1` 行数配比。
-- 数据导入会把源文件复制到项目的 `corpus/imported/`，并在 `source_files` 中记录来源。
+- 启动空工作区时，系统会优先恢复打包内置的 3 个 revised-flow 场景样例项目；这些项目由 Python sidecar 基于 WoS/IncoPat seed 预构建，语料写入各自的 `project.db`。
+- 普通数据导入会把源文件复制到项目的 `corpus/imported/`，并在 `source_files` 中记录来源；打包样例只保留 source audit 元数据，不保留 raw seed 文件。
 - 词表已经从“单大表”演进为按分类和表资源管理，项目文件不会再把整包内置词表全量写入。
 - Python sidecar 已经承担真实项目动作，而不是只做 CLI 样例。
 - 导出能力已经覆盖表格、图表和 HTML 报告，并支持高 DPI、水印和中文字体。
 - 高频项目动作已尽量走前端本地 patch，不再每次都整项目 `refresh()`。
 - 首次工作区冷启动的示例项目生成热路径已做轻量化，避免重复全量归一化大词表。
-- 项目概览不再渲染全量运行日志，只展示最近 3 次运行摘要；完整历史和 artifact preview 放在结果页按需查看，避免多次运行后打开项目卡顿。
+- 项目概览不再渲染全量运行日志，只展示最近 3 次运行摘要；完整历史放在结果页，artifact preview 从工作流节点按需弹窗查看。
 
 ## 当前最重要的技术事实
 

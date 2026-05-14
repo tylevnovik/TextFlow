@@ -23,11 +23,14 @@ from app.defaults import default_import_template, utc_now_iso  # noqa: E402
 from app.ingestion import import_files  # noqa: E402
 from app.workflow_runner import run_project_workflow  # noqa: E402
 from app.project_store import create_project, save_project  # noqa: E402
-from app.sample_projects import _append_dictionary_terms, _configure_workflow  # noqa: E402
+from app.sample_projects import _append_dictionary_terms  # noqa: E402
+from app.new_flow_workflow import build_new_flow_workflow  # noqa: E402
 
 KEEP_NODE_TYPES = {
     "corpus_input",
     "dictionary_input",
+    "normalize_metadata",
+    "deduplicate_documents",
     "clean_text",
     "normalize_text",
     "tokenize",
@@ -45,6 +48,7 @@ KEEP_NODE_TYPES = {
 }
 
 NODE_CONFIG_OVERRIDES = {
+    "deduplicate_documents": {"dedupe_keys_text": "doc_id,title"},
     "feature_term_selection": {"feature_term_count": 1000},
     "cooccurrence_analysis": {"cooccurrence_window": 3, "min_cooccurrence": 2},
     "keyword_extraction": {"top_k_per_doc": 8, "top_k_project": 120},
@@ -52,6 +56,47 @@ NODE_CONFIG_OVERRIDES = {
     "document_clustering": {"document_cluster_k": 8},
     "save_html_report": {"include_audit": False},
 }
+
+
+def configure_benchmark_workflow(
+    manifest: dict[str, Any],
+    *,
+    workflow_name: str,
+    keep_node_types: set[str],
+    node_config_overrides: dict[str, dict[str, Any]],
+) -> None:
+    workflow = build_new_flow_workflow(
+        "wf-benchmark-20-newsgroups",
+        workflow_name,
+        source_profile=str(manifest.get("import_template", {}).get("source_profile") or "generic"),
+        include_patent_graph=False,
+    )
+    kept_node_ids = {
+        str(node.get("node_id") or "")
+        for node in workflow.get("nodes", [])
+        if isinstance(node, dict) and str(node.get("node_type") or "") in keep_node_types
+    }
+    workflow["nodes"] = [
+        node
+        for node in workflow.get("nodes", [])
+        if isinstance(node, dict) and str(node.get("node_id") or "") in kept_node_ids
+    ]
+    workflow["edges"] = [
+        edge
+        for edge in workflow.get("edges", [])
+        if isinstance(edge, dict)
+        and str(edge.get("from_node") or "") in kept_node_ids
+        and str(edge.get("to_node") or "") in kept_node_ids
+    ]
+    for node in workflow["nodes"]:
+        override = node_config_overrides.get(str(node.get("node_type") or ""))
+        if override:
+            node["config"] = {
+                **(node.get("config") if isinstance(node.get("config"), dict) else {}),
+                **override,
+            }
+    manifest["workflow_definitions"] = [workflow]
+    manifest["active_workflow_id"] = workflow["workflow_id"]
 
 DICTIONARY_TERMS = {
     "phrase_lexicon": [
@@ -157,7 +202,7 @@ def main() -> int:
         "workflow_name": "20 Newsgroups 全量压力测试流",
     }
     _append_dictionary_terms(manifest, DICTIONARY_TERMS)
-    _configure_workflow(
+    configure_benchmark_workflow(
         manifest,
         workflow_name="20 Newsgroups 全量压力测试流",
         keep_node_types=KEEP_NODE_TYPES,

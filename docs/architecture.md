@@ -99,6 +99,7 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 HTTP 
 ```text
 <project>.tfproj/
   project.json
+  project.db
   corpus/
     imported/
   dictionaries/
@@ -117,6 +118,8 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 HTTP 
     nodes/
   exports/
 ```
+
+`project.json` 保存项目元数据、词表、workflow、运行历史和轻量索引。`project.db` 保存导入后的语料行和较大的 run artifact payload；`metadata/corpus.json` 仅作为旧项目迁移入口保留，加载旧项目时会迁移到 SQLite。
 
 ## 核心领域模型
 
@@ -143,7 +146,7 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 HTTP 
 - `workflow_definitions` 是当前编辑与持久化真相
 - `run_history` 是运行记录真相
 - `results` 是项目级最新结果快照
-- `artifact_records` 是 run artifact store 的可懒加载索引
+- `artifact_records` 是 project-local SQLite artifact store 的可懒加载索引
 - `corpus_views / ingestion_specs / review_tasks / experiment_specs` 是产品 surface 的可复现状态，不属于临时 UI 状态
 
 ### DictionarySet
@@ -161,10 +164,10 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 HTTP 
 
 ### 导入层
 
-- 支持 `txt/csv/xlsx/json`
+- 支持 `txt/csv/xlsx/xls/json`
 - 基于 source profile 和 import template 做字段映射
 - 支持多字段拼接主文本
-- 会把导入源文件复制进项目目录
+- 普通用户导入会把源文件复制进项目目录；打包内置样例只保留 source audit 元数据，不保留 raw seed 文件
 
 ### 分析层
 
@@ -211,7 +214,7 @@ sidecar 启动时会扫描：
 - executor hook
 - artifact output port declaration
 
-前端当前优先读取 sidecar 返回的 `node_definitions`，因此插件节点可以进入工具箱和 schema 驱动表单。插件输出口若声明 `artifact_kind`，native DAG 会把该输出写入 run artifact store，并把 handle 写回 `run_record.artifacts` 和 `manifest.artifact_records`。
+前端当前优先读取 sidecar 返回的 `node_definitions`，因此插件节点可以进入工具箱和 schema 驱动表单。插件输出口若声明 `artifact_kind`，native DAG 会把该输出写入项目 artifact store，并把 handle 写回 `run_record.artifacts` 和 `manifest.artifact_records`。
 
 ## 打包策略
 

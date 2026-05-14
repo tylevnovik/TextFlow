@@ -244,16 +244,16 @@ def profile_import_template(source_profile: str) -> dict[str, Any]:
             "name": "Web of Science 模板",
             "description": "预置 WoS 常见字段别名和主文本拼接策略。",
             "field_mappings": [
-                {"source_field": "UT", "target_field": "doc_id", "required": True, "aliases": ["Accession Number"]},
+                {"source_field": "UT", "target_field": "doc_id", "required": True, "aliases": ["Accession Number", "UT (Unique WOS ID)"]},
                 {"source_field": "TI", "target_field": "title", "required": True, "aliases": ["Article Title"]},
                 {"source_field": "AB", "target_field": "raw_text", "required": True, "aliases": ["Abstract"]},
-                {"source_field": "PY", "target_field": "year", "required": False, "aliases": ["Published Year"]},
-                {"source_field": "SO", "target_field": "source", "required": False, "aliases": ["Publication Name"]},
+                {"source_field": "PY", "target_field": "year", "required": False, "aliases": ["Published Year", "Publication Year"]},
+                {"source_field": "SO", "target_field": "source", "required": False, "aliases": ["Publication Name", "Source Title"]},
                 {"source_field": "AU", "target_field": "author", "required": False, "aliases": ["Authors"]},
-                {"source_field": "C1", "target_field": "institution", "required": False, "aliases": ["Addresses"]},
+                {"source_field": "C1", "target_field": "institution", "required": False, "aliases": ["Addresses", "Affiliations"]},
                 {"source_field": "DE", "target_field": "keyword_field", "required": False, "aliases": ["Author Keywords"]},
                 {"source_field": "ID", "target_field": "keyword_field", "required": False, "aliases": ["Keywords Plus"]},
-                {"source_field": "WC", "target_field": "category_or_tag", "required": False, "aliases": ["Web of Science Categories"]},
+                {"source_field": "WC", "target_field": "category_or_tag", "required": False, "aliases": ["Web of Science Categories", "WoS Categories"]},
                 {"source_field": "DOI", "target_field": "extra_metadata", "required": False, "aliases": []},
                 {"source_field": "DT", "target_field": "extra_metadata", "required": False, "aliases": ["Document Type"]},
             ],
@@ -428,6 +428,9 @@ def default_runtime_profile() -> dict[str, Any]:
             "normalize_camel_case": True,
             "keep_original_order": True,
             "min_token_length_before_filter": 1,
+            "enable_ngrams": False,
+            "ngram_min": 2,
+            "ngram_max": 2,
         },
         "dictionary": {
             "apply_standard_terms": True,
@@ -451,6 +454,10 @@ def default_runtime_profile() -> dict[str, Any]:
             "feature_term_count": 1000,
             "top_k_per_doc": 10,
             "top_k_project": 100,
+            "similarity_method": "cosine",
+            "min_similarity": 0.2,
+            "similarity_top_k": 200,
+            "topic_algorithm": "nmf",
             "topic_model_k": 4,
             "keyword_cluster_k": 4,
             "document_cluster_k": 4,
@@ -458,6 +465,7 @@ def default_runtime_profile() -> dict[str, Any]:
             "include_term_document_relations": True,
             "include_term_year_relations": True,
             "include_cooccurrence_analysis": True,
+            "include_similarity_analysis": True,
             "include_feature_term_selection": True,
             "include_keyword_extraction": True,
             "include_keyword_clustering": True,
@@ -1192,6 +1200,7 @@ def workflow_port_compatible(source_type: str, target_type: str) -> bool:
         "InstitutionTopicTable",
         "DocumentClusterTable",
         "AuditTable",
+        "MetadataAuditTable",
         "GraphNodeTable",
         "GraphEdgeTable",
         "GraphMetricTable",
@@ -1210,8 +1219,9 @@ def workflow_port_compatible(source_type: str, target_type: str) -> bool:
         "KeywordClusterTable",
         "InstitutionTopicTable",
         "AnalysisBundle",
+        "AnyTable",
     }
-    analysis_result_types = set(table_source_types) | {"AnalysisBundle"}
+    analysis_result_types = set(table_source_types) | {"AnalysisBundle", "AnyTable"}
     if target_type == "AnyTable" and source_type in table_source_types:
         return True
     if target_type == "AnyRenderable" and source_type in renderable_source_types:
@@ -1412,6 +1422,7 @@ def empty_result_bundle() -> dict[str, Any]:
         "term_document_table": [],
         "term_year_table": [],
         "cooccurrence_table": [],
+        "similarity_table": [],
         "selected_feature_terms": [],
         "keyword_result": [],
         "keyword_cluster_result": [],

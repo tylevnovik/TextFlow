@@ -1,10 +1,16 @@
+param(
+  [Nullable[int]]$RowLimit = $null,
+  [string]$WosSeed = "",
+  [string]$IncopatSeed = "",
+  [string]$ScopusSeed = "",
+  [switch]$AllowRestrictedSampleData
+)
+
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $engineRoot = Join-Path $projectRoot "services\python-engine"
 $venvPython = Join-Path $engineRoot ".venv\Scripts\python.exe"
-$publicSampleCacheDir = Join-Path $engineRoot "app\public_sample_cache"
-$publicSampleManifest = Join-Path $publicSampleCacheDir "manifest.json"
 $bundledWorkspaceDir = Join-Path $engineRoot "app\bundled_sample_workspace"
 $bundledWorkspaceManifest = Join-Path $bundledWorkspaceDir "bundled_workspace.json"
 $distDir = Join-Path $engineRoot "dist"
@@ -26,14 +32,28 @@ if (-not (Test-Path $venvPython)) {
   throw "Missing .venv. Run .\scripts\bootstrap-python.ps1 first."
 }
 
-& (Join-Path $PSScriptRoot "build-bundled-sample-workspace.ps1")
+$sampleBuildArgs = @{}
+if ($null -ne $RowLimit) {
+  $sampleBuildArgs.RowLimit = $RowLimit
+}
+if ($WosSeed) {
+  $sampleBuildArgs.WosSeed = $WosSeed
+}
+if ($IncopatSeed) {
+  $sampleBuildArgs.IncopatSeed = $IncopatSeed
+}
+if ($ScopusSeed) {
+  $sampleBuildArgs.ScopusSeed = $ScopusSeed
+}
+if ($AllowRestrictedSampleData) {
+  $sampleBuildArgs.AllowRestrictedSampleData = $true
+}
+
+& (Join-Path $PSScriptRoot "build-bundled-sample-workspace.ps1") @sampleBuildArgs
 if ($LASTEXITCODE -ne 0) {
   throw "Failed to build the bundled sample workspace."
 }
 
-if (-not (Test-Path $publicSampleCacheDir) -or -not (Test-Path $publicSampleManifest)) {
-  throw "Missing packaged public sample cache or manifest. Run .\scripts\fetch-public-sample-data.ps1 -All before building."
-}
 if (-not (Test-Path $bundledWorkspaceDir) -or -not (Test-Path $bundledWorkspaceManifest)) {
   throw "Missing bundled sample workspace or manifest. Run .\scripts\build-bundled-sample-workspace.ps1 before building."
 }
@@ -53,7 +73,6 @@ try {
     --collect-data yake `
     --collect-data wordcloud `
     --add-data "$engineRoot\app\builtin_dictionary_sources;app\builtin_dictionary_sources" `
-    --add-data "$publicSampleCacheDir;app\public_sample_cache" `
     --add-data "$bundledWorkspaceDir;app\bundled_sample_workspace" `
     --name textflow-engine `
     --distpath $pyinstallerDistRoot `

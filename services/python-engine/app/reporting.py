@@ -135,6 +135,7 @@ REPORT_RESULT_TITLES = {
     "term_document_table": "词项-文档关系预览",
     "term_year_table": "词项年份关系预览",
     "cooccurrence_table": "共现关系预览",
+    "similarity_table": "文档相似度预览",
     "selected_feature_terms": "特征词预览",
     "keyword_result": "关键词概览",
     "keyword_cluster_result": "关键词聚类预览",

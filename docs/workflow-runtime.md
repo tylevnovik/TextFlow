@@ -41,7 +41,7 @@ TextFlow 现在采用的是：
 
 - 输入节点：`corpus_input`、`dictionary_input`
 - 处理节点：`merge_corpora`、`clean_text`、`normalize_text`、`tokenize`、`apply_dictionary_rules`、`filter_terms`
-- 分析节点：`frequency_statistics`、`term_document_analysis`、`term_year_analysis`、`cooccurrence_analysis`、`feature_term_selection`、`keyword_extraction`、`keyword_clustering`、`institution_keyword_analysis`、`institution_topic_analysis`、`document_clustering`
+- 分析节点：`frequency_statistics`、`term_document_analysis`、`term_year_analysis`、`cooccurrence_analysis`、`similarity_analysis`、`feature_term_selection`、`keyword_extraction`、`keyword_clustering`、`topic_modeling`、`institution_keyword_analysis`、`institution_topic_analysis`、`document_clustering`
 - 输出节点：`save_csv`、`save_xlsx`、`save_png`、`save_html_report`
 - 辅助节点：`note`、`group`
 
@@ -69,13 +69,23 @@ TextFlow 现在采用的是：
 - `artifact_records` 索引和 preview/payload 懒加载
 - legacy 聚合节点在图运行时内兜底
 
+当前 revised-flow 主图额外覆盖：
+
+- `tokenize` 可按节点配置生成 2-5 gram，n-gram 追加在基础 token 后，仍进入后续词表和过滤链路。
+- `similarity_analysis` 基于 TF-IDF 特征矩阵计算文档对 cosine 相似度，输出 `similarity_table`，可导出到 CSV/XLSX/HTML。
+- `topic_modeling` 支持 NMF 与 LDA 两种本地 scikit-learn 算法；BerTopic 尚未作为内置 sidecar 依赖打包。
+
 ## Artifact Store
 
-运行时会在每次 run 结束时把可表格化或对象化的结果写入 `runs/<run_id>/artifacts/`：
+运行时会在每次 run 结束时把可表格化或对象化的结果写入项目 artifact store：
 
 - 内置分析节点通过 `result_bundle_key` 绑定到结果 bundle，再生成 artifact record。
 - 插件或自定义节点可以在输出口声明 `artifact_kind`，executor 返回该输出口的普通 JSON payload 后，native DAG 会生成 artifact payload、preview 和 handle。
-- `run_record.artifacts` 保存本次 run 的 handle 摘要，`manifest.artifact_records` 保存项目级索引，前端 Artifact Browser 只在用户点击时加载 preview。
+- `run_record.artifacts` 保存本次 run 的 handle 摘要，`manifest.artifact_records` 保存项目级索引，前端节点产物弹窗只在用户点击时加载 preview。
+
+新项目默认使用 `.tfproj/project.db` 中的 `artifacts` 表保存 payload 和 preview，artifact record 的 `path`/`preview_path` 使用 `project.db:artifacts/<artifact_id>/...` 逻辑路径。旧项目如果只有 `runs/*/artifacts/*.json.gz`，读取层仍会兼容。
+
+桌面端不再提供独立 artifact 检视页面。用户在工作流运行完成后，直接在已完成且有产物的节点上点击“产物”按钮，打开该节点的产物预览弹窗。
 
 ## 活跃子图规则
 

@@ -32,20 +32,14 @@ from app.cli import (
 )
 from app.defaults import compile_runtime_profile_from_workflow, default_runtime_profile, normalize_workflow_edges
 from app.node_registry import build_node_registry
-from app.project_store import CORPUS_FILENAME, PROJECT_FILENAME, RESULT_PREVIEW_DEFAULT_LIMIT, create_project, find_project_dir, load_project, load_workspace_snapshot, load_workspace_state, save_project, workspace_state_path
+from app.project_store import CORPUS_FILENAME, PROJECT_FILENAME, RESULT_PREVIEW_DEFAULT_LIMIT, create_project, find_project_dir, list_project_dirs, load_project, load_workspace_snapshot, load_workspace_state, remember_project, save_project, workspace_state_path
 from app.sample_projects import (
     BUILTIN_SAMPLE_PROJECT_DATA_REVISION,
     BUILTIN_SAMPLE_PROJECTS,
     FIRST_BUILTIN_SAMPLE_PROJECT_NAME,
     _is_synthetic_placeholder_row,
 )
-from tests.sample_test_support import TEST_SAMPLE_ROW_LIMIT, placeholder_row
-
-
-@pytest.fixture
-def public_sample_cache(monkeypatch, public_sample_cache_root):
-    monkeypatch.setenv("TEXTFLOW_PUBLIC_SAMPLE_CACHE_ROOT", str(public_sample_cache_root))
-    return public_sample_cache_root
+from tests.conftest import TEST_SAMPLE_ROW_LIMIT, placeholder_row
 
 
 @pytest.fixture
@@ -108,21 +102,86 @@ def test_bootstrap_project_guides_first_run(isolated_workspace):
     assert len(sample_names) == len(BUILTIN_SAMPLE_PROJECTS)
     assert sample_names == expected_sample_names
     assert snapshot["current_project"]["description"] == str(BUILTIN_SAMPLE_PROJECTS[0]["description"])
-    assert len(snapshot["corpus"]) >= 6
+    assert len(snapshot["corpus"]) == TEST_SAMPLE_ROW_LIMIT
     assert snapshot["selected_run"] is None
     assert snapshot["current_project"]["results"]["frequency_table"] == []
     assert snapshot["current_project"]["run_history"] == []
-    assert snapshot["current_project"]["settings"]["sample_project"]["language_counts"] == {"en": 60, "zh": 60}
-    assert any(
-        len(str(item.get("raw_text") or "")) > len(str(item.get("title") or ""))
-        for item in snapshot["corpus"]
-    )
+    assert snapshot["current_project"]["settings"]["sample_project"]["public_row_count"] == TEST_SAMPLE_ROW_LIMIT
+    assert snapshot["current_project"]["settings"]["sample_project"]["flow_schema_version"] == "2026-05-new-flow"
+    assert all(source["retained_in_project"] is False for source in snapshot["current_project"]["source_files"])
+    assert any(len(str(item.get("raw_text") or "")) > len(str(item.get("title") or "")) for item in snapshot["corpus"])
     assert snapshot["node_definitions"]
     assert any(node["type"] == "corpus_input" for node in snapshot["node_definitions"])
     assert any(node["type"] == "save_html_report" for node in snapshot["node_definitions"])
 
 
-def test_save_project_compacts_large_result_tables_on_disk(isolated_workspace):
+def test_bootstrap_uses_bundled_workspace_without_seed_sources(isolated_workspace, monkeypatch):
+    monkeypatch.delenv("TEXTFLOW_SAMPLE_WOS_SOURCE", raising=False)
+    monkeypatch.delenv("TEXTFLOW_SAMPLE_INCOPAT_SOURCE", raising=False)
+    monkeypatch.delenv("TEXTFLOW_SAMPLE_SCOPUS_SOURCE", raising=False)
+    monkeypatch.delenv("TEXTFLOW_ALLOW_RESTRICTED_SAMPLE_DATA", raising=False)
+
+    snapshot = action_load_workspace()
+
+    assert snapshot["current_project"]["name"] == FIRST_BUILTIN_SAMPLE_PROJECT_NAME
+    assert len(snapshot["corpus"]) == TEST_SAMPLE_ROW_LIMIT
+    assert load_workspace_state()["builtin_samples_revision"] == BUILTIN_SAMPLE_PROJECT_DATA_REVISION
+
+
+def test_first_run_bootstrap_fails_loudly_when_bundled_samples_are_missing(monkeypatch, scratch_dir):
+    workspace = scratch_dir / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("TEXTFLOW_WORKSPACE_ROOT", str(workspace))
+    monkeypatch.setenv(BUNDLED_SAMPLE_WORKSPACE_ENV_VAR, str(workspace / "missing-bundle"))
+
+    with pytest.raises(RuntimeError, match="Bundled sample workspace"):
+        action_load_workspace()
+
+    state = load_workspace_state()
+    assert not state.get("bootstrap_completed")
+    assert list_project_dirs() == []
+
+
+def test_bootstrap_refreshes_legacy_sample_from_bundled_without_seed_sources(isolated_workspace, monkeypatch):
+    monkeypatch.delenv("TEXTFLOW_SAMPLE_WOS_SOURCE", raising=False)
+    monkeypatch.delenv("TEXTFLOW_SAMPLE_INCOPAT_SOURCE", raising=False)
+    monkeypatch.delenv("TEXTFLOW_SAMPLE_SCOPUS_SOURCE", raising=False)
+    monkeypatch.delenv("TEXTFLOW_ALLOW_RESTRICTED_SAMPLE_DATA", raising=False)
+
+    project_dir, manifest = create_project(FIRST_BUILTIN_SAMPLE_PROJECT_NAME, "legacy placeholder sample")
+    legacy_corpus = [placeholder_row(idx) for idx in range(4)]
+    manifest["settings"]["sample_project"] = {"slug": "sample-01-basic-preprocessing"}
+    save_project(project_dir, manifest, legacy_corpus)
+
+    snapshot = action_load_workspace()
+    expected_sample_names = {str(spec["name"]) for spec in BUILTIN_SAMPLE_PROJECTS}
+    sample_names = {project["name"] for project in snapshot["recent_projects"] if project["name"] in expected_sample_names}
+
+    assert snapshot["current_project"]["name"] == FIRST_BUILTIN_SAMPLE_PROJECT_NAME
+    assert sample_names == expected_sample_names
+    assert len(snapshot["corpus"]) == TEST_SAMPLE_ROW_LIMIT
+    assert load_workspace_state()["builtin_samples_revision"] == BUILTIN_SAMPLE_PROJECT_DATA_REVISION
+    assert not any(_is_synthetic_placeholder_row(row) for row in snapshot["corpus"][:8])
+
+
+def test_bootstrap_does_not_add_samples_to_existing_user_project_workspace(isolated_workspace, monkeypatch):
+    monkeypatch.delenv("TEXTFLOW_SAMPLE_WOS_SOURCE", raising=False)
+    monkeypatch.delenv("TEXTFLOW_SAMPLE_INCOPAT_SOURCE", raising=False)
+    monkeypatch.delenv("TEXTFLOW_SAMPLE_SCOPUS_SOURCE", raising=False)
+    monkeypatch.delenv("TEXTFLOW_ALLOW_RESTRICTED_SAMPLE_DATA", raising=False)
+
+    project_dir, manifest = create_project("用户项目", "user owned")
+    remember_project(manifest["id"], set_current=True)
+
+    snapshot = action_load_workspace()
+
+    assert snapshot["current_project"]["id"] == manifest["id"]
+    assert [project["id"] for project in snapshot["recent_projects"]] == [manifest["id"]]
+    assert len(list(project_dir.parent.glob("*.tfproj"))) == 1
+    assert load_workspace_state()["builtin_samples_revision"] == BUILTIN_SAMPLE_PROJECT_DATA_REVISION
+
+
+def test_save_project_stores_large_result_tables_in_project_db(isolated_workspace):
     project_dir, manifest = create_project("结果压缩项目", "compact results")
     corpus = [{
         "id": "DOC-001",
@@ -158,8 +217,13 @@ def test_save_project_compacts_large_result_tables_on_disk(isolated_workspace):
 
     stored_manifest, stored_corpus = load_project(project_dir)
 
-    assert len(stored_manifest["results"]["frequency_table"]) == RESULT_PREVIEW_DEFAULT_LIMIT
-    assert len(stored_manifest["results"]["audit_table"]) == 100
+    raw_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
+    assert raw_manifest["results"]["storage"] == "project.db"
+    assert raw_manifest["results"]["table"] == "result_tables"
+    assert raw_manifest["results"]["keys"]["frequency_table"]["row_count"] == RESULT_PREVIEW_DEFAULT_LIMIT + 25
+    assert raw_manifest["results"]["keys"]["audit_table"]["row_count"] == 160
+    assert len(stored_manifest["results"]["frequency_table"]) == RESULT_PREVIEW_DEFAULT_LIMIT + 25
+    assert len(stored_manifest["results"]["audit_table"]) == 160
     assert stored_corpus[0]["clean_text"] == ""
     assert stored_corpus[0]["normalized_text"] == ""
     assert stored_corpus[0]["tokens"] == []
@@ -169,7 +233,7 @@ def test_save_project_compacts_large_result_tables_on_disk(isolated_workspace):
 @pytest.mark.engine_full
 def test_action_run_workflow_returns_compact_project_results(isolated_workspace):
     snapshot = action_load_workspace()
-    sample = next(project for project in snapshot["recent_projects"] if project["name"] == "示例 02 - 词表治理与词频统计")
+    sample = next(project for project in snapshot["recent_projects"] if project["name"] == "示例 02 - IncoPat专利技术识别与图分析")
 
     result = action_run_workflow({"project_id": sample["id"]})
     project_dir = find_project_dir(sample["id"])
@@ -177,24 +241,24 @@ def test_action_run_workflow_returns_compact_project_results(isolated_workspace)
     stored_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
 
     assert len(result["project"]["results"]["cooccurrence_table"]) <= RESULT_PREVIEW_DEFAULT_LIMIT
-    assert len(stored_manifest["results"]["cooccurrence_table"]) == len(result["project"]["results"]["cooccurrence_table"])
+    assert stored_manifest["results"]["storage"] == "project.db"
+    assert stored_manifest["results"]["keys"]["cooccurrence_table"]["row_count"] >= len(result["project"]["results"]["cooccurrence_table"])
 
 
 @pytest.mark.engine_full
-def test_load_workspace_refreshes_placeholder_builtin_sample(monkeypatch, scratch_dir, public_sample_cache):
+def test_load_workspace_refreshes_placeholder_builtin_sample_from_bundle(monkeypatch, scratch_dir, bundled_sample_workspace_120):
     workspace = scratch_dir / "workspace-placeholder-refresh"
     workspace.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("TEXTFLOW_WORKSPACE_ROOT", str(workspace))
+    monkeypatch.setenv(BUNDLED_SAMPLE_WORKSPACE_ENV_VAR, str(bundled_sample_workspace_120))
     monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", str(TEST_SAMPLE_ROW_LIMIT))
+    monkeypatch.delenv("TEXTFLOW_SAMPLE_WOS_SOURCE", raising=False)
+    monkeypatch.delenv("TEXTFLOW_SAMPLE_INCOPAT_SOURCE", raising=False)
+    monkeypatch.delenv("TEXTFLOW_SAMPLE_SCOPUS_SOURCE", raising=False)
+    monkeypatch.delenv("TEXTFLOW_ALLOW_RESTRICTED_SAMPLE_DATA", raising=False)
 
     project_dir, manifest = create_project(FIRST_BUILTIN_SAMPLE_PROJECT_NAME, "legacy placeholder sample")
-    legacy_corpus = [
-        placeholder_row("wikimedia_enwiki", "en", idx)
-        for idx in range(60)
-    ] + [
-        placeholder_row("wikimedia_zhwiki", "zh", idx)
-        for idx in range(60)
-    ]
+    legacy_corpus = [placeholder_row(idx) for idx in range(4)]
     manifest["settings"]["sample_project"] = {"slug": "sample-01-basic-preprocessing"}
     save_project(project_dir, manifest, legacy_corpus)
 
@@ -204,19 +268,40 @@ def test_load_workspace_refreshes_placeholder_builtin_sample(monkeypatch, scratc
     refreshed_manifest, refreshed_corpus = load_project(project_dir)
     assert refreshed_manifest["description"] == BUILTIN_SAMPLE_PROJECTS[0]["description"]
     assert refreshed_manifest["settings"]["sample_project"]["data_revision"] == BUILTIN_SAMPLE_PROJECT_DATA_REVISION
+    assert len(snapshot["recent_projects"]) == len(BUILTIN_SAMPLE_PROJECTS)
     assert load_workspace_state()["builtin_samples_revision"] == BUILTIN_SAMPLE_PROJECT_DATA_REVISION
     assert not any(_is_synthetic_placeholder_row(row) for row in refreshed_corpus[:8])
+
+
+@pytest.mark.engine_full
+def test_load_workspace_does_not_generate_samples_from_seed_sources_without_bundle(monkeypatch, scratch_dir, sample_seed_paths):
+    workspace = scratch_dir / "workspace-no-runtime-seed-generation"
+    workspace.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("TEXTFLOW_WORKSPACE_ROOT", str(workspace))
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", str(TEST_SAMPLE_ROW_LIMIT))
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_WOS_SOURCE", str(sample_seed_paths["wos"]))
+    monkeypatch.setenv("TEXTFLOW_SAMPLE_INCOPAT_SOURCE", str(sample_seed_paths["incopat"]))
+    monkeypatch.setenv("TEXTFLOW_ALLOW_RESTRICTED_SAMPLE_DATA", "1")
+    monkeypatch.setenv(BUNDLED_SAMPLE_WORKSPACE_ENV_VAR, str(workspace / "missing-bundle"))
+
+    project_dir, manifest = create_project(FIRST_BUILTIN_SAMPLE_PROJECT_NAME, "legacy placeholder sample")
+    legacy_corpus = [placeholder_row(idx) for idx in range(4)]
+    manifest["settings"]["sample_project"] = {"slug": "sample-01-basic-preprocessing"}
+    save_project(project_dir, manifest, legacy_corpus)
+
+    snapshot = action_load_workspace()
+    refreshed_manifest, refreshed_corpus = load_project(project_dir)
+
+    assert snapshot["current_project"]["description"] == "legacy placeholder sample"
+    assert refreshed_manifest["description"] == "legacy placeholder sample"
+    assert len(refreshed_corpus) == len(legacy_corpus)
+    assert load_workspace_state()["builtin_samples_revision"] == BUILTIN_SAMPLE_PROJECT_DATA_REVISION
 
 
 def test_bootstrap_skips_reconcile_once_builtin_sample_revision_is_current(isolated_workspace, monkeypatch):
     snapshot = action_load_workspace()
     current_project_id = snapshot["current_project"]["id"]
     assert load_workspace_state()["builtin_samples_revision"] == BUILTIN_SAMPLE_PROJECT_DATA_REVISION
-
-    def fail_reconcile(*_args, **_kwargs):
-        raise AssertionError("reconcile_builtin_sample_projects should not run once the workspace revision is current")
-
-    monkeypatch.setattr("app.cli.reconcile_builtin_sample_projects", fail_reconcile)
 
     refreshed_snapshot = action_load_workspace()
     reopened_project = action_open_project({"project_id": current_project_id})
@@ -339,15 +424,16 @@ def test_new_project_snapshot_contains_resource_collections(isolated_workspace):
     assert current_project["shared_resource_refs"] == []
 
 
-def test_project_storage_compacts_builtin_dictionary_entries_and_rehydrates_on_load(isolated_workspace):
+def test_project_storage_keeps_builtin_dictionary_entries_in_project_db(isolated_workspace):
     project_dir, _manifest = create_project("词表轻量存储项目", "dictionary storage")
 
     raw_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
+    assert raw_manifest["dictionary_set"]["storage"] == "project.db"
     assert "sheets" not in raw_manifest["dictionary_set"]
 
     raw_stopword_collection = raw_manifest["dictionary_set"]["collections"]["stopwords"]
-    raw_stopword_table = next(table for table in raw_stopword_collection["tables"] if table["id"] == "builtin-stopwords-zh")
-    assert raw_stopword_table["entries"] == []
+    assert "tables" not in raw_stopword_collection
+    assert not (project_dir / "dictionaries/stopwords.json").exists()
 
     manifest, corpus = load_project(project_dir)
     hydrated_stopword_table = next(
@@ -364,17 +450,46 @@ def test_project_storage_compacts_builtin_dictionary_entries_and_rehydrates_on_l
 
     raw_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
     raw_stopword_collection = raw_manifest["dictionary_set"]["collections"]["stopwords"]
-    raw_stopword_table = next(table for table in raw_stopword_collection["tables"] if table["id"] == "builtin-stopwords-zh")
-    assert len(raw_stopword_table["entries"]) == 1
-    assert raw_stopword_table["entries"][0]["source"] == "的"
-    assert raw_stopword_table["entries"][0]["hits"] == 9
+    assert "tables" not in raw_stopword_collection
 
     reloaded_manifest, _ = load_project(project_dir)
+    reloaded_stopword_table = next(
+        table
+        for table in reloaded_manifest["dictionary_set"]["collections"]["stopwords"]["tables"]
+        if table["id"] == "builtin-stopwords-zh"
+    )
+    reloaded_table_lookup = {entry["source"]: entry for entry in reloaded_stopword_table["entries"]}
+    assert reloaded_table_lookup["的"]["hits"] == 9
     reloaded_entries = reloaded_manifest["dictionary_set"]["sheets"]["stopwords"]["entries"]
     reloaded_lookup = {entry["source"]: entry for entry in reloaded_entries}
     assert len(reloaded_lookup) > 1500
     assert reloaded_lookup["的"]["hits"] == 9
     assert "about" in reloaded_lookup
+
+
+def test_load_project_rehydrates_builtin_dictionaries_even_when_stored_sheets_are_empty(isolated_workspace):
+    project_dir, _manifest = create_project("词表空表恢复项目", "dictionary rehydrate")
+
+    raw_manifest = json.loads((project_dir / PROJECT_FILENAME).read_text(encoding="utf-8"))
+    raw_manifest["dictionary_set"]["sheets"] = {
+        "stopwords": {
+            "kind": "stopwords",
+            "name": "停用词",
+            "version": "2.0.0",
+            "entries": [],
+        }
+    }
+    (project_dir / PROJECT_FILENAME).write_text(json.dumps(raw_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    manifest, _corpus = load_project(project_dir)
+    stopword_tables = manifest["dictionary_set"]["collections"]["stopwords"]["tables"]
+    zh_table = next(table for table in stopword_tables if table["id"] == "builtin-stopwords-zh")
+    en_table = next(table for table in stopword_tables if table["id"] == "builtin-stopwords-en")
+
+    assert len(zh_table["entries"]) >= 700
+    assert len(en_table["entries"]) >= 1200
+    assert any(entry["source"] == "的" for entry in zh_table["entries"])
+    assert any(entry["source"] == "about" for entry in en_table["entries"])
 
 
 def test_workspace_snapshot_backfills_legacy_project_summary_counts(isolated_workspace):

@@ -108,50 +108,59 @@ export const corpusPortOrder: WorkflowPortType[] = [
 ];
 
 export const defaultNodePositions: Partial<Record<WorkflowNodeType, { x: number; y: number }>> = {
-  dictionary_input: { x: 120, y: 80 },
-  select_dictionary_tables: { x: 520, y: 80 },
-  overlay_dictionary_rules: { x: 900, y: 80 },
-  corpus_input: { x: 120, y: 330 },
-  merge_corpora: { x: 520, y: 330 },
-  filter_by_metadata: { x: 760, y: 120 },
-  deduplicate_documents: { x: 760, y: 330 },
-  sample_corpus: { x: 760, y: 540 },
-  split_corpus: { x: 900, y: 860 },
-  bucket_by_time: { x: 1260, y: 860 },
-  conditional_router: { x: 1260, y: 1120 },
-  result_gate: { x: 3620, y: 1120 },
-  manual_review_gate: { x: 4000, y: 860 },
-  clean_text: { x: 900, y: 330 },
-  normalize_text: { x: 1280, y: 330 },
-  tokenize: { x: 1680, y: 330 },
-  apply_dictionary_rules: { x: 2060, y: 330 },
-  filter_terms: { x: 2460, y: 330 },
-  frequency_statistics: { x: 2860, y: 80 },
-  term_document_analysis: { x: 2860, y: 340 },
-  term_year_analysis: { x: 2860, y: 600 },
-  cooccurrence_analysis: { x: 2860, y: 860 },
-  group_compare: { x: 2860, y: 1380 },
-  feature_term_selection: { x: 2860, y: 1120 },
-  topic_modeling: { x: 2860, y: 1640 },
-  keyword_extraction: { x: 3240, y: 80 },
-  keyword_clustering: { x: 3240, y: 340 },
-  institution_keyword_analysis: { x: 3240, y: 600 },
-  institution_topic_analysis: { x: 3240, y: 860 },
-  document_clustering: { x: 3240, y: 1120 },
-  keyness_analysis: { x: 3240, y: 1380 },
-  cluster_evaluation: { x: 3240, y: 1640 },
-  join_results: { x: 3620, y: 1380 },
-  save_csv: { x: 3620, y: 80 },
-  save_xlsx: { x: 3620, y: 340 },
-  save_png: { x: 3620, y: 600 },
-  save_html_report: { x: 3620, y: 860 },
-  note: { x: 4000, y: 120 },
-  group: { x: 4000, y: 360 },
-  load_project_corpus: { x: 120, y: 330 },
-  filter_corpus: { x: 520, y: 330 },
-  project_dictionary_set: { x: 120, y: 80 },
-  analyze_corpus: { x: 2860, y: 330 },
-  export_results: { x: 3620, y: 360 }
+  dictionary_input: { x: 120, y: 40 },
+  select_dictionary_tables: { x: 640, y: 40 },
+  overlay_dictionary_rules: { x: 1080, y: 40 },
+  corpus_input: { x: 120, y: 480 },
+  merge_corpora: { x: 640, y: 480 },
+  filter_by_metadata: { x: 1080, y: 40 },
+  deduplicate_documents: { x: 1080, y: 480 },
+  sample_corpus: { x: 1080, y: 820 },
+  split_corpus: { x: 1500, y: 1320 },
+  bucket_by_time: { x: 1920, y: 1320 },
+  conditional_router: { x: 2340, y: 1320 },
+  result_gate: { x: 4920, y: 1320 },
+  manual_review_gate: { x: 5340, y: 680 },
+  clean_text: { x: 1500, y: 480 },
+  normalize_metadata: { x: 640, y: 480 },
+  normalize_text: { x: 1920, y: 480 },
+  tokenize: { x: 2340, y: 480 },
+  apply_dictionary_rules: { x: 2760, y: 480 },
+  filter_terms: { x: 3180, y: 480 },
+  frequency_statistics: { x: 3660, y: 40 },
+  term_document_analysis: { x: 3660, y: 360 },
+  term_year_analysis: { x: 3660, y: 680 },
+  cooccurrence_analysis: { x: 3660, y: 1000 },
+  feature_term_selection: { x: 3660, y: 1320 },
+  group_compare: { x: 3660, y: 1640 },
+  similarity_analysis: { x: 4080, y: 40 },
+  keyword_extraction: { x: 4080, y: 360 },
+  keyword_clustering: { x: 4080, y: 680 },
+  topic_modeling: { x: 4080, y: 1000 },
+  institution_keyword_analysis: { x: 4080, y: 1320 },
+  keyness_analysis: { x: 4080, y: 1640 },
+  institution_topic_analysis: { x: 4500, y: 40 },
+  document_clustering: { x: 4500, y: 360 },
+  build_network: { x: 4500, y: 680 },
+  graph_metrics: { x: 4500, y: 1000 },
+  community_detection: { x: 4500, y: 1320 },
+  cluster_evaluation: { x: 4500, y: 1640 },
+  main_path_analysis: { x: 4920, y: 40 },
+  link_prediction: { x: 4920, y: 360 },
+  technology_indicators: { x: 4920, y: 680 },
+  technology_classification: { x: 4920, y: 1000 },
+  join_results: { x: 4920, y: 1320 },
+  save_csv: { x: 5340, y: 40 },
+  save_xlsx: { x: 5340, y: 360 },
+  save_png: { x: 5340, y: 680 },
+  save_html_report: { x: 5340, y: 1000 },
+  note: { x: 5760, y: 40 },
+  group: { x: 5760, y: 360 },
+  load_project_corpus: { x: 120, y: 480 },
+  filter_corpus: { x: 640, y: 480 },
+  project_dictionary_set: { x: 120, y: 40 },
+  analyze_corpus: { x: 1080, y: 480 },
+  export_results: { x: 1500, y: 480 }
 };
 
 export const executionOrder: WorkflowStepId[] = [
@@ -188,7 +197,12 @@ export const defaultExport = (runtimeProfile: WorkflowRuntimeProfile): ExportPar
   watermark_text: runtimeProfile.export?.watermark_text ?? "TextFlow Studio"
 });
 
-const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiDefinition> = {
+const fallbackWorkflowNodeUiDefinition: WorkflowNodeUiDefinition = {
+  size: { w: 320, h: 220 },
+  defaultConfig: () => ({})
+};
+
+const builtinWorkflowNodeUiDefinitions: Partial<Record<WorkflowNodeType, WorkflowNodeUiDefinition>> = {
   corpus_input: {
     size: { w: 420, h: 340 },
     defaultConfig: (runtimeProfile) => ({
@@ -310,6 +324,17 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
     size: { w: 320, h: 230 },
     defaultConfig: (runtimeProfile) => ({ ...runtimeProfile.cleaning })
   },
+  normalize_metadata: {
+    size: { w: 380, h: 320 },
+    defaultConfig: () => ({
+      institution_aliases_text: "",
+      country_aliases_text: "CN|China\nUS|United States\nUSA|United States",
+      category_aliases_text: "",
+      split_delimiters: ";；|",
+      keep_first_institution: true,
+      year_source_field: "year"
+    })
+  },
   normalize_text: {
     size: { w: 330, h: 240 },
     defaultConfig: (runtimeProfile) => ({ ...runtimeProfile.normalization })
@@ -345,6 +370,15 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
       min_cooccurrence: runtimeProfile.analysis.min_cooccurrence
     })
   },
+  similarity_analysis: {
+    size: { w: 340, h: 230 },
+    defaultConfig: (runtimeProfile) => ({
+      similarity_method: runtimeProfile.analysis.similarity_method,
+      min_similarity: runtimeProfile.analysis.min_similarity,
+      similarity_top_k: runtimeProfile.analysis.similarity_top_k,
+      feature_term_count: runtimeProfile.analysis.feature_term_count
+    })
+  },
   group_compare: {
     size: { w: 360, h: 280 },
     defaultConfig: () => ({
@@ -367,6 +401,7 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
   topic_modeling: {
     size: { w: 360, h: 260 },
     defaultConfig: (runtimeProfile) => ({
+      topic_algorithm: runtimeProfile.analysis.topic_algorithm,
       topic_model_k: runtimeProfile.analysis.topic_model_k,
       top_terms_per_topic: 5
     })
@@ -416,6 +451,52 @@ const builtinWorkflowNodeUiDefinitions: Record<WorkflowNodeType, WorkflowNodeUiD
   document_clustering: {
     size: { w: 300, h: 210 },
     defaultConfig: (runtimeProfile) => ({ document_cluster_k: runtimeProfile.analysis.document_cluster_k })
+  },
+  build_network: {
+    size: { w: 340, h: 230 },
+    defaultConfig: () => ({
+      min_edge_weight: 1,
+      max_edges: 5000
+    })
+  },
+  graph_metrics: {
+    size: { w: 320, h: 210 },
+    defaultConfig: () => ({})
+  },
+  community_detection: {
+    size: { w: 340, h: 230 },
+    defaultConfig: () => ({
+      community_method: "greedy_modularity"
+    })
+  },
+  main_path_analysis: {
+    size: { w: 360, h: 230 },
+    defaultConfig: () => ({
+      main_path_mode: "directed_citation_or_weighted_backbone"
+    })
+  },
+  link_prediction: {
+    size: { w: 340, h: 230 },
+    defaultConfig: () => ({
+      link_prediction_top_n: 200
+    })
+  },
+  technology_indicators: {
+    size: { w: 360, h: 230 },
+    defaultConfig: () => ({
+      indicator_current_year: null
+    })
+  },
+  technology_classification: {
+    size: { w: 380, h: 280 },
+    defaultConfig: () => ({
+      threshold_emerging_novelty: 0.65,
+      threshold_emerging_growth: 1.5,
+      threshold_disruptive: 0.65,
+      threshold_core: 0.65,
+      threshold_declining_growth: 0.75,
+      threshold_declining_maturity: 0.4
+    })
   },
   save_csv: {
     size: { w: 280, h: 210 },
@@ -468,7 +549,7 @@ function buildBuiltinWorkflowNodeDefinitions(): Record<WorkflowNodeType, Workflo
   return Object.fromEntries(
     (Object.entries(workflowNodeSchema) as Array<[WorkflowNodeType, GeneratedWorkflowNodeSchema]>).map(
       ([nodeType, schema]) => {
-        const uiDefinition = builtinWorkflowNodeUiDefinitions[nodeType];
+        const uiDefinition = builtinWorkflowNodeUiDefinitions[nodeType] ?? fallbackWorkflowNodeUiDefinition;
         return [
           nodeType,
           {
@@ -480,6 +561,12 @@ function buildBuiltinWorkflowNodeDefinitions(): Record<WorkflowNodeType, Workflo
       }
     )
   ) as Record<WorkflowNodeType, WorkflowNodeDefinition>;
+}
+
+export function missingBuiltinWorkflowNodeUiDefinitionsForTest(): WorkflowNodeType[] {
+  return (Object.keys(workflowNodeSchema) as WorkflowNodeType[]).filter(
+    (nodeType) => !builtinWorkflowNodeUiDefinitions[nodeType]
+  );
 }
 
 export const builtinWorkflowNodeDefinitions: Record<WorkflowNodeType, WorkflowNodeDefinition> =

@@ -20,6 +20,7 @@ const analysisOutputFlagMap = {
   term_document_analysis: "include_term_document_relations",
   term_year_analysis: "include_term_year_relations",
   cooccurrence_analysis: "include_cooccurrence_analysis",
+  similarity_analysis: "include_similarity_analysis",
   feature_term_selection: "include_feature_term_selection",
   keyword_extraction: "include_keyword_extraction",
   keyword_clustering: "include_keyword_clustering",
@@ -218,13 +219,25 @@ const workflowNodeCompilers: Record<string, WorkflowNodeCompiler> = {
       min_cooccurrence: Number(node.config.min_cooccurrence ?? context.compiled.analysis.min_cooccurrence)
     });
   },
+  similarity_analysis: (context, node) => {
+    enableAnalysisOutput(context, "similarity_analysis", {
+      similarity_method: "cosine",
+      min_similarity: Number(node.config.min_similarity ?? context.compiled.analysis.min_similarity),
+      similarity_top_k: Number(node.config.similarity_top_k ?? context.compiled.analysis.similarity_top_k)
+    });
+  },
   group_compare: (context) => {
     context.enabledSteps.add("analysis");
   },
   keyness_analysis: (context) => {
     context.enabledSteps.add("analysis");
   },
-  topic_modeling: (context) => {
+  topic_modeling: (context, node) => {
+    context.compiled.analysis = {
+      ...context.compiled.analysis,
+      topic_algorithm: String(node.config.topic_algorithm ?? context.compiled.analysis.topic_algorithm) === "lda" ? "lda" : "nmf",
+      topic_model_k: Number(node.config.topic_model_k ?? context.compiled.analysis.topic_model_k)
+    };
     context.enabledSteps.add("analysis");
   },
   cluster_evaluation: (context) => {

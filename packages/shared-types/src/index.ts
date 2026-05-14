@@ -36,10 +36,21 @@ export type BuiltinWorkflowNodeType =
   | "corpus_input"
   | "dictionary_input"
   | "merge_corpora"
+  | "select_dictionary_tables"
+  | "overlay_dictionary_rules"
+  | "filter_by_metadata"
+  | "deduplicate_documents"
+  | "sample_corpus"
+  | "split_corpus"
+  | "bucket_by_time"
+  | "conditional_router"
+  | "result_gate"
+  | "manual_review_gate"
   | "load_project_corpus"
   | "filter_corpus"
   | "project_dictionary_set"
   | "clean_text"
+  | "normalize_metadata"
   | "normalize_text"
   | "tokenize"
   | "apply_dictionary_rules"
@@ -48,12 +59,25 @@ export type BuiltinWorkflowNodeType =
   | "term_document_analysis"
   | "term_year_analysis"
   | "cooccurrence_analysis"
+  | "similarity_analysis"
+  | "group_compare"
+  | "keyness_analysis"
+  | "topic_modeling"
+  | "cluster_evaluation"
+  | "join_results"
   | "feature_term_selection"
   | "keyword_extraction"
   | "keyword_clustering"
   | "institution_keyword_analysis"
   | "institution_topic_analysis"
   | "document_clustering"
+  | "build_network"
+  | "graph_metrics"
+  | "community_detection"
+  | "main_path_analysis"
+  | "link_prediction"
+  | "technology_indicators"
+  | "technology_classification"
   | "analyze_corpus"
   | "save_csv"
   | "save_xlsx"
@@ -213,6 +237,11 @@ export interface SourceFileRecord {
   relative_path: string;
   imported_at: string;
   row_count: number;
+  retained_in_project?: boolean;
+  redistribution?: "approved" | "restricted" | "unknown";
+  license_note?: string;
+  source_profile?: SourceProfile;
+  seed_id?: string;
 }
 
 export interface CorpusItem {
@@ -317,6 +346,9 @@ export interface TokenizationParameters {
   normalize_camel_case: boolean;
   keep_original_order: boolean;
   min_token_length_before_filter: number;
+  enable_ngrams: boolean;
+  ngram_min: number;
+  ngram_max: number;
 }
 
 export interface DictionaryParameters {
@@ -343,6 +375,10 @@ export interface AnalysisParameters {
   feature_term_count: number | "all";
   top_k_per_doc: number;
   top_k_project: number;
+  similarity_method: "cosine";
+  min_similarity: number;
+  similarity_top_k: number;
+  topic_algorithm: "nmf" | "lda";
   topic_model_k: number;
   keyword_cluster_k: number;
   document_cluster_k: number;
@@ -350,6 +386,7 @@ export interface AnalysisParameters {
   include_term_document_relations: boolean;
   include_term_year_relations: boolean;
   include_cooccurrence_analysis: boolean;
+  include_similarity_analysis: boolean;
   include_feature_term_selection: boolean;
   include_keyword_extraction: boolean;
   include_keyword_clustering: boolean;
@@ -523,6 +560,16 @@ export interface StepArtifactSummary {
 
 export type RunArtifactSummary = StepArtifactSummary | ArtifactRecord;
 
+export interface NodeOutputPreview {
+  kind: "table" | "list" | "object" | "text" | "scalar" | "empty";
+  row_count?: number;
+  rows?: Array<Record<string, unknown>>;
+  items?: string[];
+  keys?: string[];
+  text?: string;
+  value?: unknown;
+}
+
 export interface NodeRunSummary {
   node_id: string;
   node_type: WorkflowNodeType;
@@ -537,6 +584,7 @@ export interface NodeRunSummary {
   output_ports: string[];
   output_summary?: string;
   sample_outputs?: string[];
+  output_previews?: Record<string, NodeOutputPreview>;
   error?: string;
 }
 
@@ -559,6 +607,7 @@ export interface WorkflowNodeRuntimeState {
   output_ports?: string[];
   output_summary?: string;
   sample_outputs?: string[];
+  output_previews?: Record<string, NodeOutputPreview>;
   detail?: string;
   error?: string;
 }
@@ -700,6 +749,8 @@ export interface DocumentClusterRow {
   source?: string;
 }
 
+export type GenericResultRow = Record<string, unknown>;
+
 export interface AuditRow {
   doc_id: string;
   position?: number;
@@ -716,12 +767,25 @@ export interface ResultBundle {
   term_document_table: TermDocumentRow[];
   term_year_table: TermYearRow[];
   cooccurrence_table: CooccurrenceRow[];
+  similarity_table?: GenericResultRow[];
   selected_feature_terms: FeatureTermRow[];
   keyword_result: KeywordRow[];
   keyword_cluster_result: KeywordClusterRow[];
+  topic_term_table?: GenericResultRow[];
+  document_topic_table?: GenericResultRow[];
+  topic_summary_table?: GenericResultRow[];
   institution_keyword_cooccurrence: InstitutionKeywordRow[];
   institution_topic_cooccurrence: InstitutionTopicRow[];
   clustering_result: DocumentClusterRow[];
+  graph_node_table?: GenericResultRow[];
+  graph_edge_table?: GenericResultRow[];
+  graph_metric_table?: GenericResultRow[];
+  community_table?: GenericResultRow[];
+  main_path_table?: GenericResultRow[];
+  link_prediction_table?: GenericResultRow[];
+  technology_indicator_table?: GenericResultRow[];
+  technology_classification_table?: GenericResultRow[];
+  metadata_audit_table?: GenericResultRow[];
   audit_table: AuditRow[];
   report_files: string[];
 }
@@ -912,7 +976,6 @@ export const pageIds = [
   "data",
   "workflow",
   "dictionaries",
-  "analysis",
   "results",
   "report",
   "settings"

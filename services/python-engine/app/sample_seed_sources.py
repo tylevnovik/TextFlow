@@ -34,7 +34,7 @@ def assert_sample_seed_can_ship(seed: SampleSeedSource) -> None:
 
 
 def sample_seed_root() -> Path:
-    return Path(__file__).resolve().parent.parent.parent.parent.parent / "sample_seed_sources"
+    return Path(__file__).resolve().parents[3] / "sample_seed_sources"
 
 
 def default_sample_seed_sources() -> list[SampleSeedSource]:
@@ -42,7 +42,11 @@ def default_sample_seed_sources() -> list[SampleSeedSource]:
     private_dir = root / "private"
     sources: list[SampleSeedSource] = []
 
-    wos_path = _resolve_seed_path("TEXTFLOW_SAMPLE_WOS_SOURCE", private_dir / "wos-rare-earth.xls")
+    wos_path = _resolve_seed_path(
+        "TEXTFLOW_SAMPLE_WOS_SOURCE",
+        private_dir / "wos-rare-earth.xls",
+        _find_seed_file(root, extensions={".xls", ".xlsx"}, name_contains=("wos",)),
+    )
     if wos_path.exists():
         sources.append(
             SampleSeedSource(
@@ -54,7 +58,11 @@ def default_sample_seed_sources() -> list[SampleSeedSource]:
             )
         )
 
-    incopat_path = _resolve_seed_path("TEXTFLOW_SAMPLE_INCOPAT_SOURCE", private_dir / "incopat-rare-earth.xlsx")
+    incopat_path = _resolve_seed_path(
+        "TEXTFLOW_SAMPLE_INCOPAT_SOURCE",
+        private_dir / "incopat-rare-earth.xlsx",
+        _find_seed_file(root, extensions={".xlsx"}, name_excludes=("wos", "scopus")),
+    )
     if incopat_path.exists():
         sources.append(
             SampleSeedSource(
@@ -66,7 +74,11 @@ def default_sample_seed_sources() -> list[SampleSeedSource]:
             )
         )
 
-    scopus_path = _resolve_seed_path("TEXTFLOW_SAMPLE_SCOPUS_SOURCE", private_dir / "scopus-rare-earth.csv")
+    scopus_path = _resolve_seed_path(
+        "TEXTFLOW_SAMPLE_SCOPUS_SOURCE",
+        private_dir / "scopus-rare-earth.csv",
+        _find_seed_file(root, extensions={".csv", ".tsv", ".xlsx"}, name_contains=("scopus",)),
+    )
     if scopus_path.exists():
         sources.append(
             SampleSeedSource(
@@ -81,11 +93,37 @@ def default_sample_seed_sources() -> list[SampleSeedSource]:
     return sources
 
 
-def _resolve_seed_path(env_var: str, default: Path) -> Path:
+def _resolve_seed_path(env_var: str, default: Path, discovered: Path | None = None) -> Path:
     override = os.getenv(env_var)
     if override:
         return Path(override).expanduser().resolve()
+    if discovered is not None:
+        return discovered.expanduser().resolve()
     return default
+
+
+def _find_seed_file(
+    root: Path,
+    *,
+    extensions: set[str],
+    name_contains: tuple[str, ...] = (),
+    name_excludes: tuple[str, ...] = (),
+) -> Path | None:
+    if not root.exists():
+        return None
+    candidates = []
+    for path in sorted(root.iterdir(), key=lambda item: item.name.lower()):
+        if not path.is_file():
+            continue
+        lowered = path.name.lower()
+        if path.suffix.lower() not in extensions:
+            continue
+        if name_contains and not all(token in lowered for token in name_contains):
+            continue
+        if any(token in lowered for token in name_excludes):
+            continue
+        candidates.append(path)
+    return candidates[0] if candidates else None
 
 
 def seed_source_by_id(seed_id: str, sources: list[SampleSeedSource] | None = None) -> SampleSeedSource | None:

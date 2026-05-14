@@ -371,7 +371,29 @@ def tokenize_text(text: str, dictionary_set: dict[str, Any], params: dict[str, A
                 tokens.append(token)
 
     min_length = params.get("min_token_length_before_filter", 1)
-    return [token for token in tokens if len(token) >= min_length], phrase_hits
+    filtered_tokens = [token for token in tokens if len(token) >= min_length]
+    if bool(params.get("enable_ngrams", False)):
+        filtered_tokens = [*filtered_tokens, *_configured_ngrams(filtered_tokens, params)]
+    return filtered_tokens, phrase_hits
+
+
+def _configured_ngrams(tokens: list[str], params: dict[str, Any]) -> list[str]:
+    if not tokens:
+        return []
+    ngram_min = max(2, int(params.get("ngram_min", 2) or 2))
+    ngram_max = max(ngram_min, int(params.get("ngram_max", ngram_min) or ngram_min))
+    ngram_max = min(ngram_max, 5)
+    ngrams: list[str] = []
+    seen = set(tokens)
+    for width in range(ngram_min, ngram_max + 1):
+        if width > len(tokens):
+            break
+        for index in range(0, len(tokens) - width + 1):
+            candidate = "_".join(tokens[index : index + width])
+            if candidate and candidate not in seen:
+                ngrams.append(candidate)
+                seen.add(candidate)
+    return ngrams
 
 
 def build_dictionary_runtime_state(dictionary_set: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:

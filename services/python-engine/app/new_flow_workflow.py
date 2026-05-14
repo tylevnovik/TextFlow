@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from .defaults import default_runtime_profile, default_workflow_definition
+from .defaults import default_workflow_definition
 from .node_definitions import build_builtin_node_definitions
 
 
@@ -38,6 +38,7 @@ def _new_node(
     y: int = 0,
 ) -> dict[str, Any]:
     definition = _get_node_defs()[node_type]
+    runtime = definition.get("runtime") if isinstance(definition.get("runtime"), dict) else {}
     return {
         "node_id": node_id,
         "node_type": node_type,
@@ -49,7 +50,7 @@ def _new_node(
         "config": {**_default_node_config(node_type), **deepcopy(config or {})},
         "ui_state": {"collapsed": False, "bypassed": False},
         "runtime_meta": {
-            "step_id": str(definition.get("category") or "manual"),
+            "step_id": str(runtime.get("step_id") or definition.get("category") or "manual"),
             "node_impl_version": "2.0.0",
         },
     }
@@ -66,35 +67,38 @@ def _edge(edge_id: str, from_node: str, from_port: str, to_node: str, to_port: s
 
 
 NEW_FLOW_NODE_POSITIONS: dict[str, tuple[int, int]] = {
-    "corpus_input": (120, 330),
-    "dictionary_input": (120, 80),
-    "normalize_metadata": (520, 330),
-    "clean_text": (900, 330),
-    "normalize_text": (1280, 330),
-    "tokenize": (1680, 330),
-    "apply_dictionary_rules": (2060, 330),
-    "filter_terms": (2460, 330),
-    "frequency_statistics": (2860, 80),
-    "term_document_analysis": (2860, 340),
-    "term_year_analysis": (2860, 600),
-    "cooccurrence_analysis": (2860, 860),
-    "feature_term_selection": (2860, 1120),
-    "keyword_extraction": (3240, 80),
-    "keyword_clustering": (3240, 340),
-    "institution_keyword_analysis": (3240, 600),
-    "institution_topic_analysis": (3240, 860),
-    "document_clustering": (3240, 1120),
-    "build_network": (3620, 80),
-    "graph_metrics": (3620, 340),
-    "community_detection": (3620, 600),
-    "main_path_analysis": (3620, 860),
-    "link_prediction": (3620, 1120),
-    "technology_indicators": (4000, 80),
-    "technology_classification": (4000, 340),
-    "save_csv": (4380, 80),
-    "save_xlsx": (4380, 340),
-    "save_png": (4380, 600),
-    "save_html_report": (4380, 860),
+    "dictionary_input": (120, 40),
+    "corpus_input": (120, 480),
+    "normalize_metadata": (640, 480),
+    "deduplicate_documents": (1080, 480),
+    "clean_text": (1500, 480),
+    "normalize_text": (1920, 480),
+    "tokenize": (2340, 480),
+    "apply_dictionary_rules": (2760, 480),
+    "filter_terms": (3180, 480),
+    "frequency_statistics": (3660, 40),
+    "term_document_analysis": (3660, 360),
+    "term_year_analysis": (3660, 680),
+    "cooccurrence_analysis": (3660, 1000),
+    "feature_term_selection": (3660, 1320),
+    "similarity_analysis": (4080, 40),
+    "keyword_extraction": (4080, 360),
+    "keyword_clustering": (4080, 680),
+    "topic_modeling": (4080, 1000),
+    "institution_keyword_analysis": (4080, 1320),
+    "institution_topic_analysis": (4500, 40),
+    "document_clustering": (4500, 360),
+    "build_network": (4500, 680),
+    "graph_metrics": (4500, 1000),
+    "community_detection": (4500, 1320),
+    "main_path_analysis": (4920, 40),
+    "link_prediction": (4920, 360),
+    "technology_indicators": (4920, 680),
+    "technology_classification": (4920, 1000),
+    "save_csv": (5340, 40),
+    "save_xlsx": (5340, 360),
+    "save_png": (5340, 680),
+    "save_html_report": (5340, 1000),
 }
 
 
@@ -120,6 +124,7 @@ def build_new_flow_workflow(
         "corpus_input",
         "dictionary_input",
         "normalize_metadata",
+        "deduplicate_documents",
         "clean_text",
         "normalize_text",
         "tokenize",
@@ -129,9 +134,11 @@ def build_new_flow_workflow(
         "term_document_analysis",
         "term_year_analysis",
         "cooccurrence_analysis",
+        "similarity_analysis",
         "feature_term_selection",
         "keyword_extraction",
         "keyword_clustering",
+        "topic_modeling",
         "institution_keyword_analysis",
         "institution_topic_analysis",
         "document_clustering",
@@ -162,7 +169,8 @@ def build_new_flow_workflow(
 
     # core pipeline
     add_edge("corpus_input", "corpus", "normalize_metadata", "corpus_in")
-    add_edge("normalize_metadata", "normalized_corpus", "clean_text", "corpus_in")
+    add_edge("normalize_metadata", "normalized_corpus", "deduplicate_documents", "corpus_in")
+    add_edge("deduplicate_documents", "deduped_corpus", "clean_text", "corpus_in")
     add_edge("clean_text", "clean_corpus", "normalize_text", "corpus_in")
     add_edge("normalize_text", "normalized_corpus", "tokenize", "corpus_in")
     add_edge("tokenize", "token_corpus", "apply_dictionary_rules", "token_corpus_in")
@@ -175,13 +183,15 @@ def build_new_flow_workflow(
         "term_document_analysis",
         "term_year_analysis",
         "cooccurrence_analysis",
+        "similarity_analysis",
         "feature_term_selection",
         "keyword_extraction",
-        "institution_keyword_analysis",
+        "topic_modeling",
         "document_clustering",
     ]:
         add_edge("filter_terms", "filtered_token_corpus", target, "token_corpus_in")
 
+    add_edge("keyword_extraction", "keyword_table", "institution_keyword_analysis", "keyword_table_in")
     add_edge("feature_term_selection", "feature_term_table", "keyword_clustering", "feature_term_table_in")
     add_edge("keyword_clustering", "keyword_cluster_table", "institution_topic_analysis", "keyword_cluster_table_in")
 
@@ -198,6 +208,7 @@ def build_new_flow_workflow(
 
     # technology branch
     add_edge("term_year_analysis", "term_year_table", "technology_indicators", "term_year_table_in")
+    add_edge("graph_metrics", "graph_metric_table", "technology_indicators", "graph_metric_table_in")
     add_edge("technology_indicators", "technology_indicator_table", "technology_classification", "technology_indicator_table_in")
 
     # exports
@@ -206,9 +217,13 @@ def build_new_flow_workflow(
         ("term_document_analysis", "term_document_table"),
         ("term_year_analysis", "term_year_table"),
         ("cooccurrence_analysis", "cooccurrence_table"),
+        ("similarity_analysis", "similarity_table"),
         ("feature_term_selection", "feature_term_table"),
         ("keyword_extraction", "keyword_table"),
         ("keyword_clustering", "keyword_cluster_table"),
+        ("topic_modeling", "topic_term_table"),
+        ("topic_modeling", "document_topic_table"),
+        ("topic_modeling", "topic_summary_table"),
         ("institution_keyword_analysis", "institution_keyword_table"),
         ("institution_topic_analysis", "institution_topic_table"),
         ("document_clustering", "document_cluster_table"),
@@ -225,6 +240,7 @@ def build_new_flow_workflow(
     for node_type, port in [
         ("cooccurrence_analysis", "cooccurrence_table"),
         ("keyword_clustering", "keyword_cluster_table"),
+        ("topic_modeling", "topic_summary_table"),
         ("document_clustering", "document_cluster_table"),
         ("institution_topic_analysis", "institution_topic_table"),
     ]:
@@ -235,9 +251,13 @@ def build_new_flow_workflow(
         ("term_document_analysis", "term_document_table"),
         ("term_year_analysis", "term_year_table"),
         ("cooccurrence_analysis", "cooccurrence_table"),
+        ("similarity_analysis", "similarity_table"),
         ("feature_term_selection", "feature_term_table"),
         ("keyword_extraction", "keyword_table"),
         ("keyword_clustering", "keyword_cluster_table"),
+        ("topic_modeling", "topic_term_table"),
+        ("topic_modeling", "document_topic_table"),
+        ("topic_modeling", "topic_summary_table"),
         ("institution_keyword_analysis", "institution_keyword_table"),
         ("institution_topic_analysis", "institution_topic_table"),
         ("document_clustering", "document_cluster_table"),

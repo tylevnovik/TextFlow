@@ -199,6 +199,27 @@ def test_wos_import_template_maps_title_abstract_keywords_and_metadata(scratch_d
     assert corpus[0]["extra_metadata"]["DOI"] == "10.1/demo"
 
 
+def test_wos_import_template_maps_full_export_headers(scratch_dir):
+    path = scratch_dir / "wos-full-export.csv"
+    path.write_text(
+        "UT (Unique WOS ID),Article Title,Abstract,Author Keywords,Keywords Plus,Authors,Addresses,Publication Year,Source Title,WoS Categories,Document Type,DOI\n"
+        "WOS:0001,Rare earth partitioning,Partitioning text.,rare earth; partitioning,elements,Chi R,\"Wuhan Inst; Tsinghua Univ\",2005,Rare Metals,Materials Science,Article,10.3/demo\n",
+        encoding="utf-8-sig",
+    )
+
+    corpus, _sources, issues = import_files([path], default_import_template("wos"))
+
+    assert issues == []
+    assert corpus[0]["doc_id"] == "WOS:0001"
+    assert corpus[0]["title"] == "Rare earth partitioning"
+    assert corpus[0]["raw_text"] == "Rare earth partitioning\n\nPartitioning text.\n\nrare earth; partitioning\n\nelements"
+    assert corpus[0]["author"] == "Chi R"
+    assert corpus[0]["institution"] == "Wuhan Inst; Tsinghua Univ"
+    assert corpus[0]["year"] == 2005
+    assert corpus[0]["source"] == "Rare Metals"
+    assert corpus[0]["category_or_tag"] == "Materials Science"
+
+
 def test_scopus_import_template_maps_common_export_headers(scratch_dir):
     path = scratch_dir / "scopus.csv"
     path.write_text(

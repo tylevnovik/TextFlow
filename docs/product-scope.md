@@ -15,8 +15,8 @@
 | V1 目标 | 当前状态 | 备注 |
 | --- | --- | --- |
 | 项目管理 | 已完成 | 支持创建、打开、复制、删除、最近项目、当前项目持久化、模板与项目包导入导出。 |
-| 从 `txt/csv/xlsx/json` 导入语料 | 已完成 | Python 引擎已实际处理四类格式。 |
-| 元数据映射与 source profile | 已完成 | 已内置 `generic/literature/wos/patent/incopat/business_reserved`。 |
+| 从 `txt/csv/xlsx/xls/json` 导入语料 | 已完成 | Python 引擎已实际处理五类格式。 |
+| 元数据映射与 source profile | 已完成 | 已内置 `generic/literature/wos/scopus/patent/incopat/business_reserved`。 |
 | 主文本由一个或多个字段构建 | 已完成 | 支持 `single_field/concat_fields`、连接符和空值跳过。 |
 | 清洗与标准化流程 | 已完成 | 清洗、正则规则、数字归一、时间表达归一、繁简处理均已在引擎落地。 |
 | 保留短语的切词 | 已完成 | 已支持自定义词典、短语词典和短语命中记录。 |
@@ -43,9 +43,9 @@
 - manual/template workflow 已可走 native DAG
 - 节点缓存和节点级运行摘要已接入
 - 语料资源、语料视图、导入规格、artifact records、review tasks 和 experiment specs 已写入项目模型
-- 桌面端已提供 Resource Browser、Artifact Browser、Review Queue、Experiment Matrix 和 Run Diff surface
+- 桌面端已提供 Resource Browser、节点产物弹窗、Review Queue、Experiment Matrix 和 Run Diff surface
 - 本地纯 Python 插件节点已可被 sidecar 扫描并注册
-- 首次启动恢复 9 个预构建场景样例项目，覆盖从预处理、词表治理到复核、门禁的完整 workflow surface
+- 首次启动恢复 3 个 revised-flow 预构建场景样例项目，覆盖 WoS、IncoPat 和论文专利融合流程
 
 ## 当前仍不算“已交付完成”的部分
 
