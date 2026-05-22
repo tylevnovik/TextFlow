@@ -86,6 +86,35 @@ http://127.0.0.1:<port>/
 
 视觉或布局类改动至少保留一次可见截图判断；DOM snapshot 可辅助确认重复元素和旧控件是否清除。烟测结束后，可以停止临时 dev server；若保留给用户继续查看，需要在交付说明里报告准确 URL。
 
+### 前后端协同实机烟测
+
+当需要验证 sample project、真实 workflow 运行、Python sidecar HTTP 服务或前端与后端契约时，使用协同实机烟测：
+
+```powershell
+npm run smoke:desktop:real
+```
+
+该脚本会自动：
+
+- 在 `%TEMP%` 下创建隔离工作区，不污染本地默认工作区。
+- 使用 `services/python-engine/.venv` 启动 Python engine HTTP service。
+- 设置 `TEXTFLOW_WORKSPACE_ROOT` 和 `TEXTFLOW_BUNDLED_SAMPLE_WORKSPACE_ROOT`，让 engine 加载官方 sample workspace。
+- 使用 `VITE_TEXTFLOW_ENGINE_URL` 启动 Vite 前端，使普通浏览器模式不再走 demo fallback，而是通过 HTTP 调用真实 engine。
+- 启动 headless Chrome，按常规桌面尺寸打开工作台，依次点击 `项目`、`语料`、`词库`、`节点图`、`运行`、`系统`，并触发一次 `运行节点图`。
+- 把截图和隔离工作区路径写入脚本输出，截图位于 `%TEMP%\textflow-real-smoke-*\screenshots\`。
+
+可选环境变量：
+
+```powershell
+$env:TEXTFLOW_SMOKE_WIDTH = "1440"
+$env:TEXTFLOW_SMOKE_HEIGHT = "900"
+$env:TEXTFLOW_SMOKE_VITE_PORT = "5174"
+$env:TEXTFLOW_SMOKE_CHROME = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+$env:TEXTFLOW_SMOKE_WORKFLOW_TIMEOUT_MS = "480000"
+```
+
+使用前应先完成 Python 和前端依赖初始化。若没有找到 Chrome/Edge，可用 `TEXTFLOW_SMOKE_CHROME` 指定兼容浏览器路径。
+
 ### 前端工作台命名
 
 当前前端为了降低迁移风险，仍保留旧 `PageId`：`data`、`dictionaries`、`workflow`、`results` 等。面向用户和新代码的 UI activity 命名应使用：

@@ -250,9 +250,266 @@ declare global {
   }
 }
 
+interface EngineTaskSnapshot {
+  action: string;
+  status: string;
+  progress: number;
+  message: string;
+  detail?: EngineProgressDetail;
+  result?: unknown;
+  error?: string;
+}
+
+interface EngineTaskTicket {
+  task_id: string;
+}
+
+type DevEnginePayloadMapper = (payload?: Record<string, unknown>) => Record<string, unknown>;
+
 const delay = (ms: number) => new Promise((resolve) => {
   window.setTimeout(resolve, ms);
 });
+
+const devEngineProgressListeners = new Set<(event: EngineProgressEvent) => void>();
+
+function devEngineBaseUrl(): string | null {
+  const configured = import.meta.env.VITE_TEXTFLOW_ENGINE_URL;
+  if (!configured || typeof configured !== "string") {
+    return null;
+  }
+  return configured.replace(/\/+$/, "");
+}
+
+function emitDevEngineProgress(snapshot: EngineTaskSnapshot) {
+  const event: EngineProgressEvent = {
+    action: snapshot.action,
+    status: snapshot.status,
+    progress: snapshot.progress,
+    message: snapshot.message,
+    detail: snapshot.detail
+  };
+  devEngineProgressListeners.forEach((listener) => listener(event));
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    throw new Error(`Engine request failed (${response.status}): ${await response.text()}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function runDevEngineTask<T>(action: string, payload: Record<string, unknown>): Promise<T> {
+  const baseUrl = devEngineBaseUrl();
+  if (!baseUrl) {
+    throw new Error("VITE_TEXTFLOW_ENGINE_URL is not configured.");
+  }
+  const ticket = await fetchJson<EngineTaskTicket>(`${baseUrl}/tasks/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, payload })
+  });
+
+  for (;;) {
+    const snapshot = await fetchJson<EngineTaskSnapshot>(`${baseUrl}/tasks/${encodeURIComponent(ticket.task_id)}`);
+    emitDevEngineProgress(snapshot);
+    if (snapshot.status === "completed") {
+      return snapshot.result as T;
+    }
+    if (snapshot.status === "failed") {
+      throw new Error(snapshot.error || snapshot.message || `${action} failed`);
+    }
+    await delay(250);
+  }
+}
+
+const devEngineCommandMap: Record<string, { action: string; mapPayload: DevEnginePayloadMapper }> = {
+  load_workspace: { action: "load-workspace", mapPayload: () => ({}) },
+  create_project: {
+    action: "create-project",
+    mapPayload: (payload) => {
+      const input = payload?.input as CreateProjectInput | undefined;
+      return {
+        name: input?.name,
+        description: input?.description ?? ""
+      };
+    }
+  },
+  open_project: {
+    action: "open-project",
+    mapPayload: (payload) => ({ project_id: payload?.projectId })
+  },
+  duplicate_project: {
+    action: "duplicate-project",
+    mapPayload: (payload) => {
+      const input = payload?.input as DuplicateProjectInput | undefined;
+      return {
+        project_id: input?.projectId,
+        name: input?.name
+      };
+    }
+  },
+  delete_project: {
+    action: "delete-project",
+    mapPayload: (payload) => ({ project_id: payload?.projectId })
+  },
+  import_project_files: {
+    action: "import-project-files",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      file_paths: payload?.filePaths,
+      import_template: payload?.importTemplate
+    })
+  },
+  import_project_package: {
+    action: "import-project-package",
+    mapPayload: (payload) => ({ path: payload?.path })
+  },
+  run_workflow: {
+    action: "run-workflow",
+    mapPayload: (payload) => ({ project_id: payload?.projectId })
+  },
+  export_project: {
+    action: "export-project",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      formats: payload?.formats
+    })
+  },
+  export_project_backup: {
+    action: "export-project-backup",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      path: payload?.path
+    })
+  },
+  update_corpus_document: {
+    action: "update-corpus-document",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      document: payload?.document
+    })
+  },
+  delete_corpus_document: {
+    action: "delete-corpus-document",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      doc_id: payload?.docId
+    })
+  },
+  save_ingestion_spec: {
+    action: "save-ingestion-spec",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      spec: payload?.spec
+    })
+  },
+  list_ingestion_specs: {
+    action: "list-ingestion-specs",
+    mapPayload: (payload) => ({ project_id: payload?.projectId })
+  },
+  create_corpus_view: {
+    action: "create-corpus-view",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      view: payload?.view
+    })
+  },
+  update_corpus_view: {
+    action: "update-corpus-view",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      view: payload?.view
+    })
+  },
+  delete_corpus_view: {
+    action: "delete-corpus-view",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      view_id: payload?.viewId
+    })
+  },
+  load_artifact_preview: {
+    action: "load-artifact-preview",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      artifact_id: payload?.artifactId,
+      limit: payload?.limit
+    })
+  },
+  list_run_artifacts: {
+    action: "list-run-artifacts",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      run_id: payload?.runId
+    })
+  },
+  import_dictionary_sheet: {
+    action: "import-dictionary-sheet",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      kind: payload?.kind,
+      path: payload?.path
+    })
+  },
+  export_dictionary_sheet: {
+    action: "export-dictionary-sheet",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      kind: payload?.kind,
+      table_id: payload?.tableId,
+      path: payload?.path
+    })
+  },
+  create_review_task: {
+    action: "create-review-task",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      task: payload?.task
+    })
+  },
+  list_review_tasks: {
+    action: "list-review-tasks",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      status: payload?.status
+    })
+  },
+  resolve_review_task: {
+    action: "resolve-review-task",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      review_id: payload?.reviewId,
+      resolution: payload?.resolution
+    })
+  },
+  save_experiment_spec: {
+    action: "save-experiment-spec",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      experiment: payload?.experiment
+    })
+  },
+  run_experiment_matrix: {
+    action: "run-experiment-matrix",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      experiment_id: payload?.experimentId
+    })
+  },
+  compare_runs: {
+    action: "compare-runs",
+    mapPayload: (payload) => ({
+      project_id: payload?.projectId,
+      left_run_id: payload?.leftRunId,
+      right_run_id: payload?.rightRunId
+    })
+  },
+  save_project: {
+    action: "save-project",
+    mapPayload: (payload) => (payload?.project as Record<string, unknown> | undefined) ?? {}
+  }
+};
 
 function simulatedReviewTasks(project: ProjectManifest): ReviewTaskRecord[] {
   return project.review_tasks as unknown as ReviewTaskRecord[];
@@ -264,10 +521,15 @@ function simulatedExperimentSpecs(project: ProjectManifest): ExperimentSpec[] {
 
 async function tryInvoke<T>(command: string, payload?: Record<string, unknown>): Promise<T | null> {
   const { invoke, isTauri } = await import("@tauri-apps/api/core");
-  if (!isTauri()) {
-    return null;
+  if (isTauri()) {
+    return invoke<T>(command, payload);
   }
-  return invoke<T>(command, payload);
+
+  const devEngineCommand = devEngineCommandMap[command];
+  if (devEngineCommand && devEngineBaseUrl()) {
+    return runDevEngineTask<T>(devEngineCommand.action, devEngineCommand.mapPayload(payload));
+  }
+  return null;
 }
 
 export const desktopBridge: DesktopBridge = {
@@ -884,7 +1146,13 @@ export const desktopBridge: DesktopBridge = {
   async subscribeProgress(listener) {
     const { isTauri } = await import("@tauri-apps/api/core");
     if (!isTauri()) {
-      return () => {};
+      if (!devEngineBaseUrl()) {
+        return () => {};
+      }
+      devEngineProgressListeners.add(listener);
+      return () => {
+        devEngineProgressListeners.delete(listener);
+      };
     }
     const { listen } = await import("@tauri-apps/api/event");
     return listen<EngineProgressEvent>("engine-progress", (event) => {

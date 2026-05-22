@@ -91,6 +91,11 @@ def build_handler(task_manager: TaskManager, shutdown_server: Callable[[], None]
 
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self._send_cors_headers()
+            self.end_headers()
+
         def do_POST(self) -> None:  # noqa: N802
             if self.path == "/tasks/start":
                 payload = self._read_json()
@@ -120,10 +125,18 @@ def build_handler(task_manager: TaskManager, shutdown_server: Callable[[], None]
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
             body = json.dumps(json_ready(payload), ensure_ascii=False).encode("utf-8")
             self.send_response(status)
+            self._send_cors_headers()
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _send_cors_headers(self) -> None:
+            # The service only binds to localhost. CORS lets the Vite dev server
+            # exercise the real engine from a browser smoke test.
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
     return Handler
 
