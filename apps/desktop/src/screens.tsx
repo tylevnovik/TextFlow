@@ -4671,10 +4671,6 @@ function DictionariesPage({
     }
   }, [activeKind, activeTableId, currentCollection]);
 
-  if (!project || !draftSet || !currentCollection) {
-    return <EmptyState title="词表中心为空" body="请先创建或加载项目。" />;
-  }
-
   const visibleEntries = useMemo(() => {
     const q = deferredEntrySearch.trim().toLowerCase();
     const entries = currentTable?.entries ?? [];
@@ -4727,6 +4723,15 @@ function DictionariesPage({
       setEntryPage(totalEntryPages);
     }
   }, [entryPage, totalEntryPages]);
+
+  const currentTableHits = useMemo(
+    () => currentTable?.entries.reduce((sum, entry) => sum + entry.hits, 0) ?? 0,
+    [currentTable]
+  );
+
+  if (!project || !draftSet || !currentCollection) {
+    return <EmptyState title="词表中心为空" body="请先创建或加载项目。" />;
+  }
 
   const mutateDraftSet = (updater: (current: DictionarySet) => DictionarySet | void) => {
     setDraftSet((current) => {
@@ -5003,10 +5008,6 @@ function DictionariesPage({
     }
     return sum + table.entries.filter((entry) => entry.enabled).length;
   }, 0);
-  const currentTableHits = useMemo(
-    () => currentTable?.entries.reduce((sum, entry) => sum + entry.hits, 0) ?? 0,
-    [currentTable]
-  );
   const currentTableEditable = Boolean(currentTable?.editable);
 
   return (
@@ -5305,7 +5306,7 @@ function SettingsPage() {
             </p>
           </div>
           <div className="settings-scale-actions">
-            <div className="tab-row">
+            <div className="settings-scale-buttons">
               <Button
                 onClick={() => applyScaleStep(-0.05)}
                 disabled={uiScale <= 0.8}
@@ -5320,7 +5321,7 @@ function SettingsPage() {
               </Button>
             </div>
             <TabList
-              className="tab-row"
+              className="settings-scale-presets"
               selectedValue={String(uiScale)}
               onTabSelect={(_, data) => setUiScale(Number(data.value))}
             >

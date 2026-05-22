@@ -86,9 +86,14 @@ http://127.0.0.1:<port>/
 
 视觉或布局类改动至少保留一次可见截图判断；DOM snapshot 可辅助确认重复元素和旧控件是否清除。烟测结束后，可以停止临时 dev server；若保留给用户继续查看，需要在交付说明里报告准确 URL。
 
-### 前后端协同实机烟测
+### 前后端协同实机测试
 
-当需要验证 sample project、真实 workflow 运行、Python sidecar HTTP 服务或前端与后端契约时，使用协同实机烟测：
+这里分两层，不要混用：
+
+- `npm run smoke:desktop:real` 是固定路线的 baseline regression smoke。它会真实拉起浏览器和 Python engine，但只覆盖一条预设 happy path，适合提交前确认主链路没有断。
+- `npm run dev:desktop:real` 是给 agent 或人工测试者使用的真实协同栈启动器。它只负责拉起前端、后端和浏览器，并输出 URL、隔离 workspace、CDP 调试地址和首屏截图；后续需要测试者主动浏览、判断、追查问题。
+
+当需要验证 sample project、真实 workflow 运行、Python sidecar HTTP 服务或前端与后端契约的固定基线时，使用：
 
 ```powershell
 npm run smoke:desktop:real
@@ -103,6 +108,20 @@ npm run smoke:desktop:real
 - 启动 headless Chrome，按常规桌面尺寸打开工作台，依次点击 `项目`、`语料`、`词库`、`节点图`、`运行`、`系统`，并触发一次 `运行节点图`。
 - 把截图和隔离工作区路径写入脚本输出，截图位于 `%TEMP%\textflow-real-smoke-*\screenshots\`。
 
+当需要做主动探索式实机测试时，使用：
+
+```powershell
+npm run dev:desktop:real
+```
+
+启动后根据脚本输出的 `appUrl` 打开真实前端，确认 `engineUrl` 指向本次临时 Python engine，并按实际观察做测试决策。测试者应至少检查：
+
+- 页面是否真正加载官方 sample，而不是 browser demo fallback。
+- 项目、语料、词库、节点图、运行、系统等主要 surface 的可达性、状态文案、空/加载/失败态和明显布局问题。
+- 当前页面可见按钮、输入框、表格、折叠区、对象树节点、底部状态面板和右侧检查器是否行为一致。
+- console/runtime/network 是否出现真实错误；遇到错误应回到代码或 engine 响应追查，而不是只记录截图。
+- 对高风险功能区采用隔离 workspace 做真实操作，例如运行节点图、查看产物、打开运行历史、切换 sample project。
+
 可选环境变量：
 
 ```powershell
@@ -111,9 +130,10 @@ $env:TEXTFLOW_SMOKE_HEIGHT = "900"
 $env:TEXTFLOW_SMOKE_VITE_PORT = "5174"
 $env:TEXTFLOW_SMOKE_CHROME = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 $env:TEXTFLOW_SMOKE_WORKFLOW_TIMEOUT_MS = "480000"
+$env:TEXTFLOW_REAL_STACK_HEADLESS = "0"
 ```
 
-使用前应先完成 Python 和前端依赖初始化。若没有找到 Chrome/Edge，可用 `TEXTFLOW_SMOKE_CHROME` 指定兼容浏览器路径。
+使用前应先完成 Python 和前端依赖初始化。若没有找到 Chrome/Edge，可用 `TEXTFLOW_SMOKE_CHROME` 指定兼容浏览器路径。默认使用 headless Chrome；需要可见窗口时设置 `TEXTFLOW_REAL_STACK_HEADLESS=0`。
 
 ### 前端工作台命名
 

@@ -1393,7 +1393,7 @@ button:disabled {
 
 .settings-scale-grid {
   display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
 }
@@ -1415,6 +1415,21 @@ button:disabled {
 .settings-scale-actions {
   display: grid;
   gap: 0.9rem;
+  min-width: 0;
+}
+
+.settings-scale-buttons,
+.settings-scale-presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  gap: 0.5rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.settings-scale-presets [role="tab"] {
+  justify-content: center;
+  min-width: 0;
 }
 
 .stat-card {
@@ -3642,23 +3657,29 @@ th {
 }
 
 @media (max-width: 1180px) {
+  .textflow-workbench-scale {
+    overflow: auto;
+  }
+
   .textflow-workbench-shell,
   .textflow-workbench-shell.is-object-pane-collapsed,
   .textflow-workbench-shell.is-inspector-collapsed,
   .textflow-workbench-shell.is-object-pane-collapsed.is-inspector-collapsed {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto minmax(560px, 1fr) auto auto;
+    grid-template-rows: auto auto minmax(420px, auto) auto auto;
     grid-template-areas:
       "titlebar"
       "objects"
       "main"
       "inspector"
       "bottom";
-    overflow: auto;
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
   }
 
   .textflow-workbench-shell.is-bottom-pane-collapsed {
-    grid-template-rows: auto auto minmax(560px, 1fr) auto;
+    grid-template-rows: auto auto minmax(420px, auto) auto;
     grid-template-areas:
       "titlebar"
       "objects"
@@ -3675,10 +3696,23 @@ th {
   }
 
   .workbench-object-pane,
-  .workbench-inspector,
-  .workbench-main,
-  .workbench-bottom-pane {
+  .workbench-inspector {
+    max-height: min(34vh, 18rem);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .workbench-main {
+    min-height: min(620px, calc(100vh - 8rem));
     overflow: visible;
+  }
+
+  .workbench-bottom-pane {
+    overflow: auto;
+  }
+
+  .workbench-surface-content.content-grid.is-workflow-page {
+    min-height: 460px;
   }
 }
 

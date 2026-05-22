@@ -9,7 +9,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const engineRoot = path.join(repoRoot, "services", "python-engine");
 const bundledSampleWorkspace = path.join(engineRoot, "app", "bundled_sample_workspace");
-const smokeRoot = path.join(os.tmpdir(), `textflow-real-smoke-${Date.now()}`);
+const args = new Set(process.argv.slice(2));
+const keepOpen = args.has("--keep-open");
+const exitAfterReady = args.has("--exit-after-ready");
+const headed = args.has("--headed") || process.env.TEXTFLOW_REAL_STACK_HEADLESS === "0";
+const smokeRoot = path.join(os.tmpdir(), `${keepOpen ? "textflow-real-stack" : "textflow-real-smoke"}-${Date.now()}`);
 const screenshotsDir = path.join(smokeRoot, "screenshots");
 const viewport = { width: Number(process.env.TEXTFLOW_SMOKE_WIDTH ?? 1280), height: Number(process.env.TEXTFLOW_SMOKE_HEIGHT ?? 720) };
 const workflowTimeoutMs = Number(process.env.TEXTFLOW_SMOKE_WORKFLOW_TIMEOUT_MS ?? 480000);
@@ -399,7 +403,7 @@ async function main() {
   await waitForHttp(appUrl, 30000, "Vite desktop frontend");
 
   const chromeProcess = spawnLogged(chrome, [
-    "--headless=new",
+    ...(headed ? [] : ["--headless=new"]),
     "--disable-gpu",
     "--no-first-run",
     "--no-default-browser-check",
@@ -432,8 +436,40 @@ async function main() {
   await waitForPredicate(cdp, `document.title === 'TextFlow Studio' && document.body.innerText.includes('项目对象')`, 30000, "workbench shell");
   await waitForPredicate(cdp, `document.body.innerText.includes('示例 01') && document.body.innerText.includes('节点图')`, 45000, "real sample project");
 
+  if (keepOpen) {
+    const initialScreenshot = await screenshot(cdp, "initial-workbench.png");
+    const session = {
+      ok: true,
+      mode: "real-stack",
+      appUrl,
+      engineUrl,
+      chromeDebugUrl: `http://127.0.0.1:${chromePort}/json/list`,
+      workspaceRoot,
+      screenshotsDir,
+      initialScreenshot,
+      viewport,
+      headed,
+      note: "Stack is running against the real Python engine. Use this session for agent-led browser exploration; press Ctrl+C to stop."
+    };
+    const sessionPath = path.join(smokeRoot, "session.json");
+    await fs.writeFile(sessionPath, JSON.stringify({ ...session, sessionPath }, null, 2), "utf8");
+    console.log(JSON.stringify({ ...session, sessionPath }, null, 2));
+
+    if (exitAfterReady) {
+      cdp.close();
+      stopChild(chromeProcess.child);
+      stopChild(vite.child);
+      stopChild(engine.child);
+      return;
+    }
+
+    await new Promise(() => {});
+    return;
+  }
+
   const screenshots = [];
   const clickChecks = [];
+  let projectPageHasVisiblePath = false;
   for (const step of [
     ["项目", "项目管理"],
     ["语料", "语料"],
@@ -449,6 +485,9 @@ async function main() {
     if (!ok) {
       throw new Error(`After clicking ${button}, expected text was not visible: ${expectedText}`);
     }
+    if (button === "项目") {
+      projectPageHasVisiblePath = await evaluate(cdp, `document.body.innerText.includes('.tfproj') || document.body.innerText.includes('projects')`);
+    }
     screenshots.push(await screenshot(cdp, `${button}.png`));
   }
 
@@ -463,12 +502,16 @@ async function main() {
   );
   screenshots.push(await screenshot(cdp, "workflow-run-complete.png"));
 
+  const projectFiles = (await fs.readdir(path.join(workspaceRoot, "projects")).catch(() => []))
+    .filter((item) => item.endsWith(".tfproj"));
   const summary = await evaluate(cdp, `(() => ({
     title: document.title,
     textFlowEngineUrl: ${JSON.stringify(engineUrl)},
-    hasRealProjectPath: document.body.innerText.includes('.tfproj') || document.body.innerText.includes('projects/'),
     bodyText: document.body.innerText.slice(0, 1200)
   }))()`);
+  summary.hasRealProjectPath = projectPageHasVisiblePath || projectFiles.length > 0;
+  summary.projectPageHasVisiblePath = projectPageHasVisiblePath;
+  summary.projectFiles = projectFiles;
 
   if (browserErrors.length) {
     throw new Error(`Browser errors were captured:\n${browserErrors.join("\n")}`);

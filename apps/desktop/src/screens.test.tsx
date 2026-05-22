@@ -219,3 +219,58 @@ describe("Workflow page loading and previews", () => {
     expect(screen.getAllByText("词频统计").length).toBeGreaterThan(0);
   });
 });
+
+describe("Dictionaries page loading", () => {
+  function dictionariesWorkspace(project = demoWorkspace.current_project) {
+    return {
+      state: {
+        snapshot: {
+          recent_projects: demoWorkspace.recent_projects,
+          current_project: project,
+          corpus: demoWorkspace.corpus,
+        },
+        loading: false,
+      },
+      exportDictionaryTable: vi.fn(async () => true),
+      importDictionaryTable: vi.fn(async () => null),
+      pickJsonFile: vi.fn(async () => null),
+      saveJsonFilePath: vi.fn(async () => null),
+      saveProject: vi.fn(async () => true),
+      setActivePage: vi.fn(),
+    };
+  }
+
+  it("keeps hook order stable when the dictionaries page is opened before project loading finishes", async () => {
+    useWorkspaceMock.mockReturnValue({
+      state: {
+        snapshot: {
+          recent_projects: [],
+          corpus: [],
+        },
+        loading: true,
+      },
+      exportDictionaryTable: vi.fn(async () => true),
+      importDictionaryTable: vi.fn(async () => null),
+      pickJsonFile: vi.fn(async () => null),
+      saveJsonFilePath: vi.fn(async () => null),
+      saveProject: vi.fn(async () => true),
+      setActivePage: vi.fn(),
+    });
+
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { rerender } = render(<PageView page="dictionaries" />);
+
+    expect(screen.getByText("词表中心为空")).toBeInTheDocument();
+
+    useWorkspaceMock.mockReturnValue(dictionariesWorkspace());
+    expect(() => rerender(
+      <PageView
+        page="dictionaries"
+        workbenchSelection={{ kind: "lexicon_kind", projectId: "project-1", dictionaryKind: "stopwords" }}
+      />
+    )).not.toThrow();
+    expect(await screen.findByText("词库中心")).toBeInTheDocument();
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
+  });
+});
