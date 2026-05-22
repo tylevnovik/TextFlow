@@ -13,7 +13,7 @@
 | 许可证 | 私有 |
 | 仓库地址 | https://github.com/tylevnovik/TextFlow |
 | 目标平台 | Windows (主), macOS (可移植, 未正式验证) |
-| 一句话定位 | 文本整理与基础分析工具，按项目保存数据、词表和结果 |
+| 一句话定位 | 文本整理与基础分析工具，按项目保存语料、词库、节点图和运行产物 |
 
 ---
 
@@ -25,7 +25,7 @@
 ┌─────────────────────────────────────────────────────────┐
 │                   用户界面层 (Frontend)                    │
 │     Tauri 2 Shell (Rust) + React 18 + TypeScript + Vite  │
-│     • 8 个页面: 首页/项目/导入/词表/工作流/分析/结果/设置     │
+│     • 工作台 activity: 项目/语料/词库/节点图/运行产物/设置     │
 │     • 工作流画布: DAG 节点拖拽/连线/缩放/配置               │
 │     • 通过 Tauri IPC 调用后端                              │
 └───────────────────────┬─────────────────────────────────┘
@@ -88,26 +88,38 @@ TextFlow/
 | Vite | 5.4+ | 构建工具 |
 | Vitest | 2.1+ | 测试框架 |
 | Tauri | 2.0 | 桌面壳 (Rust) |
-| CSS | 原生 | 样式 (~58KB, 无 UI 框架) |
+| Fluent UI React v9 | 9.73+ | 新工作台壳、命令栏、树、面板、Tab 和基础控件 |
+| Fluent Icons | 2.0+ | 工作台命令与对象树图标 |
+| CSS | 原生 | 工作台布局、旧页面和节点画布定制样式 |
 
-无外部 UI 组件库，所有组件 (Panel, StatCard, Table, PaginatedTable 等) 均在 `ui.tsx` 中自建。
+Fluent UI React v9 已先接入 `AppShell` 和 `ProjectWorkbench`，承担应用壳、命令栏、对象树、底部 Tab、属性检查器和基础按钮。旧 `PageId` 和 `ui.tsx` 组件仍保留，用于承载现有页面内容；语料工作面已拆到 `features/corpus/`，词库工作面已拆到 `features/lexicon/`，节点图工作面已拆到 `features/workflow/`，运行产物支撑面已拆到 `features/runs/`。
 
-### 3.2 页面导航 (8 页)
+### 3.2 工作台 activity 与旧 PageId 映射
 
-| 页面 ID | 标题 | 功能描述 |
-|---|---|---|
-| `home` | 开始 | 项目选择、创建、首页仪表板 |
-| `project` | 项目概览 | 项目统计、源文件、运行历史、复核任务、实验 |
-| `data` | 导入资料 | 文件导入、字段映射、语料管理、导入规范 |
-| `dictionaries` | 词表规则 | 管理 8 类词表: 停用词/自定义/短语/同义/近义/标准/排除/正则 |
-| `workflow` | 处理与分析 | **主入口** — 可视化 DAG 工作流编辑器 |
-| `analysis` | 分析详情 | 词频表/共现/关键词/主题/聚类/散点图 |
-| `results` | 结果导出 | 运行历史/运行对比/实验矩阵/导出控制；产物预览从工作流节点弹窗进入 |
-| `settings` | 设置 | UI 缩放/语言/主题/项目路径 |
+| 旧 PageId | UI activity | 角色 | 功能描述 |
+|---|---|---|---|
+| `home` | 开始 | 系统入口 | 项目选择、创建、首页仪表板 |
+| `project` | 项目 | 核心对象 | 项目统计、三核心概览、源文件、最近运行、复核任务、实验 |
+| `data` | 语料 | 核心对象 | 文件导入、字段映射、主文本构造、语料管理、导入规范 |
+| `dictionaries` | 词库 | 核心对象 | 管理 8 类词库: 停用词/自定义/短语/同义/近义/标准/排除/正则 |
+| `workflow` | 节点图 | 核心对象 | **主工作区** — 可视化 DAG 工作流编辑器，引用语料和词库资源 |
+| `results` | 运行产物 | 支撑面 | 运行历史/运行对比/导出控制；产物预览可从底部面板、运行产物 workspace 或工作流节点弹窗进入 |
+| `report` | 报告预览 | 支撑面 | 预览 HTML 报告结构和摘要，不作为一级核心对象入口 |
+| `settings` | 设置 | 系统入口 | UI 缩放/语言/主题/项目路径 |
 
-### 3.3 工作流画布
+`results` 和 `report` 是节点图执行后的支撑 surface，不再作为和语料、词库、节点图并列的核心对象来描述。
 
-工作流页面采用独立的深色主题布局:
+语料工作面当前由 `CorpusWorkspace` 提供命令栏和摘要，`CorpusInspector` 提供集合/导入规范/文档属性检查器。文档点击会通过统一 `WorkbenchSelection` 更新为 `corpus_document`，右侧检查器显示正文、元数据、清洗文本和 tokens。
+
+词库工作面当前由 `LexiconWorkspace` 提供命令栏和摘要，`LexiconInspector` 提供分类/资源表/条目属性检查器。资源表点击会通过统一 `WorkbenchSelection` 更新为 `lexicon_table`，右侧检查器显示资源类型、条目数、启用条目、命中次数和绑定入口。
+
+节点图工作面当前由 `WorkflowWorkspace` 提供命令栏、摘要和状态面板，`WorkflowInspector` 提供节点图/节点/连线属性检查器。画布点击节点或连线会通过统一 `WorkbenchSelection` 更新为 `workflow_node` 或 `workflow_edge`，右侧检查器显示节点参数、端口、运行状态、产物摘要或连线端口兼容性。项目对象树里的语料集合和词库资源表支持以 selection payload 拖入画布，作为 `Corpus Input` 与 `Dictionary Input` 的资源绑定入口。
+
+运行产物支撑面当前由 `RunStatusPane`、`RunHistoryWorkspace`、`ArtifactWorkspace` 和 `RunInspector` 承担。底部面板显示当前运行进度、节点日志、校验问题与产物列表；点击 run 或 artifact 会更新统一 `WorkbenchSelection`，中间打开相应支撑 workspace，右侧检查器显示运行、节点、参数快照、文件路径和导出动作。
+
+### 3.3 节点图画布
+
+节点图工作面采用独立的深色主题布局:
 - **左侧工具栏** (64px): 操作按钮
 - **停靠面板** (330px): 节点工具箱与配置面板
 - **画布区域**: 支持缩放/平移、节点拖拽、连线、小地图
@@ -166,7 +178,7 @@ TextFlow/
 | **运行状态** | `RunStatus` | idle/running/completed/failed/cancelled |
 | **字典类型** | `DictionaryKind` (8 种) | stopwords/synonym/standard_terms 等 |
 | **导出格式** | `ExportFormat` | csv/xlsx/png/html |
-| **页面** | `PageId` (9 个类型，8 个主导航入口) | home/project/data/workflow/dictionaries/analysis/results/settings；report 仍为非主导航兼容视图 |
+| **页面/工作台** | `PageId` + 前端 activity 元数据 | 旧 ID 保持 home/project/data/workflow/dictionaries/results/report/settings；UI 文案映射为项目/语料/词库/节点图/运行产物/设置 |
 
 ### 4.2 核心接口
 
@@ -569,6 +581,8 @@ npm run tauri:build                 # -> NSIS 安装程序
 |---|---|---|
 | `react` | ^18.3.1 | UI 框架 |
 | `react-dom` | ^18.3.1 | DOM 渲染 |
+| `@fluentui/react-components` | ^9.73.8 | Fluent UI React v9 组件 |
+| `@fluentui/react-icons` | ^2.0.326 | Fluent 图标 |
 | `@tauri-apps/api` | 2.0.0 | Tauri IPC |
 | `@textflow/shared-types` | 0.1.1 | 共享类型 |
 

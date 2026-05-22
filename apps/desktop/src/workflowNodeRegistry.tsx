@@ -1,4 +1,5 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
+import { Button } from "@fluentui/react-components";
 import type {
   CorpusItem,
   WorkflowRuntimeProfile,
@@ -23,6 +24,7 @@ interface WorkflowNodeEditorContext {
   documentPickerQuery: string;
   setDocumentPickerQuery: Dispatch<SetStateAction<string>>;
   setActivePage: (page: "dictionaries") => void;
+  bindDictionaryTableToWorkflow: (tableId: string) => void;
   runScopeForNode: (node: WorkflowNodeInstance | null | undefined) => RunScopeDefinition;
   runScopeSummary: (scope: RunScopeDefinition, totalCount: number, matchedCount: number) => string;
   corpusMatchesRunScope: (item: CorpusItem, scope: RunScopeDefinition) => boolean;
@@ -344,9 +346,9 @@ function renderDictionaryInputEditor(context: WorkflowNodeEditorContext) {
           </div>
         </div>
       ))}
-      <button type="button" className="toolbar-button ghost compact" onClick={() => context.setActivePage("dictionaries")} disabled={context.loading}>
+      <Button size="small" appearance="subtle" onClick={() => context.setActivePage("dictionaries")} disabled={context.loading}>
         打开词表中心
-      </button>
+      </Button>
     </>
   );
 }
@@ -705,27 +707,37 @@ function renderSelectDictionaryTablesEditor(context: WorkflowNodeEditorContext) 
           <strong>{collection.name}</strong>
           <div className="workflow-node-inline-editor-grid">
             {collection.tables.map((table) => (
-              <label key={table.id} className="switch-row compact">
-                <input
-                  type="checkbox"
-                  checked={selectedTableIds.has(table.id)}
-                  onChange={() => toggleTable(table.id)}
+              <div key={table.id} className="workflow-node-inline-table-row">
+                <label className="switch-row compact">
+                  <input
+                    type="checkbox"
+                    checked={selectedTableIds.has(table.id)}
+                    onChange={() => toggleTable(table.id)}
+                    disabled={context.loading}
+                  />
+                  <span>{table.name} · {table.entries.length}</span>
+                </label>
+                <Button
+                  size="small"
+                  appearance="subtle"
+                  onClick={() => context.bindDictionaryTableToWorkflow(table.id)}
                   disabled={context.loading}
-                />
-                <span>{table.name} · {table.entries.length}</span>
-              </label>
+                >
+                  绑定到节点
+                </Button>
+              </div>
             ))}
           </div>
         </div>
       ))}
-      <button
-        type="button"
-        className="toolbar-button ghost compact"
+      <Button
+        size="small"
+        appearance="subtle"
         onClick={() => context.updateNodeConfig(context.node.node_id, { selected_table_ids: [], selected_table_ids_text: "" })}
         disabled={context.loading}
       >
         恢复为全部分表
-      </button>
+      </Button>
     </>
   );
 }
@@ -807,24 +819,24 @@ function renderOverlayDictionaryRulesEditor(context: WorkflowNodeEditorContext) 
             />
             <span>启用</span>
           </label>
-          <button
-            type="button"
-            className="toolbar-button ghost compact"
+          <Button
+            size="small"
+            appearance="subtle"
             onClick={() => persistRows(rows.filter((_, itemIndex) => itemIndex !== index))}
             disabled={context.loading || rows.length <= 1}
           >
             删除
-          </button>
+          </Button>
         </div>
       ))}
-      <button
-        type="button"
-        className="toolbar-button ghost compact"
+      <Button
+        size="small"
+        appearance="subtle"
         onClick={() => persistRows([...rows, { kind: kinds[0] ?? "standard_terms", source: "", target: "", enabled: true }])}
         disabled={context.loading}
       >
         添加规则
-      </button>
+      </Button>
     </>
   );
 }

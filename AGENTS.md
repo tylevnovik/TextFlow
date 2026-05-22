@@ -77,6 +77,15 @@ The product must be install-and-run and must not require users to configure Pyth
 - Expose presets/templates where possible
 - Make audit trails visible in the UI
 
+## Frontend Browser Smoke Test Rules
+- After significant frontend UI, visual, layout, or workbench changes, run a local browser smoke test before handing off.
+- Start the desktop frontend with a local Vite server on a free localhost port, for example `npm run dev --workspace apps/desktop -- --host 127.0.0.1 --port 5174 --strictPort`.
+- Use the Codex in-app Browser / Browser plugin to open `http://127.0.0.1:<port>/`; do not substitute an OS browser launch when working inside Codex.
+- Smoke the surfaces touched by the change and include visual checks for app load, reachability, obvious runtime failures, text overlap, duplicate command/status surfaces, stale legacy controls, collapse/resize behavior for touched panes, and Fluent focus/border states.
+- For workflow graph changes, verify the graph opens from the outer workbench object tree, the canvas/minimap render, workflow actions live in the outer left workbench surface, old internal rails/toolbars are absent, and the graph can be panned/zoomed without hiding primary content.
+- Use a DOM snapshot plus a visible screenshot when the change is visual or layout-sensitive. Keep temporary smoke logs outside the repo, such as under `%TEMP%`.
+- If the dev server is left running for the user, report the exact local URL; otherwise stop the temporary server after verification.
+
 ## Deliverables
 - Working desktop app skeleton
 - Python engine skeleton

@@ -1,4 +1,5 @@
 import type { ExperimentSpec } from "@textflow/shared-types";
+import { Button } from "@fluentui/react-components";
 import { Panel } from "../../ui";
 import type { RunDiffSummary } from "../../bridge/desktopBridge";
 
@@ -37,14 +38,13 @@ export function ExperimentPanel({
     <Panel
       title="Experiment Matrix"
       actions={
-        <button
-          type="button"
-          className="toolbar-button accent"
+        <Button
+          appearance="primary"
           onClick={() => selectedExperiment ? void onRunExperiment(selectedExperiment.experiment_id) : undefined}
           disabled={loading || !selectedExperiment}
         >
           Run Matrix
-        </button>
+        </Button>
       }
     >
       {!experiments.length ? (
@@ -56,9 +56,9 @@ export function ExperimentPanel({
         <div className="two-column">
           <div className="stack-list">
             {experiments.map((experiment) => (
-              <button
+              <Button
+                appearance="subtle"
                 key={experiment.experiment_id}
-                type="button"
                 className={`project-card ${experiment.experiment_id === selectedExperiment?.experiment_id ? "is-selected" : ""}`}
                 onClick={() => onSelectExperiment(experiment.experiment_id)}
                 disabled={loading}
@@ -68,7 +68,7 @@ export function ExperimentPanel({
                   <span className="badge completed">{experiment.variant_matrix.length} variants</span>
                 </div>
                 <p className="muted">{experiment.workflow_id}</p>
-              </button>
+              </Button>
             ))}
           </div>
           <div className="stack-list">

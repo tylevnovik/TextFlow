@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Button } from "@fluentui/react-components";
 import type { ArtifactRecord } from "@textflow/shared-types";
 import { MiniMetric, Panel } from "../../ui";
 
@@ -15,6 +16,7 @@ export interface ArtifactBrowserProps {
   loading?: boolean;
   onLoadPreview: (artifactId: string) => Promise<ArtifactPreview>;
   onOpenArtifact?: (artifact: ArtifactRecord) => void;
+  selectedArtifactId?: string;
   title?: string;
 }
 
@@ -33,6 +35,7 @@ export function ArtifactBrowser({
   loading = false,
   onLoadPreview,
   onOpenArtifact,
+  selectedArtifactId,
   title = "节点产物"
 }: ArtifactBrowserProps) {
   const [preview, setPreview] = useState<ArtifactPreview | null>(null);
@@ -62,6 +65,16 @@ export function ArtifactBrowser({
     }
   };
 
+  useEffect(() => {
+    if (!selectedArtifactId || preview?.artifact_id === selectedArtifactId) {
+      return;
+    }
+    if (!artifacts.some((artifact) => artifact.artifact_id === selectedArtifactId)) {
+      return;
+    }
+    void handleLoadPreview(selectedArtifactId);
+  }, [artifacts, preview?.artifact_id, selectedArtifactId]);
+
   return (
     <Panel title={title} className="artifact-browser-panel">
       <div className="surface-metric-row">
@@ -72,8 +85,10 @@ export function ArtifactBrowser({
 
       <div className="artifact-browser-layout">
         <div className="stack-list">
-          {artifacts.map((artifact) => (
-            <article key={artifact.artifact_id} className="project-card artifact-record-card">
+          {artifacts.map((artifact) => {
+            const isActive = artifact.artifact_id === selectedArtifactId || artifact.artifact_id === preview?.artifact_id;
+            return (
+            <article key={artifact.artifact_id} className={`project-card artifact-record-card ${isActive ? "is-active" : ""}`.trim()}>
               <div>
                 <div className="run-head">
                   <h4>{artifact.artifact_id}</h4>
@@ -85,25 +100,25 @@ export function ArtifactBrowser({
                 </p>
               </div>
               <div className="button-row">
-                <button
-                  type="button"
-                  className="toolbar-button compact"
+                <Button
+                  size="small"
                   onClick={() => void handleLoadPreview(artifact.artifact_id)}
                   disabled={loading || previewLoading === artifact.artifact_id}
                 >
                   {previewLoading === artifact.artifact_id ? "加载中" : "加载预览"}
-                </button>
-                <button
-                  type="button"
-                  className="toolbar-button ghost compact"
+                </Button>
+                <Button
+                  size="small"
+                  appearance="subtle"
                   onClick={() => onOpenArtifact?.(artifact)}
                   disabled={loading || !onOpenArtifact}
                 >
                   打开
-                </button>
+                </Button>
               </div>
             </article>
-          ))}
+            );
+          })}
           {!artifacts.length && (
             <div className="status-panel">
               <strong>还没有运行产物</strong>

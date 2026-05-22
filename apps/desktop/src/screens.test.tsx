@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, within } from "@testing-library/react";
 import { sourceProfileImportTemplates } from "@textflow/shared-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { demoWorkspace } from "./data/demoProject";
+import { WORKFLOW_NODE_TYPE_MIME } from "./features/workflow/workflowWorkbenchActions";
 
 const useWorkspaceMock = vi.fn();
 
@@ -132,7 +133,7 @@ describe("Workflow page loading and previews", () => {
 
     useWorkspaceMock.mockReturnValue(workflowWorkspace());
     expect(() => rerender(<WorkflowEditorPage />)).not.toThrow();
-    expect(screen.getByText("Node Workflow")).toBeInTheDocument();
+    expect(screen.getByText("节点图")).toBeInTheDocument();
     expect(consoleErrorSpy).not.toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
   });
@@ -194,5 +195,27 @@ describe("Workflow page loading and previews", () => {
     fireEvent.click(within(cleanNode as HTMLElement).getByRole("button", { name: "预览" }));
 
     expect(await screen.findByText("persisted clean preview after reopen")).toBeInTheDocument();
+  });
+
+  it("accepts toolbox node drops when node definitions come from the browser fallback catalog", () => {
+    useWorkspaceMock.mockReturnValue(workflowWorkspace());
+
+    render(<PageView page="workflow" />);
+
+    const canvas = document.querySelector(".workflow-editor-canvas") as HTMLElement;
+    const beforeCount = document.querySelectorAll(".workflow-node-card-canvas").length;
+    const dropEvent = createEvent.drop(canvas);
+    Object.defineProperty(dropEvent, "clientX", { value: 520 });
+    Object.defineProperty(dropEvent, "clientY", { value: 320 });
+    Object.defineProperty(dropEvent, "dataTransfer", {
+      value: {
+        getData: vi.fn((type: string) => type === WORKFLOW_NODE_TYPE_MIME ? "frequency_statistics" : "")
+      }
+    });
+
+    fireEvent(canvas, dropEvent);
+
+    expect(document.querySelectorAll(".workflow-node-card-canvas")).toHaveLength(beforeCount + 1);
+    expect(screen.getAllByText("词频统计").length).toBeGreaterThan(0);
   });
 });

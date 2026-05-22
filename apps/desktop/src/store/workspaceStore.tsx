@@ -674,9 +674,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const value = useMemo<WorkspaceContextValue>(() => ({
     state,
     setActivePage: (page) => {
-      startTransition(() => {
-        dispatch({ type: "setPage", page });
-      });
+      dispatch({ type: "setPage", page });
     },
     setUiScale: (uiScale) => {
       dispatch({ type: "setUiScale", uiScale });

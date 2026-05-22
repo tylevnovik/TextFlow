@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { Button, Tab, TabList } from "@fluentui/react-components";
 import type {
   AuditRow,
   CorpusItem,
@@ -150,12 +151,12 @@ export function PaginatedTable({
           第 {rows.length ? (safePage - 1) * pageSize + 1 : 0} - {Math.min(safePage * pageSize, rows.length)} 条，
           每页 {pageSize} 条。
         </span>
-        <button type="button" className="toolbar-button ghost" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={safePage <= 1}>
+        <Button appearance="subtle" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={safePage <= 1}>
           上一页
-        </button>
-        <button type="button" className="toolbar-button ghost" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={safePage >= totalPages}>
+        </Button>
+        <Button appearance="subtle" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={safePage >= totalPages}>
           下一页
-        </button>
+        </Button>
       </div>
     </>
   );
@@ -193,18 +194,17 @@ export function DocumentPreview({
         <li>institution: {doc.institution ?? "—"}</li>
         <li>year: {doc.year ?? "—"}</li>
       </ul>
-      <div className="tab-row">
+      <TabList
+        className="tab-row"
+        selectedValue={mode}
+        onTabSelect={(_, data) => onModeChange(data.value as DocumentPreviewMode)}
+      >
         {previewModes.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`tab-button ${mode === item.id ? "is-active" : ""}`}
-            onClick={() => onModeChange(item.id)}
-          >
+          <Tab key={item.id} value={item.id}>
             {item.label}
-          </button>
+          </Tab>
         ))}
-      </div>
+      </TabList>
       {mode === "metadata" ? (
         <pre className="code-box preview-code">{previewContent}</pre>
       ) : (
@@ -272,12 +272,12 @@ export function FrequencyTable({ rows }: { rows: FrequencyRow[] }) {
       </div>
       <div className="button-row dictionary-page-nav">
         <span className="helper-note">当前显示第 {safePage} / {totalPages} 页，每页 {pageSize} 条。</span>
-        <button type="button" className="toolbar-button ghost" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={safePage <= 1}>
+        <Button appearance="subtle" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={safePage <= 1}>
           上一页
-        </button>
-        <button type="button" className="toolbar-button ghost" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={safePage >= totalPages}>
+        </Button>
+        <Button appearance="subtle" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={safePage >= totalPages}>
           下一页
-        </button>
+        </Button>
       </div>
     </>
   );
@@ -320,7 +320,7 @@ export function ScatterChart({ rows }: { rows: DocumentClusterRow[] }) {
   const width = 320;
   const height = 240;
   const padding = 24;
-  const colors = ["#d6a84f", "#264653", "#2a9d8f", "#c65d3b", "#6d597a"];
+  const colors = ["#256f68", "#315a83", "#4f7d57", "#9a5b35", "#6c5f8f"];
 
   const plottedRows = useMemo(() => {
     if (!rows.length) {
@@ -351,9 +351,9 @@ export function ScatterChart({ rows }: { rows: DocumentClusterRow[] }) {
       return;
     }
     context.clearRect(0, 0, width, height);
-    context.fillStyle = "#f5efe2";
+    context.fillStyle = "#f8fafc";
     context.fillRect(0, 0, width, height);
-    context.strokeStyle = "#b9ad93";
+    context.strokeStyle = "#d6dee6";
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(padding, height / 2);
@@ -438,12 +438,12 @@ export function KeywordPanel({
       </div>
       <div className="button-row dictionary-page-nav">
         <span className="helper-note">特征词第 {safeFeaturePage} / {totalFeaturePages} 页，每页 {featurePageSize} 条。</span>
-        <button type="button" className="toolbar-button ghost" onClick={() => setFeaturePage((current) => Math.max(1, current - 1))} disabled={safeFeaturePage <= 1}>
+        <Button appearance="subtle" onClick={() => setFeaturePage((current) => Math.max(1, current - 1))} disabled={safeFeaturePage <= 1}>
           上一页
-        </button>
-        <button type="button" className="toolbar-button ghost" onClick={() => setFeaturePage((current) => Math.min(totalFeaturePages, current + 1))} disabled={safeFeaturePage >= totalFeaturePages}>
+        </Button>
+        <Button appearance="subtle" onClick={() => setFeaturePage((current) => Math.min(totalFeaturePages, current + 1))} disabled={safeFeaturePage >= totalFeaturePages}>
           下一页
-        </button>
+        </Button>
       </div>
       <PaginatedTable
         columns={["scope", "keyword", "score"]}
@@ -493,12 +493,12 @@ export function TopicPanel({
       </div>
       <div className="button-row dictionary-page-nav">
         <span className="helper-note">当前显示第 {safePage} / {totalPages} 页，每页 {pageSize} 条。</span>
-        <button type="button" className="toolbar-button ghost" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={safePage <= 1}>
+        <Button appearance="subtle" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={safePage <= 1}>
           上一页
-        </button>
-        <button type="button" className="toolbar-button ghost" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={safePage >= totalPages}>
+        </Button>
+        <Button appearance="subtle" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={safePage >= totalPages}>
           下一页
-        </button>
+        </Button>
       </div>
     </>
   );

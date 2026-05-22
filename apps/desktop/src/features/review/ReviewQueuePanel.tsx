@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Button, Textarea } from "@fluentui/react-components";
 import { Panel } from "../../ui";
 import {
   reviewTaskStatusLabel,
@@ -82,8 +83,8 @@ export function ReviewQueuePanel({ tasks, loading = false, onResolve, onReject }
         <div className="two-column">
           <div className="stack-list">
             {orderedTasks.map((task) => (
-              <button
-                type="button"
+              <Button
+                appearance="subtle"
                 key={task.review_id}
                 className={`project-card ${task.review_id === selectedReviewId ? "is-selected" : ""}`}
                 onClick={() => setSelectedReviewId(task.review_id)}
@@ -97,7 +98,7 @@ export function ReviewQueuePanel({ tasks, loading = false, onResolve, onReject }
                 </div>
                 <p className="muted">{task.review_type}</p>
                 <p>{reviewTaskSummary(task)}</p>
-              </button>
+              </Button>
             ))}
           </div>
           <div className="stack-list">
@@ -122,31 +123,29 @@ export function ReviewQueuePanel({ tasks, loading = false, onResolve, onReject }
                 </div>
                 <label className="search-box">
                   <span>处理备注</span>
-                  <textarea
+                  <Textarea
                     value={notes}
-                    onChange={(event) => setNotes(event.target.value)}
+                    onChange={(_, data) => setNotes(data.value)}
                     rows={4}
                     placeholder="例如：确认写入项目自定义词表，不改内置词库。"
                     disabled={loading || pendingDecision !== null}
                   />
                 </label>
                 <div className="button-row">
-                  <button
-                    type="button"
-                    className="toolbar-button accent"
+                  <Button
+                    appearance="primary"
                     onClick={() => void handleDecision("resolve")}
                     disabled={loading || pendingDecision !== null || selectedTask.status !== "open"}
                   >
                     Resolve
-                  </button>
-                  <button
-                    type="button"
-                    className="toolbar-button ghost"
+                  </Button>
+                  <Button
+                    appearance="subtle"
                     onClick={() => void handleDecision("reject")}
                     disabled={loading || pendingDecision !== null || selectedTask.status !== "open"}
                   >
                     Reject
-                  </button>
+                  </Button>
                 </div>
                 {selectedTask.resolution && (
                   <div className="status-panel">

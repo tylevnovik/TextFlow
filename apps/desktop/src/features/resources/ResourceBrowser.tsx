@@ -4,6 +4,7 @@ import type {
   IngestionSpec,
   ProjectManifest
 } from "@textflow/shared-types";
+import { Button } from "@fluentui/react-components";
 import { MiniMetric, Panel, Table } from "../../ui";
 
 export interface ResourceBrowserProps {
@@ -69,12 +70,12 @@ export function ResourceBrowser({
       className="resource-browser-panel"
       actions={
         <div className="button-row">
-          <button type="button" className="toolbar-button ghost" onClick={handleSaveIngestionSpec} disabled={loading || !onSaveIngestionSpec}>
+          <Button appearance="subtle" onClick={handleSaveIngestionSpec} disabled={loading || !onSaveIngestionSpec}>
             保存导入规格
-          </button>
-          <button type="button" className="toolbar-button" onClick={handleCreateCorpusView} disabled={loading || !onCreateCorpusView}>
+          </Button>
+          <Button onClick={handleCreateCorpusView} disabled={loading || !onCreateCorpusView}>
             创建当前视图
-          </button>
+          </Button>
         </div>
       }
     >
@@ -98,9 +99,9 @@ export function ResourceBrowser({
                   <p className="muted">{filterSummary(view.filter_spec)}</p>
                   <p className="muted">包含 {view.doc_ids?.length ?? corpus.length} 篇文档 · {view.resource_ids.length} 个资源</p>
                 </div>
-                <button type="button" className="toolbar-button compact" onClick={() => onOpenCorpusView?.(view)} disabled={loading}>
+                <Button size="small" onClick={() => onOpenCorpusView?.(view)} disabled={loading}>
                   打开视图
-                </button>
+                </Button>
               </article>
             ))}
             {!project.corpus_views.length && (

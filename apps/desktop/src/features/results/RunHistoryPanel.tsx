@@ -1,4 +1,5 @@
 import type { ExperimentSpec, RunRecord } from "@textflow/shared-types";
+import { Button } from "@fluentui/react-components";
 import { MiniMetric, Panel } from "../../ui";
 import {
   runArtifactKey,
@@ -18,6 +19,7 @@ export interface RunHistoryPanelProps {
   reviewTasks: ReviewTaskRecord[];
   experiments: ExperimentSpec[];
   loading?: boolean;
+  onOpenRun?: (run: RunRecord) => void;
   onCompareRuns?: (leftRunId: string, rightRunId: string) => Promise<void> | void;
 }
 
@@ -34,6 +36,7 @@ export function RunHistoryPanel({
   reviewTasks,
   experiments,
   loading = false,
+  onOpenRun,
   onCompareRuns
 }: RunHistoryPanelProps) {
   const recentRuns = runs.slice().reverse().slice(0, 24);
@@ -46,14 +49,13 @@ export function RunHistoryPanel({
       title="历史运行记录"
       className="run-history-panel"
       actions={
-        <button
-          type="button"
-          className="toolbar-button ghost"
+        <Button
+          appearance="subtle"
           onClick={() => latestRun && previousRun ? void onCompareRuns?.(previousRun.run_id, latestRun.run_id) : undefined}
           disabled={loading || !onCompareRuns || !latestRun || !previousRun}
         >
           比较最近两次
-        </button>
+        </Button>
       }
     >
       <div className="surface-metric-row">
@@ -72,6 +74,11 @@ export function RunHistoryPanel({
               <div className="run-head">
                 <strong>{run.run_id}</strong>
                 <div className="button-row">
+                  {onOpenRun && (
+                    <Button size="small" appearance="subtle" onClick={() => onOpenRun(run)} disabled={loading}>
+                      打开
+                    </Button>
+                  )}
                   {openReviewCount > 0 && <span className="badge warning">{openReviewCount} open review</span>}
                   <span className={`badge ${run.status}`}>{run.status}</span>
                 </div>

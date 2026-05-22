@@ -1,4 +1,30 @@
 import { memo, useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
+import type { DragEvent as ReactDragEvent } from "react";
+import {
+  Button,
+  Checkbox,
+  DataGrid,
+  DataGridBody,
+  DataGridCell,
+  DataGridHeader,
+  DataGridHeaderCell,
+  DataGridRow,
+  Input,
+  Select,
+  Switch,
+  Tab,
+  TabList,
+  Textarea,
+  Toolbar,
+  ToolbarButton,
+  createTableColumn,
+  type TableColumnDefinition
+} from "@fluentui/react-components";
+import {
+  ChevronLeftRegular,
+  ChevronRightRegular,
+  SearchRegular
+} from "@fluentui/react-icons";
 import type {
   CorpusItem,
   DictionaryCollection,
@@ -28,7 +54,21 @@ import type {
 import { sourceProfileImportTemplates, sourceProfiles } from "@textflow/shared-types";
 import type { ImportProjectFilesResponse } from "./bridge/desktopBridge";
 import { ArtifactBrowser } from "./features/artifacts/ArtifactBrowser";
-import { RunHistoryPanel } from "./features/results/RunHistoryPanel";
+import { CorpusWorkspace } from "./features/corpus/CorpusWorkspace";
+import { LexiconWorkspace } from "./features/lexicon/LexiconWorkspace";
+import { WorkflowWorkspace } from "./features/workflow/WorkflowWorkspace";
+import {
+  WORKFLOW_NODE_TYPE_MIME,
+  WORKFLOW_WORKBENCH_ACTION_EVENT,
+  type WorkflowWorkbenchAction
+} from "./features/workflow/workflowWorkbenchActions";
+import { ReportPreviewPage } from "./features/runs/ReportPreviewPage";
+import { RunArtifactsPage } from "./features/runs/RunArtifactsPage";
+import {
+  parseWorkbenchSelectionPayload,
+  WORKBENCH_SELECTION_MIME,
+  type WorkbenchSelection
+} from "./app/workbenchSelection";
 import { runArtifactCompactSummary } from "./runArtifacts";
 import { useTaskProgress, useWorkspace } from "./store/workspaceStore";
 import {
@@ -67,6 +107,7 @@ import {
 } from "./ui";
 import type { DocumentPreviewMode } from "./ui";
 import { renderWorkflowNodeInlineEditor, renderWorkflowNodePreview } from "./workflowNodeRegistry";
+import { builtinWorkflowToolboxDefinitions } from "./workflowNodeCatalog";
 
 const mappingTargetOptions: FieldMappingRule["target_field"][] = [
   "doc_id",
@@ -245,12 +286,6 @@ const outputBundleCards: Array<{
 ];
 const sampleProjectName = "示例项目 - 学术摘要机构主题";
 const CORPUS_BROWSER_PAGE_SIZE = 12;
-const sampleJourneySteps = [
-  "先打开示例项目，在“导入资料”里抽查 3 个来源文件和导入后的文档。",
-  "再到“词表规则”看 8 张词表分别在切词、统一写法和套用词表时怎么生效。",
-  "然后到“处理与分析”直接运行默认流程，不需要自己拼步骤顺序。",
-  "最后到“结果导出”查看词频、共现、聚类和 HTML 报告，再导出 `.tfproj` 项目包。"
-] as const;
 const dictionaryGuideMap: Record<
   DictionaryKind,
   {
@@ -328,15 +363,94 @@ const dictionaryGuideMap: Record<
   }
 };
 
-export const pageMeta: Record<PageId, { title: string; headline: string; tag: string }> = {
-  home: { title: "开始", headline: "先选一个项目，或新建一个项目", tag: "开始" },
-  project: { title: "项目概览", headline: "查看项目规模、来源文件和历史运行", tag: "概览" },
-  data: { title: "导入资料", headline: "把文件导入进来，并确认字段对应关系", tag: "导入" },
-  workflow: { title: "处理与分析", headline: "确认处理步骤，然后开始运行", tag: "处理" },
-  dictionaries: { title: "词表规则", headline: "维护停用词、同义词和标准词规则", tag: "词表" },
-  results: { title: "结果导出", headline: "查看本次运行，并导出需要的结果", tag: "结果" },
-  report: { title: "报告预览", headline: "预览 HTML 报告结构和摘要", tag: "报告" },
-  settings: { title: "设置", headline: "查看默认偏好和本地配置", tag: "设置" }
+export type WorkbenchActivityId =
+  | "home"
+  | "project"
+  | "corpus"
+  | "lexicon"
+  | "workflow_graph"
+  | "run_artifacts"
+  | "report"
+  | "settings";
+
+export type WorkbenchSurfaceRole = "core" | "support" | "system";
+
+export interface PageActivityMeta {
+  title: string;
+  headline: string;
+  tag: string;
+  activity: WorkbenchActivityId;
+  role: WorkbenchSurfaceRole;
+  surfaceLabel: string;
+}
+
+export const workbenchPrimaryPages: PageId[] = ["home", "project", "data", "dictionaries", "workflow", "results", "settings"];
+
+export const pageMeta: Record<PageId, PageActivityMeta> = {
+  home: {
+    title: "开始",
+    headline: "管理本地项目仓库",
+    tag: "开始",
+    activity: "home",
+    role: "system",
+    surfaceLabel: "项目管理"
+  },
+  project: {
+    title: "项目",
+    headline: "查看三核心对象、来源文件和历史运行",
+    tag: "项目",
+    activity: "project",
+    role: "core",
+    surfaceLabel: "项目概览"
+  },
+  data: {
+    title: "语料",
+    headline: "管理导入批次、字段映射、主文本和文档视图",
+    tag: "语料",
+    activity: "corpus",
+    role: "core",
+    surfaceLabel: "语料工作面"
+  },
+  workflow: {
+    title: "节点图",
+    headline: "用节点引用语料和词库，并运行可复现流程",
+    tag: "节点图",
+    activity: "workflow_graph",
+    role: "core",
+    surfaceLabel: "节点图工作面"
+  },
+  dictionaries: {
+    title: "词库",
+    headline: "维护停用词、同义词、标准词和排除规则",
+    tag: "词库",
+    activity: "lexicon",
+    role: "core",
+    surfaceLabel: "词库工作面"
+  },
+  results: {
+    title: "运行产物",
+    headline: "查看运行历史、产物和导出动作",
+    tag: "支撑",
+    activity: "run_artifacts",
+    role: "support",
+    surfaceLabel: "运行支撑面"
+  },
+  report: {
+    title: "报告预览",
+    headline: "预览 HTML 报告结构和摘要",
+    tag: "报告",
+    activity: "report",
+    role: "support",
+    surfaceLabel: "产物预览"
+  },
+  settings: {
+    title: "设置",
+    headline: "查看默认偏好和本地配置",
+    tag: "设置",
+    activity: "settings",
+    role: "system",
+    surfaceLabel: "应用设置"
+  }
 };
 
 function cloneTemplate(template: ImportTemplate): ImportTemplate {
@@ -538,16 +652,6 @@ function cloneCorpusItem(doc: CorpusItem): CorpusItem {
 
 function previewSummary(doc: CorpusItem): string {
   return doc.raw_text.length > 72 ? `${doc.raw_text.slice(0, 72)}...` : doc.raw_text;
-}
-
-function joinFsPath(basePath: string, relativePath: string): string {
-  const normalizedBase = basePath.replace(/[\\/]+$/, "");
-  const normalizedRelative = relativePath.replace(/^[\\/]+/, "").replace(/\//g, "\\");
-  return `${normalizedBase}\\${normalizedRelative}`;
-}
-
-function fileNameFromPath(path: string): string {
-  return path.split(/[\\/]/).at(-1) ?? path;
 }
 
 function normalizeRuntimeProfileDraft(runtimeProfile: WorkflowRuntimeProfile): WorkflowRuntimeProfile {
@@ -804,10 +908,6 @@ function workflowNodeBadge(node: WorkflowNodeInstance, validation?: WorkflowVali
   return stepId === "analysis" ? "分析" : "处理";
 }
 
-function workflowNodeTitle(nodeType: WorkflowNodeInstance["node_type"]): string {
-  return workflowNodeDefinition(nodeType).label;
-}
-
 const workflowCanvasNodeWidth = 220;
 const workflowCanvasNodeHeight = 190;
 const workflowCanvasPadding = 160;
@@ -842,8 +942,6 @@ function loadPersistedWorkflowEditorState(
 ): {
   selectedNodeId?: string;
   selectedEdgeId?: string;
-  dockView?: "library" | "nodes" | "status";
-  dockCollapsed?: boolean;
   documentPickerQuery?: string;
 } | null {
   if (typeof window === "undefined") {
@@ -854,8 +952,6 @@ function loadPersistedWorkflowEditorState(
     return raw ? JSON.parse(raw) as {
       selectedNodeId?: string;
       selectedEdgeId?: string;
-      dockView?: "library" | "nodes" | "status";
-      dockCollapsed?: boolean;
       documentPickerQuery?: string;
     } : null;
   } catch {
@@ -913,6 +1009,17 @@ function workflowFitViewport(_nodes: WorkflowNodeInstance[]) {
   };
 }
 
+function workflowViewportNeedsInitialFit(workflow: WorkflowDefinition, hasPersistedDraft: boolean): boolean {
+  if (!workflow.nodes.length) {
+    return false;
+  }
+  if (!hasPersistedDraft) {
+    return true;
+  }
+  const viewport = workflow.viewport;
+  return Math.abs(viewport.x ?? 0) < 1 && Math.abs(viewport.y ?? 0) < 1;
+}
+
 function workflowCanvasOrigin(_metrics: ReturnType<typeof workflowCanvasMetrics>) {
   return {
     x: workflowCanvasBaseOriginX,
@@ -923,11 +1030,52 @@ function workflowCanvasOrigin(_metrics: ReturnType<typeof workflowCanvasMetrics>
 function workflowMiniMapMetrics(metrics: ReturnType<typeof workflowCanvasMetrics>) {
   const maxWidth = 220;
   const maxHeight = 150;
-  const scale = Math.min(maxWidth / metrics.width, maxHeight / metrics.height);
+  const boundsPadding = 120;
+  const originX = workflowCanvasBaseOriginX + metrics.minX - boundsPadding;
+  const originY = workflowCanvasBaseOriginY + metrics.minY - boundsPadding;
+  const worldWidth = Math.max(1, metrics.maxX - metrics.minX + boundsPadding * 2);
+  const worldHeight = Math.max(1, metrics.maxY - metrics.minY + boundsPadding * 2);
+  const scale = Math.min(maxWidth / worldWidth, maxHeight / worldHeight);
   return {
+    originX,
+    originY,
     scale,
-    width: metrics.width * scale,
-    height: metrics.height * scale
+    width: worldWidth * scale,
+    height: worldHeight * scale
+  };
+}
+
+function workflowMiniMapViewportRect(
+  viewportWorldRect: { x: number; y: number; width: number; height: number },
+  miniMap: ReturnType<typeof workflowMiniMapMetrics>
+) {
+  const rawLeft = (viewportWorldRect.x - miniMap.originX) * miniMap.scale;
+  const rawTop = (viewportWorldRect.y - miniMap.originY) * miniMap.scale;
+  const rawRight = (viewportWorldRect.x + viewportWorldRect.width - miniMap.originX) * miniMap.scale;
+  const rawBottom = (viewportWorldRect.y + viewportWorldRect.height - miniMap.originY) * miniMap.scale;
+  const clampedLeft = Math.max(0, Math.min(miniMap.width, Math.min(rawLeft, rawRight)));
+  const clampedTop = Math.max(0, Math.min(miniMap.height, Math.min(rawTop, rawBottom)));
+  const clampedRight = Math.max(0, Math.min(miniMap.width, Math.max(rawLeft, rawRight)));
+  const clampedBottom = Math.max(0, Math.min(miniMap.height, Math.max(rawTop, rawBottom)));
+  const width = Math.min(miniMap.width, Math.max(6, clampedRight - clampedLeft));
+  const height = Math.min(miniMap.height, Math.max(6, clampedBottom - clampedTop));
+  return {
+    left: Math.max(0, Math.min(miniMap.width - width, clampedLeft)),
+    top: Math.max(0, Math.min(miniMap.height - height, clampedTop)),
+    width,
+    height
+  };
+}
+
+function workflowViewportWorldRect(
+  viewport: { x: number; y: number; zoom: number },
+  canvasViewportSize: { width: number; height: number }
+) {
+  return {
+    x: -viewport.x / viewport.zoom,
+    y: -viewport.y / viewport.zoom,
+    width: Math.max(120, (canvasViewportSize.width || 920) / viewport.zoom),
+    height: Math.max(80, (canvasViewportSize.height || 640) / viewport.zoom)
   };
 }
 
@@ -986,6 +1134,11 @@ function workflowPortLabel(
 ): string {
   const port = node?.[direction].find((item) => item.port_id === portId);
   return port?.label ?? port?.port_id ?? portId;
+}
+
+function workflowPortTitle(port: WorkflowNodeInstance["inputs"][number]): string {
+  const label = port.label ?? port.port_id;
+  return `${label} · ${port.port_type} · ${port.port_id}`;
 }
 
 function workflowPortType(
@@ -1317,22 +1470,48 @@ function corpusMatchesRunScope(item: CorpusItem, scope: RunScopeDefinition): boo
   return true;
 }
 
-export const PageView = memo(function PageView({ page }: { page: PageId }) {
+interface PageViewProps {
+  page: PageId;
+  workbenchSelection?: WorkbenchSelection;
+  onWorkbenchSelect?: (selection: WorkbenchSelection) => void;
+}
+
+export const PageView = memo(function PageView({ page, workbenchSelection, onWorkbenchSelect }: PageViewProps) {
   switch (page) {
     case "home":
       return <HomePage />;
     case "project":
       return <ProjectPage />;
     case "data":
-      return <DataPage />;
+      return (
+        <DataPage
+          workbenchSelection={workbenchSelection}
+          onWorkbenchSelect={onWorkbenchSelect}
+        />
+      );
     case "workflow":
-      return <WorkflowEditorPage />;
+      return (
+        <WorkflowEditorPage
+          workbenchSelection={workbenchSelection}
+          onWorkbenchSelect={onWorkbenchSelect}
+        />
+      );
     case "dictionaries":
-      return <DictionariesPage />;
+      return (
+        <DictionariesPage
+          workbenchSelection={workbenchSelection}
+          onWorkbenchSelect={onWorkbenchSelect}
+        />
+      );
     case "results":
-      return <ResultsPage />;
+      return (
+        <RunArtifactsPage
+          workbenchSelection={workbenchSelection}
+          onWorkbenchSelect={onWorkbenchSelect}
+        />
+      );
     case "report":
-      return <ReportPage />;
+      return <ReportPreviewPage />;
     case "settings":
       return <SettingsPage />;
     default:
@@ -1407,70 +1586,66 @@ function HomePage() {
 
   return (
     <>
-      <Panel className="hero-panel">
-        <div className="hero-copy">
-          <p className="eyebrow">第 1 步</p>
-          <h3>先新建一个项目，或打开仓库里的现有项目。</h3>
-          <p>TextFlow 会把语料、词表、流程和结果都收进一个 `.tfproj` 项目包里，方便继续编辑、备份和交接。</p>
-          <ul className="feature-list">
-            <li>从零开始时，先新建空白项目，再去“导入资料”。</li>
-            <li>接着别人做过的项目时，直接导入 `.tfproj` 项目包。</li>
-            <li>第一次上手时，建议先打开示例项目，看完整流程怎么跑一遍。</li>
-          </ul>
-        </div>
-        <div className="hero-actions">
-          <label className="field">
-            <span>项目名称</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} />
-          </label>
-          <label className="field">
-            <span>项目描述</span>
-            <textarea value={description} rows={4} onChange={(event) => setDescription(event.target.value)} />
-          </label>
-          <div className="button-row hero-action-grid">
-            <button
-              type="button"
-              className="toolbar-button accent"
+      <Panel className="project-manager-panel">
+        <div className="project-manager-head">
+          <div>
+            <p className="eyebrow">项目仓库</p>
+            <h3>{currentProject ? currentProject.name : "本地 TextFlow 项目"}</h3>
+            <p className="helper-note">
+              {currentProject
+                ? `${snapshot.corpus.length} 篇文档 · ${currentProject.run_history.length} 次运行 · ${currentProject.workflow_definitions.length} 张节点图`
+                : "新建、导入或打开一个 .tfproj 项目。"}
+            </p>
+          </div>
+          <div className="button-row project-manager-shortcuts">
+            <Button
+              appearance="primary"
               onClick={() => void createProject(name, description)}
               disabled={loading || !name.trim()}
             >
               新建空白项目
-            </button>
-            <button type="button" className="toolbar-button" onClick={() => void handleImportPackage()} disabled={loading}>
-              导入 .tfproj 项目包
-            </button>
-            <button
-              type="button"
-              className="toolbar-button"
-              onClick={() => sampleProject ? void openProjectAndGo(sampleProject.id, "data") : undefined}
-              disabled={loading || !sampleProject}
-            >
-              打开示例项目
-            </button>
-            <button
-              type="button"
-              className="toolbar-button ghost"
+            </Button>
+            <Button onClick={() => void handleImportPackage()} disabled={loading}>
+              导入 .tfproj
+            </Button>
+            {sampleProject && (
+              <Button appearance="subtle" onClick={() => void openProjectAndGo(sampleProject.id)} disabled={loading}>
+                打开示例
+              </Button>
+            )}
+            <Button
+              appearance="subtle"
               onClick={() => void handleExportPackage()}
               disabled={loading || !currentProject}
             >
-              导出当前项目包
-            </button>
+              导出项目包
+            </Button>
           </div>
-          <p className="helper-note">
-            {currentProject
-              ? `当前正在处理：${currentProject.name}`
-              : "还没有打开项目。新建或导入后，这里会自动接着往下走。"}
-          </p>
+        </div>
+        <div className="project-manager-form">
+          <label className="field">
+            <span>项目名称</span>
+            <Input value={name} onChange={(_, data) => setName(data.value)} />
+          </label>
+          <label className="field">
+            <span>项目描述</span>
+            <Textarea value={description} rows={2} onChange={(_, data) => setDescription(data.value)} />
+          </label>
         </div>
       </Panel>
 
-      <div className="two-column home-overview-grid">
-        <Panel title="仓库内项目" actions={<span className="pill">共 {snapshot.recent_projects.length} 个</span>}>
+      <div className="home-overview-grid">
+        <Panel
+          title="仓库内项目"
+          className="project-library-panel"
+          actions={<span className="pill">共 {snapshot.recent_projects.length} 个</span>}
+        >
           <label className="search-box">
             <span>按项目名、说明或路径筛选</span>
-            <input
+            <Input
+              contentBefore={<SearchRegular />}
               value={projectQuery}
-              onChange={(event) => setProjectQuery(event.target.value)}
+              onChange={(_, data) => setProjectQuery(data.value)}
               placeholder="例如：示例项目 / battery / tfproj"
             />
           </label>
@@ -1499,25 +1674,23 @@ function HomePage() {
                   </div>
                   <p className="project-path">{project.path}</p>
                   <div className="button-row">
-                    <button type="button" className="toolbar-button" onClick={() => void openProject(project.id)} disabled={loading}>
+                    <Button onClick={() => void openProject(project.id)} disabled={loading}>
                       打开
-                    </button>
-                    <button
-                      type="button"
-                      className="toolbar-button ghost"
+                    </Button>
+                    <Button
+                      appearance="subtle"
                       onClick={() => void duplicateProject(project.id, `${project.name} 副本`)}
                       disabled={loading}
                     >
                       复制
-                    </button>
-                    <button
-                      type="button"
-                      className="toolbar-button danger ghost"
+                    </Button>
+                    <Button
+                      appearance="subtle"
                       onClick={() => void handleDeleteProject(project.id, project.name)}
                       disabled={loading}
                     >
                       删除
-                    </button>
+                    </Button>
                   </div>
                 </article>
               ))
@@ -1530,36 +1703,6 @@ function HomePage() {
           </div>
         </Panel>
 
-        <div className="stack-list">
-          <Panel title="第一次使用可以这样走">
-            <ul className="feature-list">
-              {sampleJourneySteps.map((step) => (
-                <li key={step}>{step}</li>
-              ))}
-            </ul>
-            {sampleProject && (
-              <div className="button-row">
-                <button type="button" className="toolbar-button" onClick={() => void openProjectAndGo(sampleProject.id, "data")} disabled={loading}>
-                  打开示例并看资料
-                </button>
-                <button type="button" className="toolbar-button ghost" onClick={() => void openProjectAndGo(sampleProject.id, "dictionaries")} disabled={loading}>
-                  打开示例并看词表
-                </button>
-                <button type="button" className="toolbar-button ghost" onClick={() => void openProjectAndGo(sampleProject.id, "workflow")} disabled={loading}>
-                  打开示例并看流程
-                </button>
-              </div>
-            )}
-          </Panel>
-
-          <Panel title="项目包说明">
-            <ul className="feature-list">
-              <li>`.tfproj` 是单文件项目包，适合发同事、备份和归档。</li>
-              <li>“仓库内项目”显示的是当前工作区里已经存在的项目，不只是最近打开过的项目。</li>
-              <li>如果项目很多，先用上面的筛选框，再决定打开、复制或删除。</li>
-            </ul>
-          </Panel>
-        </div>
       </div>
     </>
   );
@@ -1603,9 +1746,9 @@ function ProjectPage() {
         <Panel
           title="源文件与最近运行"
           actions={
-            <button type="button" className="toolbar-button ghost" onClick={() => setActivePage("results")}>
+            <Button appearance="subtle" onClick={() => setActivePage("results")}>
               查看历史记录
-            </button>
+            </Button>
           }
         >
           <ul className="micro-list">
@@ -1660,13 +1803,21 @@ function ProjectPage() {
   );
 }
 
-function DataPage() {
+function DataPage({
+  workbenchSelection,
+  onWorkbenchSelect
+}: {
+  workbenchSelection?: WorkbenchSelection;
+  onWorkbenchSelect?: (selection: WorkbenchSelection) => void;
+}) {
   const {
     state: { snapshot, loading },
+    createCorpusView,
     deleteCorpusDocument,
     pickImportFiles,
     importProjectFiles,
     saveProject,
+    setActivePage,
     updateCorpusDocument
   } = useWorkspace();
   const project = snapshot.current_project;
@@ -1716,11 +1867,64 @@ function DataPage() {
     setDocumentPage(1);
   }, [documents.length, searchMode]);
 
+  useEffect(() => {
+    if (workbenchSelection?.kind !== "corpus_document" || workbenchSelection.docId === selectedDocId) {
+      return;
+    }
+    const selectedDocument = snapshot.corpus.find((item) => item.doc_id === workbenchSelection.docId);
+    if (!selectedDocument) {
+      return;
+    }
+    setSelectedDocId(selectedDocument.doc_id);
+    setDraftDocument(cloneCorpusItem(selectedDocument));
+    setPreviewMode("raw_text");
+  }, [selectedDocId, snapshot.corpus, workbenchSelection]);
+
   const totalDocumentPages = Math.max(1, Math.ceil(documents.length / CORPUS_BROWSER_PAGE_SIZE));
   const safeDocumentPage = Math.min(documentPage, totalDocumentPages);
   const visibleDocuments = useMemo(
     () => documents.slice((safeDocumentPage - 1) * CORPUS_BROWSER_PAGE_SIZE, safeDocumentPage * CORPUS_BROWSER_PAGE_SIZE),
     [documents, safeDocumentPage]
+  );
+  const corpusColumns = useMemo<TableColumnDefinition<CorpusItem>[]>(
+    () => [
+      createTableColumn<CorpusItem>({
+        columnId: "title",
+        compare: (a, b) => (a.title || a.doc_id).localeCompare(b.title || b.doc_id),
+        renderHeaderCell: () => "文档",
+        renderCell: (item) => (
+          <div className="corpus-grid-title-cell">
+            <strong>{item.title || item.doc_id}</strong>
+            <span>{previewSummary(item)}</span>
+          </div>
+        )
+      }),
+      createTableColumn<CorpusItem>({
+        columnId: "year",
+        compare: (a, b) => (a.year ?? 0) - (b.year ?? 0),
+        renderHeaderCell: () => "年份",
+        renderCell: (item) => item.year ?? "未标年"
+      }),
+      createTableColumn<CorpusItem>({
+        columnId: "source",
+        compare: (a, b) => (a.institution ?? a.source ?? "").localeCompare(b.institution ?? b.source ?? ""),
+        renderHeaderCell: () => "机构 / 来源",
+        renderCell: (item) => item.institution ?? item.source ?? "未填写"
+      }),
+      createTableColumn<CorpusItem>({
+        columnId: "profile",
+        compare: (a, b) => a.source_profile.localeCompare(b.source_profile),
+        renderHeaderCell: () => "资料类型",
+        renderCell: (item) => item.source_profile
+      }),
+      createTableColumn<CorpusItem>({
+        columnId: "status",
+        compare: (a, b) => a.status.localeCompare(b.status),
+        renderHeaderCell: () => "状态",
+        renderCell: (item) => <span className={`badge ${item.status}`}>{item.status}</span>
+      })
+    ],
+    []
   );
 
   if (!project || !draftTemplate) {
@@ -1795,6 +1999,28 @@ function DataPage() {
     setSelectedDocId(doc.doc_id);
     setDraftDocument(cloneCorpusItem(doc));
     setPreviewMode("raw_text");
+    onWorkbenchSelect?.({ kind: "corpus_document", projectId: project.id, docId: doc.doc_id });
+  };
+
+  const handleCreateCorpusView = async () => {
+    await createCorpusView({
+      name: search.trim() ? `语料视图：${search.trim()}` : "当前语料视图",
+      resource_ids: (project.corpus_resources ?? []).map((resource) => resource.id),
+      filter_spec: {
+        search: search.trim(),
+        search_mode: searchMode
+      },
+      doc_ids: documents.map((doc) => doc.doc_id)
+    });
+  };
+
+  const handleSendToWorkflow = () => {
+    onWorkbenchSelect?.({
+      kind: "workflow",
+      projectId: project.id,
+      workflowId: project.active_workflow_id || project.workflow_definitions[0]?.workflow_id || "active-workflow"
+    });
+    setActivePage?.("workflow");
   };
 
   const handleSaveDocument = async () => {
@@ -1815,25 +2041,34 @@ function DataPage() {
   };
 
   return (
-    <>
+    <CorpusWorkspace
+      project={project}
+      corpus={snapshot.corpus}
+      loading={loading}
+      canSaveImportSpec={canSaveTemplate}
+      canCreateView={documents.length > 0}
+      onImportFiles={handlePickFiles}
+      onSaveImportSpec={handleSaveTemplate}
+      onCreateCorpusView={handleCreateCorpusView}
+      onSendToWorkflow={handleSendToWorkflow}
+    >
       <Panel
-        title="第 2 步：导入资料"
+        title="语料导入与审查"
         actions={
           <div className="button-row">
-            <button type="button" className="toolbar-button" onClick={() => void handleSaveTemplate()} disabled={!canSaveTemplate}>
+            <Button onClick={() => void handleSaveTemplate()} disabled={!canSaveTemplate}>
               保存模板
-            </button>
-            <button
-              type="button"
-              className="toolbar-button ghost"
+            </Button>
+            <Button
+              appearance="subtle"
               onClick={() => setDraftTemplate(buildTemplateFromProfile(draftTemplate, draftTemplate.source_profile))}
               disabled={loading}
             >
               套用预设
-            </button>
-            <button type="button" className="toolbar-button ghost" onClick={() => setShowTemplateEditor((current) => !current)}>
+            </Button>
+            <Button appearance="subtle" onClick={() => setShowTemplateEditor((current) => !current)}>
               {showTemplateEditor ? "收起高级字段设置" : "展开高级字段设置"}
-            </button>
+            </Button>
           </div>
         }
       >
@@ -1855,14 +2090,14 @@ function DataPage() {
         <div className="settings-grid compact-settings-grid">
           <label className="field">
             <span>模板名称</span>
-            <input
+            <Input
               value={draftTemplate.name}
-              onChange={(event) => setDraftTemplate({ ...draftTemplate, name: event.target.value })}
+              onChange={(_, data) => setDraftTemplate({ ...draftTemplate, name: data.value })}
             />
           </label>
           <label className="field">
             <span>资料类型预设</span>
-            <select
+            <Select
               value={draftTemplate.source_profile}
               onChange={(event) =>
                 setDraftTemplate({
@@ -1876,18 +2111,18 @@ function DataPage() {
                   {label}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
           <label className="field">
             <span>正文来源字段</span>
-            <input
+            <Input
               value={draftTemplate.text_build.fields.join(", ")}
-              onChange={(event) =>
+              onChange={(_, data) =>
                 setDraftTemplate({
                   ...draftTemplate,
                   text_build: {
                     ...draftTemplate.text_build,
-                    fields: event.target.value.split(",").map((field) => field.trim()).filter(Boolean)
+                    fields: data.value.split(",").map((field) => field.trim()).filter(Boolean)
                   }
                 })
               }
@@ -1896,30 +2131,30 @@ function DataPage() {
           </label>
           <label className="field">
             <span>说明</span>
-            <input
+            <Input
               value={draftTemplate.description ?? ""}
-              onChange={(event) => setDraftTemplate({ ...draftTemplate, description: event.target.value })}
+              onChange={(_, data) => setDraftTemplate({ ...draftTemplate, description: data.value })}
             />
           </label>
         </div>
 
         <label className="field">
           <span>待导入文件</span>
-          <textarea
+          <Textarea
             rows={4}
             value={filePathsText}
-            onChange={(event) => setFilePathsText(event.target.value)}
+            onChange={(_, data) => setFilePathsText(data.value)}
             placeholder={"每行一个文件路径，例如：\nC:\\data\\articles.xlsx\nC:\\data\\notes.txt"}
           />
         </label>
 
         <div className="button-row">
-          <button type="button" className="toolbar-button ghost" onClick={() => void handlePickFiles()} disabled={loading}>
+          <Button appearance="subtle" onClick={() => void handlePickFiles()} disabled={loading}>
             选择文件
-          </button>
-          <button type="button" className="toolbar-button accent" onClick={() => void handleImport()} disabled={!canImport}>
+          </Button>
+          <Button appearance="primary" onClick={() => void handleImport()} disabled={!canImport}>
             开始导入
-          </button>
+          </Button>
         </div>
 
         {templateSummary.issues.length ? (
@@ -1959,14 +2194,14 @@ function DataPage() {
             <div className="settings-grid compact-settings-grid">
               <label className="field">
                 <span>连接符</span>
-                <input
+                <Input
                   value={draftTemplate.text_build.delimiter}
-                  onChange={(event) =>
+                  onChange={(_, data) =>
                     setDraftTemplate({
                       ...draftTemplate,
                       text_build: {
                         ...draftTemplate.text_build,
-                        delimiter: event.target.value
+                        delimiter: data.value
                       }
                     })
                   }
@@ -1976,12 +2211,12 @@ function DataPage() {
             <div className="mapping-editor">
               {draftTemplate.field_mappings.map((rule, index) => (
                 <div className="mapping-editor-row" key={index}>
-                  <input
+                  <Input
                     value={rule.source_field}
-                    onChange={(event) => updateMapping(index, { source_field: event.target.value })}
+                    onChange={(_, data) => updateMapping(index, { source_field: data.value })}
                     placeholder="源字段名"
                   />
-                  <select
+                  <Select
                     value={rule.target_field}
                     onChange={(event) => updateMapping(index, { target_field: event.target.value as FieldMappingRule["target_field"] })}
                   >
@@ -1990,12 +2225,12 @@ function DataPage() {
                         {target}
                       </option>
                     ))}
-                  </select>
-                  <input
+                  </Select>
+                  <Input
                     value={rule.aliases?.join(", ") ?? ""}
-                    onChange={(event) =>
+                    onChange={(_, data) =>
                       updateMapping(index, {
-                        aliases: event.target.value
+                        aliases: data.value
                           .split(",")
                           .map((alias) => alias.trim())
                           .filter(Boolean)
@@ -2003,29 +2238,25 @@ function DataPage() {
                     }
                     placeholder="别名，逗号分隔"
                   />
-                  <label className="switch-row compact">
-                    <input
-                      type="checkbox"
-                      checked={rule.required ?? false}
-                      onChange={(event) => updateMapping(index, { required: event.target.checked })}
-                    />
-                    <span>必填</span>
-                  </label>
-                  <button type="button" className="toolbar-button ghost" onClick={() => removeMapping(index)}>
+                  <Checkbox
+                    checked={rule.required ?? false}
+                    onChange={(_, data) => updateMapping(index, { required: Boolean(data.checked) })}
+                    label="必填"
+                  />
+                  <Button appearance="subtle" onClick={() => removeMapping(index)}>
                     删除
-                  </button>
+                  </Button>
                 </div>
               ))}
             </div>
             <div className="button-row">
-              <button
-                type="button"
-                className="toolbar-button ghost"
+              <Button
+                appearance="subtle"
                 onClick={() => setDraftTemplate({ ...draftTemplate, field_mappings: [...draftTemplate.field_mappings, emptyMappingRule()] })}
                 disabled={loading}
               >
                 新增映射
-              </button>
+              </Button>
             </div>
           </div>
         ) : null}
@@ -2035,52 +2266,92 @@ function DataPage() {
         <Panel
           title="已导入语料库"
           actions={
-            <div className="button-row">
+            <div className="corpus-grid-actions">
               <label className="search-box">
                 <span>{searchMode === "fulltext" ? "检索标题 / 正文 / 元数据" : "检索标题 / 元数据"}</span>
-                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="例如：智能制造 / patent / 复旦大学" />
+                <Input
+                  contentBefore={<SearchRegular />}
+                  value={search}
+                  onChange={(_, data) => setSearch(data.value)}
+                  placeholder="例如：智能制造 / patent / 复旦大学"
+                />
               </label>
-              <div className="tab-row">
-                <button type="button" className={`tab-button ${searchMode === "metadata" ? "is-active" : ""}`} onClick={() => setSearchMode("metadata")}>
+              <Toolbar aria-label="语料检索模式">
+                <ToolbarButton
+                  appearance={searchMode === "metadata" ? "primary" : "subtle"}
+                  onClick={() => setSearchMode("metadata")}
+                >
                   元数据优先
-                </button>
-                <button type="button" className={`tab-button ${searchMode === "fulltext" ? "is-active" : ""}`} onClick={() => setSearchMode("fulltext")}>
+                </ToolbarButton>
+                <ToolbarButton
+                  appearance={searchMode === "fulltext" ? "primary" : "subtle"}
+                  onClick={() => setSearchMode("fulltext")}
+                >
                   全文检索
-                </button>
-              </div>
+                </ToolbarButton>
+              </Toolbar>
             </div>
           }
         >
           {documents.length ? (
             <>
-              <div className="corpus-browser">
-                {visibleDocuments.map((item) => (
-                <button
-                  key={item.doc_id}
-                  type="button"
-                  className={`corpus-row ${selectedDocId === item.doc_id ? "is-active" : ""}`}
-                  onClick={() => handleSelectDocument(item)}
+              <div className="corpus-grid-shell">
+                <DataGrid
+                  items={visibleDocuments}
+                  columns={corpusColumns}
+                  sortable
+                  getRowId={(item) => item.doc_id}
+                  selectionMode="single"
+                  selectedItems={selectedDocId ? new Set([selectedDocId]) : new Set()}
+                  onSelectionChange={(_, data) => {
+                    const nextId = Array.from(data.selectedItems)[0];
+                    const nextDocument = snapshot.corpus.find((item) => item.doc_id === nextId);
+                    if (nextDocument) {
+                      handleSelectDocument(nextDocument);
+                    }
+                  }}
+                  aria-label="已导入语料库"
                 >
-                  <div className="run-head">
-                    <strong>{item.title || item.doc_id}</strong>
-                    <span className="pill">{item.year ?? "未标年"}</span>
-                  </div>
-                  <p className="muted">{item.institution ?? item.source ?? "未填写来源信息"}</p>
-                  <p className="body-copy">{previewSummary(item)}</p>
-                </button>
-                ))}
+                  <DataGridHeader>
+                    <DataGridRow selectionCell={{ "aria-label": "选择全部文档" }}>
+                      {({ renderHeaderCell }) => <DataGridHeaderCell>{renderHeaderCell()}</DataGridHeaderCell>}
+                    </DataGridRow>
+                  </DataGridHeader>
+                  <DataGridBody<CorpusItem>>
+                    {({ item, rowId }) => (
+                      <DataGridRow<CorpusItem>
+                        key={rowId}
+                        className={selectedDocId === item.doc_id ? "is-active" : undefined}
+                        selectionCell={{ "aria-label": `选择 ${item.title || item.doc_id}` }}
+                        onClick={() => handleSelectDocument(item)}
+                      >
+                        {({ renderCell }) => <DataGridCell>{renderCell(item)}</DataGridCell>}
+                      </DataGridRow>
+                    )}
+                  </DataGridBody>
+                </DataGrid>
               </div>
               <div className="button-row dictionary-page-nav">
                 <span className="helper-note">
                   当前显示第 {safeDocumentPage} / {totalDocumentPages} 页，
                   第 {documents.length ? (safeDocumentPage - 1) * CORPUS_BROWSER_PAGE_SIZE + 1 : 0} - {Math.min(safeDocumentPage * CORPUS_BROWSER_PAGE_SIZE, documents.length)} 条。
                 </span>
-                <button type="button" className="toolbar-button ghost" onClick={() => setDocumentPage((current) => Math.max(1, current - 1))} disabled={safeDocumentPage <= 1}>
+                <Button
+                  appearance="subtle"
+                  icon={<ChevronLeftRegular />}
+                  onClick={() => setDocumentPage((current) => Math.max(1, current - 1))}
+                  disabled={safeDocumentPage <= 1}
+                >
                   上一页
-                </button>
-                <button type="button" className="toolbar-button ghost" onClick={() => setDocumentPage((current) => Math.min(totalDocumentPages, current + 1))} disabled={safeDocumentPage >= totalDocumentPages}>
+                </Button>
+                <Button
+                  appearance="subtle"
+                  icon={<ChevronRightRegular />}
+                  onClick={() => setDocumentPage((current) => Math.min(totalDocumentPages, current + 1))}
+                  disabled={safeDocumentPage >= totalDocumentPages}
+                >
                   下一页
-                </button>
+                </Button>
               </div>
             </>
           ) : (
@@ -2092,12 +2363,12 @@ function DataPage() {
           title="文档审查与编辑"
           actions={
             <div className="button-row">
-              <button type="button" className="toolbar-button" onClick={() => void handleSaveDocument()} disabled={!canSaveDocument}>
+              <Button onClick={() => void handleSaveDocument()} disabled={!canSaveDocument}>
                 保存文档
-              </button>
-              <button type="button" className="toolbar-button ghost" onClick={() => void handleDeleteDocument()} disabled={loading || !draftDocument}>
+              </Button>
+              <Button appearance="subtle" onClick={() => void handleDeleteDocument()} disabled={loading || !draftDocument}>
                 删除文档
-              </button>
+              </Button>
             </div>
           }
         >
@@ -2108,20 +2379,21 @@ function DataPage() {
               <div className="settings-grid document-form-grid">
                 <label className="field">
                   <span>标题</span>
-                  <input
+                  <Input
                     value={draftDocument.title}
-                    onChange={(event) => setDraftDocument({ ...draftDocument, title: event.target.value })}
+                    onChange={(_, data) => setDraftDocument({ ...draftDocument, title: data.value })}
                     disabled={loading}
                   />
                 </label>
                 <label className="field">
                   <span>年份</span>
-                  <input
-                    value={draftDocument.year ?? ""}
-                    onChange={(event) =>
+                  <Input
+                    type="number"
+                    value={String(draftDocument.year ?? "")}
+                    onChange={(_, data) =>
                       setDraftDocument({
                         ...draftDocument,
-                        year: event.target.value.trim() ? Number(event.target.value) : null
+                        year: data.value.trim() ? Number(data.value) : null
                       })
                     }
                     disabled={loading}
@@ -2129,33 +2401,33 @@ function DataPage() {
                 </label>
                 <label className="field">
                   <span>机构</span>
-                  <input
+                  <Input
                     value={draftDocument.institution ?? ""}
-                    onChange={(event) => setDraftDocument({ ...draftDocument, institution: event.target.value })}
+                    onChange={(_, data) => setDraftDocument({ ...draftDocument, institution: data.value })}
                     disabled={loading}
                   />
                 </label>
                 <label className="field">
                   <span>来源</span>
-                  <input
+                  <Input
                     value={draftDocument.source ?? ""}
-                    onChange={(event) => setDraftDocument({ ...draftDocument, source: event.target.value })}
+                    onChange={(_, data) => setDraftDocument({ ...draftDocument, source: data.value })}
                     disabled={loading}
                   />
                 </label>
                 <label className="field">
                   <span>作者</span>
-                  <input
+                  <Input
                     value={draftDocument.author ?? ""}
-                    onChange={(event) => setDraftDocument({ ...draftDocument, author: event.target.value })}
+                    onChange={(_, data) => setDraftDocument({ ...draftDocument, author: data.value })}
                     disabled={loading}
                   />
                 </label>
                 <label className="field">
                   <span>分类 / 标签</span>
-                  <input
+                  <Input
                     value={draftDocument.category_or_tag ?? ""}
-                    onChange={(event) => setDraftDocument({ ...draftDocument, category_or_tag: event.target.value })}
+                    onChange={(_, data) => setDraftDocument({ ...draftDocument, category_or_tag: data.value })}
                     disabled={loading}
                   />
                 </label>
@@ -2163,10 +2435,10 @@ function DataPage() {
 
               <label className="field">
                 <span>正文</span>
-                <textarea
+                <Textarea
                   rows={10}
                   value={draftDocument.raw_text}
-                  onChange={(event) => setDraftDocument({ ...draftDocument, raw_text: event.target.value })}
+                  onChange={(_, data) => setDraftDocument({ ...draftDocument, raw_text: data.value })}
                   disabled={loading}
                 />
               </label>
@@ -2185,11 +2457,17 @@ function DataPage() {
           )}
         </Panel>
       </div>
-    </>
+    </CorpusWorkspace>
   );
 }
 
-export function WorkflowEditorPage() {
+export function WorkflowEditorPage({
+  workbenchSelection,
+  onWorkbenchSelect
+}: {
+  workbenchSelection?: WorkbenchSelection;
+  onWorkbenchSelect?: (selection: WorkbenchSelection) => void;
+}) {
   const workspace = useWorkspace();
   const taskProgress = useTaskProgress();
   const {
@@ -2213,6 +2491,8 @@ export function WorkflowEditorPage() {
       taskProgress={taskProgress}
       project={project}
       activeWorkflow={activeWorkflow}
+      workbenchSelection={workbenchSelection}
+      onWorkbenchSelect={onWorkbenchSelect}
     />
   );
 }
@@ -2221,12 +2501,16 @@ function WorkflowEditorPageContent({
   workspace,
   taskProgress,
   project,
-  activeWorkflow
+  activeWorkflow,
+  workbenchSelection,
+  onWorkbenchSelect
 }: {
   workspace: ReturnType<typeof useWorkspace>;
   taskProgress: ReturnType<typeof useTaskProgress>;
   project: ProjectManifest;
   activeWorkflow: WorkflowDefinition;
+  workbenchSelection?: WorkbenchSelection;
+  onWorkbenchSelect?: (selection: WorkbenchSelection) => void;
 }) {
   const {
     state: { snapshot, loading },
@@ -2242,19 +2526,14 @@ function WorkflowEditorPageContent({
   const [selectedEdgeId, setSelectedEdgeId] = useState("");
   const [pendingConnection, setPendingConnection] = useState<{ fromNodeId: string; fromPortId: string } | null>(null);
   const [documentPickerQuery, setDocumentPickerQuery] = useState("");
-  const [dockView, setDockView] = useState<"library" | "nodes" | "status">("library");
-  const [dockCollapsed, setDockCollapsed] = useState(false);
-  const [draggedToolboxNodeType, setDraggedToolboxNodeType] = useState<WorkflowNodeInstance["node_type"] | "">("");
-  const [toolboxDragPointer, setToolboxDragPointer] = useState<{ x: number; y: number } | null>(null);
   const [isCanvasDropActive, setIsCanvasDropActive] = useState(false);
   const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
   const canvasScrollRef = useRef<HTMLDivElement | null>(null);
   const canvasTopbarRef = useRef<HTMLDivElement | null>(null);
   const canvasBannerRef = useRef<HTMLDivElement | null>(null);
   const miniMapRef = useRef<HTMLDivElement | null>(null);
-  const toolboxDragGhostRef = useRef<HTMLDivElement | null>(null);
-  const toolboxDragStateRef = useRef<{ nodeType: WorkflowNodeInstance["node_type"] } | null>(null);
-  const toolboxDropActiveRef = useRef(false);
+  const miniMapSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const miniMapViewportRef = useRef<HTMLDivElement | null>(null);
   const canvasPanStateRef = useRef<{
     startClientX: number;
     startClientY: number;
@@ -2279,6 +2558,8 @@ function WorkflowEditorPageContent({
   const pendingCanvasDomWriteRef = useRef<(() => void) | null>(null);
   const latestNodeDragRef = useRef<{ nodeId: string; x: number; y: number } | null>(null);
   const latestViewportDragRef = useRef<{ x: number; y: number; zoom: number } | null>(null);
+  const saveWorkflowRef = useRef<(() => Promise<boolean>) | null>(null);
+  const runWorkflowRef = useRef<(() => Promise<void>) | null>(null);
   const draftPersistenceRef = useRef<{
     projectId: string;
     workflowId: string;
@@ -2342,6 +2623,21 @@ function WorkflowEditorPageContent({
   }, []);
 
   useEffect(() => {
+    const handleExternalSave = () => {
+      void saveWorkflowRef.current?.();
+    };
+    const handleExternalRun = () => {
+      void runWorkflowRef.current?.();
+    };
+    window.addEventListener("textflow:workflow-save", handleExternalSave);
+    window.addEventListener("textflow:workflow-run", handleExternalRun);
+    return () => {
+      window.removeEventListener("textflow:workflow-save", handleExternalSave);
+      window.removeEventListener("textflow:workflow-run", handleExternalRun);
+    };
+  }, []);
+
+  useEffect(() => {
     const nextWorkflow = resolveActiveWorkflow(project) ?? activeWorkflow;
     const persistedDraft = nextWorkflow
       ? loadPersistedWorkflowDraft(project.id, nextWorkflow.workflow_id)
@@ -2355,7 +2651,7 @@ function WorkflowEditorPageContent({
         projectRuntimeProfile(project, persistedDraft ?? nextWorkflow)
       )
       : null;
-    const hydratedWorkflow = normalizedWorkflow && !persistedDraft
+    const hydratedWorkflow = normalizedWorkflow && workflowViewportNeedsInitialFit(normalizedWorkflow, Boolean(persistedDraft))
       ? updateWorkflowViewport(normalizedWorkflow, workflowFitViewport(normalizedWorkflow.nodes))
       : normalizedWorkflow;
     const nextDraftWorkflow = hydratedWorkflow ?? deepClone(activeWorkflow);
@@ -2371,9 +2667,24 @@ function WorkflowEditorPageContent({
     setSelectedEdgeId(persistedEditorState?.selectedEdgeId ?? "");
     setPendingConnection(null);
     setDocumentPickerQuery(persistedEditorState?.documentPickerQuery ?? "");
-    setDockView(persistedEditorState?.dockView ?? "library");
-    setDockCollapsed(persistedEditorState?.dockCollapsed ?? false);
   }, [activeWorkflow, project]);
+
+  useEffect(() => {
+    if (!selectedNodeId || !draftWorkflow?.nodes.some((node) => node.node_id === selectedNodeId)) {
+      return;
+    }
+
+    const nodeElement = workflowNodeElementRefs.current.get(selectedNodeId);
+    if (!nodeElement) {
+      return;
+    }
+
+    if (typeof nodeElement.scrollIntoView !== "function") {
+      return;
+    }
+
+    nodeElement.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selectedNodeId, draftWorkflow?.workflow_id]);
 
   useEffect(() => {
     if (!project || !draftWorkflow) {
@@ -2393,8 +2704,6 @@ function WorkflowEditorPageContent({
         JSON.stringify({
           selectedNodeId,
           selectedEdgeId,
-          dockView,
-          dockCollapsed,
           documentPickerQuery
         })
       );
@@ -2402,8 +2711,6 @@ function WorkflowEditorPageContent({
       // Ignore editor-state persistence failures and keep the in-memory editor usable.
     }
   }, [
-    dockCollapsed,
-    dockView,
     documentPickerQuery,
     draftWorkflowId,
     project?.id,
@@ -2449,7 +2756,52 @@ function WorkflowEditorPageContent({
       observer.observe(bannerElement);
     }
     return () => observer.disconnect();
-  }, [pendingConnection, workflowValidation, dockCollapsed]);
+  }, [pendingConnection, workflowValidation]);
+
+  useEffect(() => {
+    if (!workbenchSelection || !project || !draftWorkflow || !workflowValidation || workbenchSelection.projectId !== project.id) {
+      return;
+    }
+
+    if (
+      workbenchSelection.kind === "workflow_node"
+      && workbenchSelection.workflowId === draftWorkflow.workflow_id
+      && draftWorkflow.nodes.some((node) => node.node_id === workbenchSelection.nodeId)
+      && selectedNodeId !== workbenchSelection.nodeId
+    ) {
+      setSelectedNodeId(workbenchSelection.nodeId);
+      setSelectedEdgeId("");
+      setPendingConnection(null);
+    }
+
+    if (
+      workbenchSelection.kind === "workflow_edge"
+      && workbenchSelection.workflowId === draftWorkflow.workflow_id
+      && workflowValidation.normalized_edges.some((edge) => edge.edge_id === workbenchSelection.edgeId)
+      && selectedEdgeId !== workbenchSelection.edgeId
+    ) {
+      setSelectedEdgeId(workbenchSelection.edgeId);
+      setSelectedNodeId("");
+      setPendingConnection(null);
+    }
+
+    if (
+      workbenchSelection.kind === "workflow"
+      && workbenchSelection.workflowId === draftWorkflow.workflow_id
+      && (selectedNodeId || selectedEdgeId)
+    ) {
+      setSelectedNodeId("");
+      setSelectedEdgeId("");
+      setPendingConnection(null);
+    }
+  }, [
+    workbenchSelection,
+    project,
+    draftWorkflow,
+    workflowValidation,
+    selectedNodeId,
+    selectedEdgeId
+  ]);
 
   if (!project || !draftWorkflow || !draftRuntimeProfile || !workflowValidation) {
     return <EmptyState title="流程配置待初始化" body="请先建立项目工作区。" />;
@@ -2471,11 +2823,42 @@ function WorkflowEditorPageContent({
     zoom: clampWorkflowZoom(draftWorkflow.viewport.zoom ?? 0.82)
   };
   const miniMap = workflowMiniMapMetrics(canvasMetrics);
-  const viewportWorldRect = {
-    x: Math.max(0, (-viewport.x) / viewport.zoom),
-    y: Math.max(0, (-viewport.y) / viewport.zoom),
-    width: Math.max(120, (canvasViewportSize.width || 920) / viewport.zoom),
-    height: Math.max(80, (canvasViewportSize.height || 640) / viewport.zoom)
+  const viewportWorldRect = workflowViewportWorldRect(viewport, canvasViewportSize);
+  const miniMapViewportRect = workflowMiniMapViewportRect(viewportWorldRect, miniMap);
+  const writeMiniMapViewportDom = (nextViewport: { x: number; y: number; zoom: number }) => {
+    const element = miniMapViewportRef.current;
+    if (!element) {
+      return;
+    }
+    const rect = workflowMiniMapViewportRect(
+      workflowViewportWorldRect(nextViewport, canvasViewportSize),
+      miniMap
+    );
+    element.style.left = `${rect.left}px`;
+    element.style.top = `${rect.top}px`;
+    element.style.width = `${rect.width}px`;
+    element.style.height = `${rect.height}px`;
+  };
+  const writeWorkflowViewportDom = (nextViewport: { x: number; y: number; zoom: number }) => {
+    if (canvasSurfaceRef.current) {
+      canvasSurfaceRef.current.style.transform = `translate3d(${nextViewport.x}px, ${nextViewport.y}px, 0) scale(${nextViewport.zoom})`;
+    }
+    writeMiniMapViewportDom(nextViewport);
+  };
+  const viewportFromMiniMapPoint = (clientX: number, clientY: number, surfaceRect: DOMRect) => {
+    const canvasElement = canvasScrollRef.current;
+    if (!canvasElement) {
+      return null;
+    }
+    const clampedX = Math.min(surfaceRect.right, Math.max(surfaceRect.left, clientX));
+    const clampedY = Math.min(surfaceRect.bottom, Math.max(surfaceRect.top, clientY));
+    const worldX = miniMap.originX + (clampedX - surfaceRect.left) / miniMap.scale;
+    const worldY = miniMap.originY + (clampedY - surfaceRect.top) / miniMap.scale;
+    return {
+      x: canvasElement.clientWidth / 2 - worldX * viewport.zoom,
+      y: canvasElement.clientHeight / 2 - worldY * viewport.zoom,
+      zoom: viewport.zoom
+    };
   };
   const selectedNode = sortedNodes.find((node) => node.node_id === selectedNodeId) ?? null;
   const displayEdges = workflowValidation.normalized_edges;
@@ -2541,10 +2924,33 @@ function WorkflowEditorPageContent({
   const lastCompletedRuntimeNode = liveWorkflowRun?.last_completed_node_id
     ? runtimeNodeStates[liveWorkflowRun.last_completed_node_id]
     : undefined;
+  const dictionaryInputNode = sortedNodes.find((node) => node.node_type === "dictionary_input")
+    ?? sortedNodes.find((node) => node.node_type === "project_dictionary_set")
+    ?? null;
+  const corpusInputNode = sortedNodes.find((node) => node.node_type === "corpus_input")
+    ?? sortedNodes.find((node) => node.node_type === "filter_corpus")
+    ?? null;
+  const dictionaryTableIds = project.dictionary_set.collections
+    ? Object.values(project.dictionary_set.collections)
+        .flatMap((collection) => collection.tables.map((table) => table.id))
+    : [];
+  const selectedDictionaryTableIds = new Set(
+    Array.isArray(dictionaryInputNode?.config.selected_table_ids)
+      ? dictionaryInputNode.config.selected_table_ids.map((item) => String(item))
+      : []
+  );
+  const useAllDictionaryTables = selectedDictionaryTableIds.size === 0;
   const availableSources = Array.from(new Set(snapshot.corpus.map((item) => item.source).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
   const availableInstitutions = Array.from(new Set(snapshot.corpus.map((item) => item.institution).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
   const availableCategories = Array.from(new Set(snapshot.corpus.map((item) => item.category_or_tag).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
-  const nodeDefinitionsByType = new Map((snapshot.node_definitions ?? []).map((definition) => [definition.type, definition]));
+  const availableWorkflowNodeDefinitions = useMemo(
+    () => snapshot.node_definitions?.length ? snapshot.node_definitions : builtinWorkflowToolboxDefinitions(),
+    [snapshot.node_definitions]
+  );
+  const nodeDefinitionsByType = useMemo(
+    () => new Map(availableWorkflowNodeDefinitions.map((definition) => [definition.type, definition])),
+    [availableWorkflowNodeDefinitions]
+  );
   const runScopeForNode = (node: WorkflowNodeInstance | null | undefined): RunScopeDefinition => {
     if (!node || (node.node_type !== "corpus_input" && node.node_type !== "filter_corpus")) {
       return draftRuntimeProfile.run_scope;
@@ -2573,69 +2979,50 @@ function WorkflowEditorPageContent({
       !pickerQuery || [item.doc_id, item.title, item.source, item.institution].filter(Boolean).join(" ").toLowerCase().includes(pickerQuery)
     )
     : [];
-  const estimatedEffort = matchedDocuments.length <= 20 ? "短" : matchedDocuments.length <= 80 ? "中" : "长";
   const canRun = !loading && matchedDocuments.length > 0 && workflowValidation.valid;
   const runSummary = runScopeSummary(workflowRunScope, snapshot.corpus.length, matchedDocuments.length);
-  const toolboxDefinitions = (snapshot.node_definitions ?? [])
-    .filter((definition) => !definition.hidden_from_toolbox)
-    .sort((left, right) => left.category.localeCompare(right.category) || left.title.localeCompare(right.title, "zh-CN"));
-  const toolboxDefinitionByType = new Map(toolboxDefinitions.map((definition) => [definition.type, definition]));
-  const toolboxNodeTypes = toolboxDefinitions.map((definition) => definition.type);
-  const toolboxSections = [
-    { id: "input", title: "输入节点" },
-    { id: "process", title: "处理节点" },
-    { id: "analysis", title: "分析节点" },
-    { id: "output", title: "输出节点" },
-    { id: "utility", title: "辅助节点" }
-  ]
-    .map((section) => ({
-      ...section,
-      items: toolboxDefinitions.filter((definition) => definition.category === section.id)
-    }))
-    .filter((section) => section.items.length > 0);
-  const registeredNodeCount = snapshot.node_definitions?.length ?? 0;
-  const selectedNodeRuntime = runtimeStateForNode(selectedNode);
-
-  const activateDock = (view: "library" | "nodes" | "status") => {
-    setDockView(view);
-    setDockCollapsed(false);
-  };
+  const toolboxDefinitions = useMemo(
+    () => [...availableWorkflowNodeDefinitions]
+      .filter((definition) => !definition.hidden_from_toolbox)
+      .sort((left, right) => left.category.localeCompare(right.category) || left.title.localeCompare(right.title, "zh-CN")),
+    [availableWorkflowNodeDefinitions]
+  );
+  const toolNodeTypes = useMemo(
+    () => new Set(toolboxDefinitions.map((definition) => definition.type)),
+    [toolboxDefinitions]
+  );
+  const toolboxDefinitionByType = useMemo(
+    () => new Map(toolboxDefinitions.map((definition) => [definition.type, definition])),
+    [toolboxDefinitions]
+  );
 
   const selectNode = (nodeId: string) => {
+    const node = nodeLookup.get(nodeId);
     setSelectedNodeId(nodeId);
     setSelectedEdgeId("");
     setPendingConnection(null);
-  };
-
-  const focusNodeOnCanvas = (nodeId: string) => {
-    const node = nodeLookup.get(nodeId);
-    const canvasElement = canvasScrollRef.current;
-    if (!node || !canvasElement) {
-      return;
-    }
-
-    const nodeFrame = workflowNodeCanvasFrame(node);
-    const nodeCenterX = canvasOrigin.x + node.position.x + nodeFrame.w / 2;
-    const nodeCenterY = canvasOrigin.y + node.position.y + nodeFrame.h / 2;
-    const focusViewportY = Math.max(
-      Math.min(canvasElement.clientHeight / 2, canvasElement.clientHeight * 0.42),
-      canvasOverlayOffset + 72
-    );
-
-    updateWorkflow((current) => updateWorkflowViewport(current, {
-      x: canvasElement.clientWidth / 2 - nodeCenterX * viewport.zoom,
-      y: focusViewportY - nodeCenterY * viewport.zoom
-    }));
-  };
-
-  const selectAndFocusNode = (nodeId: string) => {
-    selectNode(nodeId);
-    focusNodeOnCanvas(nodeId);
+    onWorkbenchSelect?.({
+      kind: "workflow_node",
+      projectId: project.id,
+      workflowId: draftWorkflow.workflow_id,
+      nodeId,
+      nodeType: node?.node_type,
+      node
+    });
   };
 
   const selectEdge = (edgeId: string) => {
+    const edge = displayEdges.find((item) => item.edge_id === edgeId);
     setSelectedEdgeId(edgeId);
+    setSelectedNodeId("");
     setPendingConnection(null);
+    onWorkbenchSelect?.({
+      kind: "workflow_edge",
+      projectId: project.id,
+      workflowId: draftWorkflow.workflow_id,
+      edgeId,
+      edge
+    });
   };
 
   useEffect(() => {
@@ -2721,10 +3108,7 @@ function WorkflowEditorPageContent({
       };
       latestViewportDragRef.current = nextViewport;
       scheduleCanvasDomWrite(() => {
-        if (!canvasSurfaceRef.current) {
-          return;
-        }
-        canvasSurfaceRef.current.style.transform = `translate3d(${nextViewport.x}px, ${nextViewport.y}px, 0) scale(${nextViewport.zoom})`;
+        writeWorkflowViewportDom(nextViewport);
       });
     };
 
@@ -2757,27 +3141,18 @@ function WorkflowEditorPageContent({
       if (!miniMapDragStateRef.current) {
         return;
       }
-      const canvasElement = canvasScrollRef.current;
-      const minimapElement = miniMapRef.current;
-      if (!canvasElement || !minimapElement) {
+      const minimapElement = miniMapSurfaceRef.current;
+      if (!minimapElement) {
         return;
       }
       const rect = minimapElement.getBoundingClientRect();
-      const clampedX = Math.min(rect.right, Math.max(rect.left, event.clientX));
-      const clampedY = Math.min(rect.bottom, Math.max(rect.top, event.clientY));
-      const worldX = (clampedX - rect.left) / miniMap.scale;
-      const worldY = (clampedY - rect.top) / miniMap.scale;
-      const nextViewport = {
-        x: canvasElement.clientWidth / 2 - worldX * viewport.zoom,
-        y: canvasElement.clientHeight / 2 - worldY * viewport.zoom,
-        zoom: viewport.zoom
-      };
+      const nextViewport = viewportFromMiniMapPoint(event.clientX, event.clientY, rect);
+      if (!nextViewport) {
+        return;
+      }
       latestViewportDragRef.current = nextViewport;
       scheduleCanvasDomWrite(() => {
-        if (!canvasSurfaceRef.current) {
-          return;
-        }
-        canvasSurfaceRef.current.style.transform = `translate3d(${nextViewport.x}px, ${nextViewport.y}px, 0) scale(${nextViewport.zoom})`;
+        writeWorkflowViewportDom(nextViewport);
       });
     };
 
@@ -2802,78 +3177,119 @@ function WorkflowEditorPageContent({
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [miniMap.scale, viewport.zoom]);
-
-  useEffect(() => {
-    if (!draggedToolboxNodeType) {
-      return undefined;
-    }
-
-    const handlePointerMove = (event: PointerEvent) => {
-      const nextLeft = event.clientX + 14;
-      const nextTop = event.clientY + 14;
-      scheduleCanvasDomWrite(() => {
-        if (!toolboxDragGhostRef.current) {
-          return;
-        }
-        toolboxDragGhostRef.current.style.left = `${nextLeft}px`;
-        toolboxDragGhostRef.current.style.top = `${nextTop}px`;
-      });
-      const canvasElement = canvasScrollRef.current;
-      if (!canvasElement) {
-        if (toolboxDropActiveRef.current) {
-          toolboxDropActiveRef.current = false;
-          setIsCanvasDropActive(false);
-        }
-        return;
-      }
-      const rect = canvasElement.getBoundingClientRect();
-      const insideCanvas = event.clientX >= rect.left
-        && event.clientX <= rect.right
-        && event.clientY >= rect.top
-        && event.clientY <= rect.bottom;
-      if (toolboxDropActiveRef.current !== insideCanvas) {
-        toolboxDropActiveRef.current = insideCanvas;
-        setIsCanvasDropActive(insideCanvas);
-      }
-    };
-
-    const handlePointerUp = (event: PointerEvent) => {
-      const canvasElement = canvasScrollRef.current;
-      if (canvasElement && toolboxDragStateRef.current) {
-        const rect = canvasElement.getBoundingClientRect();
-        const insideCanvas = event.clientX >= rect.left
-          && event.clientX <= rect.right
-          && event.clientY >= rect.top
-          && event.clientY <= rect.bottom;
-        if (insideCanvas) {
-          const frame = workflowNodeCanvasFrame(toolboxDragStateRef.current.nodeType);
-          const x = (event.clientX - rect.left - viewport.x) / viewport.zoom - canvasOrigin.x - frame.w / 2;
-          const y = (event.clientY - rect.top - viewport.y) / viewport.zoom - canvasOrigin.y - frame.h / 3;
-          addWorkflowNode(
-            toolboxDragStateRef.current.nodeType,
-            toolboxDefinitionByType.get(toolboxDragStateRef.current.nodeType),
-            { x, y }
-          );
-        }
-      }
-      toolboxDragStateRef.current = null;
-      toolboxDropActiveRef.current = false;
-      setDraggedToolboxNodeType("");
-      setToolboxDragPointer(null);
-      setIsCanvasDropActive(false);
-    };
-
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp, { once: true });
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-    };
-  }, [draggedToolboxNodeType, viewport.x, viewport.y, viewport.zoom, canvasOrigin.x, canvasOrigin.y, toolboxDefinitionByType]);
+  }, [miniMap.originX, miniMap.originY, miniMap.scale, viewport.zoom]);
 
   const updateWorkflow = (updater: (current: WorkflowDefinition) => WorkflowDefinition) => {
     setDraftWorkflow((current) => current ? updater(current) : current);
+  };
+
+  const corpusScopeFromSelection = (selection: WorkbenchSelection): Partial<RunScopeDefinition> | null => {
+    if (selection.kind !== "corpus_collection") {
+      return null;
+    }
+    if (selection.collectionId === "all-corpus") {
+      return {
+        mode: "all_documents",
+        source_values: [],
+        institution_values: [],
+        category_values: [],
+        year_from: null,
+        year_to: null,
+        selected_doc_ids: []
+      };
+    }
+    if (selection.collectionId.startsWith("source:")) {
+      const sourceFileId = selection.collectionId.slice("source:".length);
+      const sourceFile = project.source_files.find((item) => item.id === sourceFileId);
+      const matchingSourceValues = sourceFile
+        ? Array.from(new Set(snapshot.corpus
+            .filter((item) => item.source_profile === sourceFile.source_profile || item.source === sourceFile.name)
+            .map((item) => item.source)
+            .filter(Boolean) as string[]))
+        : [];
+      return {
+        mode: "filtered_subset",
+        source_values: matchingSourceValues,
+        institution_values: [],
+        category_values: [],
+        selected_doc_ids: []
+      };
+    }
+
+    const corpusView = project.corpus_views.find((view) => view.id === selection.collectionId);
+    if (corpusView?.doc_ids?.length) {
+      return {
+        mode: "selected_documents",
+        selected_doc_ids: corpusView.doc_ids,
+        source_values: [],
+        institution_values: [],
+        category_values: []
+      };
+    }
+
+    return {
+      mode: "all_documents"
+    };
+  };
+
+  const bindCorpusSelectionToWorkflow = (selection: WorkbenchSelection) => {
+    const scopePatch = corpusScopeFromSelection(selection);
+    if (!scopePatch) {
+      return;
+    }
+    const targetNodeId = corpusInputNode?.node_id;
+    if (!targetNodeId) {
+      addWorkflowNode("corpus_input", toolboxDefinitionByType.get("corpus_input"));
+      return;
+    }
+    updateWorkflow((current) => updateWorkflowNode(current, targetNodeId, (node) => ({
+      ...node,
+      config: {
+        ...node.config,
+        ...scopePatch
+      }
+    })));
+    selectNode(targetNodeId);
+  };
+
+  const bindDictionaryTableToWorkflow = (tableId: string) => {
+    if (!tableId) {
+      return;
+    }
+    const targetNodeId = dictionaryInputNode?.node_id;
+    if (!targetNodeId) {
+      addWorkflowNode("dictionary_input", toolboxDefinitionByType.get("dictionary_input"));
+      return;
+    }
+    const nextTableIds = useAllDictionaryTables
+      ? [tableId]
+      : dictionaryTableIds.filter((id) => selectedDictionaryTableIds.has(id) || id === tableId);
+    updateWorkflow((current) => updateWorkflowNode(current, targetNodeId, (node) => ({
+      ...node,
+      config: {
+        ...node.config,
+        selected_table_ids: nextTableIds,
+        selected_table_ids_text: nextTableIds.join(", ")
+      }
+    })));
+    selectNode(targetNodeId);
+  };
+
+  const bindLexiconSelectionToWorkflow = (selection: WorkbenchSelection) => {
+    if (selection.kind !== "lexicon_table") {
+      return;
+    }
+    bindDictionaryTableToWorkflow(selection.tableId);
+  };
+
+  const bindWorkbenchResourceToWorkflow = (selection: WorkbenchSelection) => {
+    if (selection.kind === "corpus_collection") {
+      bindCorpusSelectionToWorkflow(selection);
+      return;
+    }
+    if (selection.kind === "lexicon_table") {
+      bindLexiconSelectionToWorkflow(selection);
+    }
   };
 
   const addWorkflowNode = (
@@ -2893,6 +3309,17 @@ function WorkflowEditorPageContent({
     });
     setSelectedEdgeId("");
     setSelectedNodeId(nextSelectedNodeId);
+    if (nextSelectedNodeId) {
+      const nextSelectedNode = draftWorkflow.nodes.find((node) => node.node_id === nextSelectedNodeId);
+      onWorkbenchSelect?.({
+        kind: "workflow_node",
+      projectId: project.id,
+      workflowId: draftWorkflow.workflow_id,
+      nodeId: nextSelectedNodeId,
+      nodeType: nextSelectedNode?.node_type ?? nodeType,
+      node: nextSelectedNode
+      });
+    }
     setPendingConnection(null);
   };
 
@@ -2935,12 +3362,61 @@ function WorkflowEditorPageContent({
     updateWorkflow((current) => updateWorkflowViewport(current, workflowFitViewport(current.nodes)));
   };
 
+  const handleValidateGraph = () => {
+    if (workflowValidation.issues.length) {
+      focusWorkflowCanvas();
+    }
+  };
+
   const resetWorkflowLayout = () => {
     updateWorkflow((current) => autoLayoutWorkflow(current));
     requestAnimationFrame(() => {
       canvasScrollRef.current?.scrollTo({ left: 0, top: 0, behavior: "smooth" });
     });
   };
+
+  useEffect(() => {
+    const handleWorkbenchAction = (event: Event) => {
+      const action = (event as CustomEvent<WorkflowWorkbenchAction>).detail;
+      if (!action || loading) {
+        return;
+      }
+
+      if (action.type === "add_node") {
+        if (!toolNodeTypes.has(action.nodeType)) {
+          return;
+        }
+        addWorkflowNode(action.nodeType, toolboxDefinitionByType.get(action.nodeType));
+        return;
+      }
+
+      switch (action.action) {
+        case "insert_recommended_starter":
+          insertRecommendedStarter();
+          break;
+        case "restore_recommended_edges":
+          restoreRecommendedEdges();
+          break;
+        case "auto_layout":
+          resetWorkflowLayout();
+          break;
+        case "fit_view":
+          focusWorkflowCanvas();
+          break;
+        case "validate_graph":
+          handleValidateGraph();
+          break;
+        case "clear_canvas":
+          clearWorkflowCanvas();
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener(WORKFLOW_WORKBENCH_ACTION_EVENT, handleWorkbenchAction);
+    return () => window.removeEventListener(WORKFLOW_WORKBENCH_ACTION_EVENT, handleWorkbenchAction);
+  });
 
   const updateWorkflowZoom = (zoom: number) => {
     updateWorkflow((current) => updateWorkflowViewport(current, { zoom: clampWorkflowZoom(zoom) }));
@@ -2981,6 +3457,48 @@ function WorkflowEditorPageContent({
     }));
   };
 
+  const handleCanvasDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (event.dataTransfer.types.includes(WORKBENCH_SELECTION_MIME) || event.dataTransfer.types.includes(WORKFLOW_NODE_TYPE_MIME)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      setIsCanvasDropActive(true);
+    }
+  };
+
+  const handleCanvasDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setIsCanvasDropActive(false);
+    }
+  };
+
+  const handleCanvasDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    const nodeType = event.dataTransfer.getData(WORKFLOW_NODE_TYPE_MIME) as WorkflowNodeInstance["node_type"] | "";
+    if (nodeType) {
+      if (!toolNodeTypes.has(nodeType)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = event.currentTarget.getBoundingClientRect();
+      const frame = workflowNodeCanvasFrame(nodeType);
+      const x = (event.clientX - rect.left - viewport.x) / viewport.zoom - canvasOrigin.x - frame.w / 2;
+      const y = (event.clientY - rect.top - viewport.y) / viewport.zoom - canvasOrigin.y - frame.h / 3;
+      addWorkflowNode(nodeType, toolboxDefinitionByType.get(nodeType), { x, y });
+      setIsCanvasDropActive(false);
+      return;
+    }
+
+    const payload = event.dataTransfer.getData(WORKBENCH_SELECTION_MIME);
+    const droppedSelection = payload ? parseWorkbenchSelectionPayload(payload) : null;
+    if (!droppedSelection) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setIsCanvasDropActive(false);
+    bindWorkbenchResourceToWorkflow(droppedSelection);
+  };
+
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) {
       return;
@@ -2999,21 +3517,30 @@ function WorkflowEditorPageContent({
     setSelectedNodeId("");
     setSelectedEdgeId("");
     setPendingConnection(null);
+    onWorkbenchSelect?.({
+      kind: "workflow",
+      projectId: project.id,
+      workflowId: draftWorkflow.workflow_id
+    });
     event.preventDefault();
   };
 
   const handleMiniMapPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const canvasElement = canvasScrollRef.current;
-    if (!canvasElement) {
+    const surfaceElement = miniMapSurfaceRef.current;
+    if (!surfaceElement) {
       return;
     }
-    const rect = event.currentTarget.getBoundingClientRect();
+    const rect = surfaceElement.getBoundingClientRect();
     const centerViewport = (clientX: number, clientY: number) => {
-      const worldX = (clientX - rect.left) / miniMap.scale;
-      const worldY = (clientY - rect.top) / miniMap.scale;
+      const nextViewport = viewportFromMiniMapPoint(clientX, clientY, rect);
+      if (!nextViewport) {
+        return;
+      }
+      latestViewportDragRef.current = nextViewport;
+      writeWorkflowViewportDom(nextViewport);
       updateWorkflow((current) => updateWorkflowViewport(current, {
-        x: canvasElement.clientWidth / 2 - worldX * viewport.zoom,
-        y: canvasElement.clientHeight / 2 - worldY * viewport.zoom
+        x: nextViewport.x,
+        y: nextViewport.y
       }));
     };
     miniMapDragStateRef.current = true;
@@ -3025,20 +3552,6 @@ function WorkflowEditorPageContent({
     }
     event.preventDefault();
     event.stopPropagation();
-  };
-
-  const handleToolboxPointerDown = (
-    event: ReactPointerEvent<HTMLButtonElement>,
-    nodeType: WorkflowNodeInstance["node_type"]
-  ) => {
-    if (loading || event.button !== 0) {
-      return;
-    }
-    toolboxDragStateRef.current = { nodeType };
-    toolboxDropActiveRef.current = false;
-    setDraggedToolboxNodeType(nodeType);
-    setToolboxDragPointer({ x: event.clientX, y: event.clientY });
-    event.preventDefault();
   };
 
   const beginConnection = (fromNodeId: string, fromPortId: string) => {
@@ -3056,7 +3569,7 @@ function WorkflowEditorPageContent({
     }
     updateWorkflow((current) => createWorkflowEdge(current, pendingConnection.fromNodeId, pendingConnection.fromPortId, toNodeId, toPortId));
     setPendingConnection(null);
-    setSelectedNodeId(toNodeId);
+    selectNode(toNodeId);
     setSelectedEdgeId("");
   };
 
@@ -3066,6 +3579,11 @@ function WorkflowEditorPageContent({
     }
     updateWorkflow((current) => removeWorkflowEdge(current, selectedEdge.edge_id));
     setSelectedEdgeId("");
+    onWorkbenchSelect?.({
+      kind: "workflow",
+      projectId: project.id,
+      workflowId: draftWorkflow.workflow_id
+    });
   };
 
   const handleCanvasNodePointerDown = (event: ReactPointerEvent<HTMLElement>, node: WorkflowNodeInstance) => {
@@ -3182,6 +3700,7 @@ function WorkflowEditorPageContent({
       actionLabel: "保存工作流"
     });
   };
+  saveWorkflowRef.current = saveWorkflow;
 
   const runCurrentWorkflow = async () => {
     if (!matchedDocuments.length) {
@@ -3192,6 +3711,7 @@ function WorkflowEditorPageContent({
       await runWorkflow();
     }
   };
+  runWorkflowRef.current = runCurrentWorkflow;
 
   const renderRunScopeEditor = (node: WorkflowNodeInstance) => {
     const nodeScope = runScopeForNode(node);
@@ -3276,10 +3796,14 @@ function WorkflowEditorPageContent({
 
     if (selectedNode.node_type === "dictionary_input" || selectedNode.node_type === "project_dictionary_set") {
       return (
-        <Panel title="词表输入" actions={<button type="button" className="toolbar-button ghost" onClick={() => setActivePage("dictionaries")} disabled={loading}>打开词表中心</button>}>
+        <Panel title="词表输入" actions={<Button appearance="subtle" onClick={() => setActivePage("dictionaries")} disabled={loading}>打开词库中心</Button>}>
           <p className="body-copy">这里引用的是项目当前词表资源。后续如果要支持多词表切换，会继续把资源选择器下沉到节点体内。</p>
           <div className="status-panel"><strong>当前词表版本</strong><span>{project.dictionary_set.version}</span></div>
           <div className="status-panel"><strong>启用条目</strong><span>{enabledDictionaryEntryCount(project.dictionary_set)} 条</span></div>
+          <div className="status-panel">
+            <strong>绑定资源</strong>
+            <span>{useAllDictionaryTables ? "全部资源表" : `${selectedDictionaryTableIds.size} 张资源表`}</span>
+          </div>
         </Panel>
       );
     }
@@ -3519,6 +4043,7 @@ function WorkflowEditorPageContent({
     documentPickerQuery,
     setDocumentPickerQuery,
     setActivePage,
+    bindDictionaryTableToWorkflow,
     runScopeForNode,
     runScopeSummary,
     corpusMatchesRunScope,
@@ -3716,279 +4241,51 @@ function WorkflowEditorPageContent({
     );
   };
 
-  const renderDockContent = () => {
-    if (dockView === "nodes") {
-      return (
-        <>
-          <div className="workflow-dock-card">
-            <div className="workflow-dock-card-head">
-              <div>
-                <p className="eyebrow">Nodes</p>
-                <h4>当前画布</h4>
-                <p className="body-copy">点击节点会在画布和右侧同步选中。所有节点都允许删除或重新接线。</p>
-              </div>
-              <span className="pill">{sortedNodes.length}</span>
-            </div>
-            <div className="workflow-node-list">
-              {sortedNodes.map((node) => {
-                const nodeRuntime = runtimeStateForNode(node);
-                return (
-                    <button
-                      key={node.node_id}
-                      type="button"
-                      className={`workflow-node-list-item ${selectedNode?.node_id === node.node_id && !selectedEdge ? "is-active" : ""} ${nodeRuntime ? `is-${nodeRuntime.status}` : ""}`.trim()}
-                      onClick={() => selectAndFocusNode(node.node_id)}
-                    >
-                      <div>
-                        <strong>{node.label}</strong>
-                        <p>{nodeRuntime?.output_summary ?? workflowNodeSummary(node, draftRuntimeProfile, runSummary)}</p>
-                    </div>
-                    <div className="workflow-node-list-item-meta">
-                      {nodeRuntime && <span className={`pill runtime-${nodeRuntime.status}`}>{runtimeStatusLabel(nodeRuntime.status)}</span>}
-                      <span className="pill">
-                        {nodeRuntime
-                          ? (nodeRuntime.status === "running" ? `${Math.round((nodeRuntime.progress ?? 0) * 100)}%` : formatRuntimeDuration(nodeRuntime.duration_ms))
-                          : workflowNodeBadge(node, workflowValidation)}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="workflow-dock-card">
-            <div className="workflow-dock-card-head">
-              <div>
-                <h4>画布操作</h4>
-                <p className="body-copy">这些操作只调整当前 workflow 的组织方式，不会删除项目资源。</p>
-              </div>
-            </div>
-            <div className="workflow-dock-action-stack">
-              <button type="button" className="toolbar-button ghost" onClick={insertRecommendedStarter} disabled={loading}>生成推荐骨架</button>
-              <button type="button" className="toolbar-button ghost" onClick={restoreRecommendedEdges} disabled={loading}>恢复推荐连线</button>
-              <button type="button" className="toolbar-button ghost" onClick={resetWorkflowLayout} disabled={loading}>自动整理布局</button>
-              <button type="button" className="toolbar-button ghost" onClick={clearWorkflowCanvas} disabled={loading}>清空画布</button>
-            </div>
-          </div>
-        </>
-      );
-    }
-
-    if (dockView === "status") {
-      return (
-        <>
-          <div className="workflow-dock-card">
-            <div className="workflow-dock-card-head">
-              <div>
-                <p className="eyebrow">{liveWorkflowRun ? "Runtime" : "Graph"}</p>
-                <h4>{liveWorkflowRun ? "运行态" : "图状态"}</h4>
-                <p className="body-copy">
-                  {liveWorkflowRun
-                    ? "节点会按当前活跃子图依次执行；这里会实时显示当前节点、耗时和最近完成的产物摘要。"
-                    : "系统会从输出节点回溯活跃子图，未接到输出的支路不会进入这次执行。"}
-                </p>
-              </div>
-              <span className="pill">
-                {liveWorkflowRun
-                  ? `${Math.round(liveRuntimeProgress * 100)}%`
-                  : (workflowValidation.valid ? "可运行" : `${workflowValidation.issues.length} 个问题`)}
-              </span>
-            </div>
-            <div className="workflow-validation-stack">
-              {liveWorkflowRun ? (
-                <>
-                  <div className="status-panel"><strong>图进度</strong><span>{runtimeCompletedNodes}/{runtimeTotalNodes} 个节点</span></div>
-                  <div className="status-panel"><strong>当前节点</strong><span>{activeRuntimeNode?.label ?? "正在整理运行结果"}</span></div>
-                  <div className="status-panel"><strong>已运行</strong><span>{formatRuntimeDuration(liveWorkflowRun.elapsed_ms)}</span></div>
-                  <div className="status-panel"><strong>最近完成</strong><span>{lastCompletedRuntimeNode ? `${lastCompletedRuntimeNode.label} · ${lastCompletedRuntimeNode.output_summary ?? runtimeStatusLabel(lastCompletedRuntimeNode.status)}` : "尚无完成节点"}</span></div>
-                </>
-              ) : (
-                <>
-                  <div className="status-panel"><strong>活跃执行链</strong><span>{workflowValidation.active_node_ids.length} 个节点</span></div>
-                  <div className="status-panel"><strong>输出节点</strong><span>{workflowValidation.sink_node_ids.length} 个</span></div>
-                  <div className="status-panel"><strong>当前范围</strong><span>{runSummary}</span></div>
-                  {workflowValidation.issues.length ? workflowValidation.issues.slice(0, 5).map((issue) => (
-                    <div key={issue} className="status-panel warning"><span>{issue}</span></div>
-                  )) : (
-                    <div className="status-panel success"><span>当前主链已经接通，可以直接保存并运行。</span></div>
-                  )}
-                </>
-              )}
-            </div>
-            <div className="workflow-runtime-list">
-              {sortedNodes
-                .filter((node) => activeNodeIds.has(node.node_id) || runtimeStateForNode(node))
-                .map((node) => {
-                  const nodeRuntime = runtimeStateForNode(node);
-                  return (
-                    <div key={`runtime-${node.node_id}`} className={`workflow-runtime-row ${nodeRuntime ? `is-${nodeRuntime.status}` : ""} ${activeRuntimeNode?.node_id === node.node_id ? "is-current" : ""}`.trim()}>
-                      <div>
-                        <strong>{node.label}</strong>
-                        <p>{nodeRuntime?.output_summary ?? workflowNodeSummary(node, draftRuntimeProfile, runSummary)}</p>
-                      </div>
-                      <div className="workflow-runtime-row-meta">
-                        <span className={`pill ${nodeRuntime ? `runtime-${nodeRuntime.status}` : ""}`.trim()}>
-                          {nodeRuntime ? runtimeStatusLabel(nodeRuntime.status) : "待执行"}
-                        </span>
-                        <small>{nodeRuntime ? (nodeRuntime.status === "running" ? `${Math.round((nodeRuntime.progress ?? 0) * 100)}%` : formatRuntimeDuration(nodeRuntime.duration_ms)) : "--"}</small>
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-          </div>
-
-          <div className="workflow-dock-card">
-            <div className="workflow-dock-card-head">
-              <div>
-                <h4>{selectedNode ? `节点详情 · ${selectedNode.label}` : "最近一次运行"}</h4>
-                <p className="body-copy">
-                  {selectedNode
-                    ? "这里会同时展示节点最近一次执行状态和当前项目快照预览。"
-                    : "右下角 mini-map 和节点预览都基于当前画布或最近一次运行结果。"}
-                </p>
-              </div>
-            </div>
-            {selectedNode ? (
-              <>
-                <div className="workflow-validation-stack">
-                  <div className="status-panel"><strong>节点状态</strong><span>{selectedNodeRuntime ? runtimeStatusLabel(selectedNodeRuntime.status) : "尚未执行"}</span></div>
-                  <div className="status-panel"><strong>节点耗时</strong><span>{selectedNodeRuntime ? formatRuntimeDuration(selectedNodeRuntime.duration_ms) : "--"}</span></div>
-                  <div className="status-panel"><strong>输出摘要</strong><span>{selectedNodeRuntime?.output_summary ?? "当前还没有节点级结果摘要。"}</span></div>
-                  {selectedNodeRuntime?.sample_outputs?.length ? (
-                    <div className="status-panel"><strong>样本输出</strong><span>{selectedNodeRuntime.sample_outputs.join(" / ")}</span></div>
-                  ) : null}
-                  {selectedNodeRuntime?.error ? (
-                    <div className="status-panel warning"><strong>错误</strong><span>{selectedNodeRuntime.error}</span></div>
-                  ) : null}
-                </div>
-                {renderNodePreview(selectedNode)}
-              </>
-            ) : latestRun ? (
-              <div className="workflow-validation-stack">
-                <div className="status-panel"><strong>工作流</strong><span>{latestRun.workflow_name}</span></div>
-                <div className="status-panel"><strong>处理文档</strong><span>{latestRun.processed_document_count ?? snapshot.corpus.length} 篇</span></div>
-                <div className="status-panel"><strong>输出包</strong><span>{latestRun.output_summary ?? "按照当前导出设置生成结果文件"}</span></div>
-              </div>
-            ) : (
-              <div className="status-panel"><span>还没有运行记录，保存后点击运行即可生成第一批产物。</span></div>
-            )}
-          </div>
-        </>
-      );
-    }
-
-    return (
-      <>
-        <div className="workflow-dock-card">
-          <div className="workflow-dock-card-head">
-            <div>
-                <p className="eyebrow">Workflow</p>
-                <h4>{draftWorkflow.name}</h4>
-                <p className="body-copy">现在输入、处理、分析和导出都通过节点和连线组织。所有常用配置、预览和删除操作都直接放进节点卡片里完成。</p>
-              </div>
-              <span className="pill">{workflowValidation.valid ? "Ready" : "Needs Wiring"}</span>
-            </div>
-          <div className="workflow-validation-stack">
-            <div className="status-panel"><strong>当前范围</strong><span>{runSummary}</span></div>
-            <div className="status-panel"><strong>预计耗时</strong><span>{estimatedEffort}</span></div>
-            <div className="status-panel"><strong>后端已注册</strong><span>{registeredNodeCount || toolboxNodeTypes.length} 类节点</span></div>
-          </div>
-        </div>
-
-        <div className="workflow-dock-card">
-          <div className="workflow-dock-card-head">
-            <div>
-              <h4>节点工具箱</h4>
-              <p className="body-copy">从这里把输入、分析和输出节点拖进当前思路里；也可以直接点击插入到默认位置。</p>
-            </div>
-          </div>
-          <div className="workflow-toolbox-section-stack">
-            {toolboxSections.map((section) => (
-              <section key={section.id} className="workflow-toolbox-section">
-                <div className="workflow-toolbox-section-head">
-                  <strong>{section.title}</strong>
-                  <span>{section.items.length}</span>
-                </div>
-                <div className="workflow-toolbox-grid">
-                  {section.items.map((definition) => (
-                    <button
-                      key={definition.type}
-                      type="button"
-                      className={`workflow-toolbox-item ${draggedToolboxNodeType === definition.type ? "is-dragging" : ""}`}
-                      onClick={() => addWorkflowNode(definition.type, definition)}
-                      onPointerDown={(event) => handleToolboxPointerDown(event, definition.type)}
-                      disabled={loading}
-                    >
-                      <strong>{definition.title}</strong>
-                      <span>{definition.description || workflowNodeDescription({ node_type: definition.type } as WorkflowNodeInstance)}</span>
-                      <small>点击插入 / 拖到画布投放</small>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
-        </div>
-      </>
-    );
-  };
-
   return (
-    <div className="workflow-editor-page">
-      <div className={`workflow-editor-shell ${dockCollapsed ? "is-dock-collapsed" : ""}`}>
-        <aside className="workflow-editor-rail">
-          <div className="workflow-rail-brand">WF</div>
-          <button type="button" className={`workflow-rail-button ${dockView === "library" && !dockCollapsed ? "is-active" : ""}`} onClick={() => activateDock("library")}>库</button>
-          <button type="button" className={`workflow-rail-button ${dockView === "nodes" && !dockCollapsed ? "is-active" : ""}`} onClick={() => activateDock("nodes")}>图</button>
-          <button type="button" className={`workflow-rail-button ${dockView === "status" && !dockCollapsed ? "is-active" : ""}`} onClick={() => activateDock("status")}>态</button>
-          <button type="button" className="workflow-rail-button" onClick={() => setDockCollapsed((current) => !current)}>{dockCollapsed ? ">" : "<"}</button>
-        </aside>
-
-        <aside className="workflow-editor-dock">
-          {renderDockContent()}
-        </aside>
-
-        <section
+    <WorkflowWorkspace
+      workflow={draftWorkflow}
+      loading={loading}
+      canRun={canRun}
+      onSaveWorkflow={async () => { await saveWorkflow(); }}
+      onRunWorkflow={runCurrentWorkflow}
+      onAutoLayout={resetWorkflowLayout}
+      onFitView={focusWorkflowCanvas}
+      onValidateGraph={handleValidateGraph}
+    >
+      <div className="workflow-editor-page">
+        <div className="workflow-editor-shell">
+          <section
           className={`workflow-editor-canvas ${isCanvasPanning ? "is-panning" : ""} ${draggingNodeId ? "is-dragging-node" : ""} ${isCanvasDropActive ? "is-drop-active" : ""}`}
           style={{ ["--workflow-overlay-offset" as string]: `${canvasOverlayOffset}px` }}
-        >
-          <div ref={canvasTopbarRef} className="workflow-floating-topbar">
+          onDragOver={handleCanvasDragOver}
+          onDragLeave={handleCanvasDragLeave}
+          onDrop={handleCanvasDrop}
+          >
+            <div ref={canvasTopbarRef} className="workflow-floating-topbar">
             <div className="workflow-floating-topbar-group">
               <div className="workflow-title-stack">
-                <p className="eyebrow">Node Workflow</p>
+                <p className="eyebrow">节点图</p>
                 <h3>{draftWorkflow.name}</h3>
                 <span>
                   {liveWorkflowRun
                     ? `${activeRuntimeNode?.label ?? "正在整理运行结果"} · ${liveWorkflowRun.detail ?? "运行中"}`
-                    : (pendingConnection ? "点击高亮输入端完成连线" : "滚轮缩放，拖拽空白区域平移，节点内部直接改常用参数。")}
+                    : (pendingConnection ? "点击高亮输入端完成连线" : `${sortedNodes.length} 个节点 · ${displayEdges.length} 条连线`)}
                 </span>
               </div>
               <div className="workflow-floating-pills">
                 <span className="pill">{workflowValidation.valid ? "图已连通" : "仍需补线"}</span>
-                <span className="pill">{workflowValidation.active_node_ids.length} 个活跃节点</span>
+                <span className="pill">{sortedNodes.length} 节点</span>
                 {liveWorkflowRun && <span className="pill">{runtimeCompletedNodes}/{runtimeTotalNodes} 节点</span>}
                 {liveWorkflowRun && <span className="pill">{Math.round(liveRuntimeProgress * 100)}%</span>}
                 <span className="pill">{Math.round(viewport.zoom * 100)}%</span>
               </div>
             </div>
-            <div className="workflow-floating-topbar-group workflow-floating-topbar-actions">
-              <div className="button-row">
-                {selectedEdge && (
-                  <>
-                    <span className="pill">{selectedEdgeLabel}</span>
-                    <button type="button" className="toolbar-button ghost" onClick={removeSelectedWorkflowEdge} disabled={loading}>删线</button>
-                  </>
-                )}
-                <button type="button" className="toolbar-button ghost" onClick={resetWorkflowLayout} disabled={loading}>整理</button>
-                <button type="button" className="toolbar-button ghost" onClick={focusWorkflowCanvas} disabled={loading}>聚焦</button>
+            {selectedEdge && (
+              <div className="workflow-floating-topbar-group workflow-floating-topbar-actions">
+                <span className="pill">{selectedEdgeLabel}</span>
+                <Button appearance="subtle" onClick={removeSelectedWorkflowEdge} disabled={loading}>删除连线</Button>
               </div>
-              <div className="button-row">
-                <button type="button" className="toolbar-button" onClick={() => void saveWorkflow()} disabled={loading}>保存工作流</button>
-                <button type="button" className="toolbar-button accent" onClick={() => void runCurrentWorkflow()} disabled={!canRun}>运行</button>
-              </div>
-            </div>
+            )}
           </div>
 
           {(pendingConnection || workflowValidation.issues.length > 0) && (
@@ -4051,7 +4348,7 @@ function WorkflowEditorPageContent({
                   const nodeStepId = workflowNodeStepId(node);
                   const nodeCanBypass = Boolean(nodeStepId && optionalWorkflowSteps.includes(nodeStepId));
                   const nodeFrame = workflowNodeCanvasFrame(node);
-                  const nodeInlinePreview = renderWorkflowNodePreview({
+                  const nodeInlinePreview = nodeSelected ? renderWorkflowNodePreview({
                     node,
                     project,
                     snapshot: { corpus: snapshot.corpus },
@@ -4065,6 +4362,7 @@ function WorkflowEditorPageContent({
                     documentPickerQuery,
                     setDocumentPickerQuery,
                     setActivePage,
+                    bindDictionaryTableToWorkflow,
                     runScopeForNode,
                     runScopeSummary,
                     corpusMatchesRunScope,
@@ -4073,7 +4371,7 @@ function WorkflowEditorPageContent({
                     toggleScopeArrayValue,
                     toggleSelectedDocument,
                     enabledDictionaryEntryCount
-                  });
+                  }) : null;
                   return (
                     <div
                       ref={(element) => {
@@ -4084,6 +4382,7 @@ function WorkflowEditorPageContent({
                         }
                       }}
                       key={node.node_id}
+                      data-workflow-node-id={node.node_id}
                       className={`workflow-node-card workflow-node-card-canvas ${nodeSelected ? "is-selected" : ""} ${node.ui_state.bypassed ? "is-bypassed" : ""} ${draggingNodeId === node.node_id ? "is-dragging" : ""} ${nodeRuntime ? `is-runtime-${nodeRuntime.status}` : ""} ${activeRuntimeNode?.node_id === node.node_id ? "is-runtime-current" : ""}`.trim()}
                       style={{
                         left: canvasOrigin.x + node.position.x,
@@ -4109,7 +4408,8 @@ function WorkflowEditorPageContent({
                                 type="button"
                                 className={`workflow-port is-input ${isCompatible ? "is-compatible" : ""} ${isPendingSource ? "is-pending" : ""}`}
                                 style={{ top: workflowPortLocalCenter(node, port.port_id, "inputs") }}
-                                title={`${port.port_id} · ${port.port_type}`}
+                                aria-label={`输入端：${port.label ?? port.port_id}`}
+                                title={workflowPortTitle(port)}
                                 onPointerDown={(event) => event.stopPropagation()}
                                 onClick={(event) => {
                                   event.stopPropagation();
@@ -4119,7 +4419,7 @@ function WorkflowEditorPageContent({
                                 }}
                                 disabled={Boolean(pendingConnection) && !isCompatible}
                               >
-                                <span>{port.port_id}</span>
+                                <span>{port.label ?? "输入"}</span>
                               </button>
                             );
                           })}
@@ -4180,7 +4480,6 @@ function WorkflowEditorPageContent({
                           </button>
                         </div>
                         <strong>{node.label}</strong>
-                        <p>{workflowNodeDescription(node)}</p>
                         <small>{workflowNodeSummary(node, draftRuntimeProfile, runSummary)}</small>
                         {nodeRuntime && (
                           <div className={`workflow-node-runtime-card is-${nodeRuntime.status}`}>
@@ -4200,7 +4499,7 @@ function WorkflowEditorPageContent({
                         {!reachableNodeIds.has(node.node_id) && node.inputs.length > 0 && (
                           <span className="workflow-node-inline-warning">当前未接入有效链路</span>
                         )}
-                        {renderNodeInlineEditor(node)}
+                        {nodeSelected && renderNodeInlineEditor(node)}
                       </div>
                       {node.outputs.length > 0 && (
                         <div className="workflow-port-rail is-output">
@@ -4212,14 +4511,15 @@ function WorkflowEditorPageContent({
                                 type="button"
                                 className={`workflow-port is-output ${isPending ? "is-pending" : ""}`}
                                 style={{ top: workflowPortLocalCenter(node, port.port_id, "outputs") }}
-                                title={`${port.port_id} · ${port.port_type}`}
+                                aria-label={`输出端：${port.label ?? port.port_id}`}
+                                title={workflowPortTitle(port)}
                                 onPointerDown={(event) => event.stopPropagation()}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   beginConnection(node.node_id, port.port_id);
                                 }}
                               >
-                                <span>{port.port_id}</span>
+                                <span>{port.label ?? "输出"}</span>
                               </button>
                             );
                           })}
@@ -4238,45 +4538,33 @@ function WorkflowEditorPageContent({
             </div>
           </div>
 
-          {toolboxDragPointer && (
-            <div
-              ref={toolboxDragGhostRef}
-              className={`workflow-toolbox-drag-ghost ${isCanvasDropActive ? "is-valid" : ""}`}
-              style={{
-                left: toolboxDragPointer.x + 14,
-                top: toolboxDragPointer.y + 14
-              }}
-            >
-              {toolboxDragStateRef.current ? workflowNodeTitle(toolboxDragStateRef.current.nodeType) : "拖放节点"}
-            </div>
-          )}
-
           <div className="workflow-minimap-shell">
             <div className="workflow-minimap-head">
               <strong>Map</strong>
               <span>{Math.round(viewport.zoom * 100)}%</span>
             </div>
             <div ref={miniMapRef} className="workflow-minimap-canvas" onPointerDown={handleMiniMapPointerDown}>
-              <div className="workflow-minimap-surface" style={{ width: miniMap.width, height: miniMap.height }}>
+              <div ref={miniMapSurfaceRef} className="workflow-minimap-surface" style={{ width: miniMap.width, height: miniMap.height }}>
                 {sortedNodes.map((node) => (
                   <div
                     key={`mini-${node.node_id}`}
                     className={`workflow-minimap-node ${selectedNode?.node_id === node.node_id ? "is-active" : ""} ${runtimeStateForNode(node) ? `is-${runtimeStateForNode(node)?.status}` : ""} ${activeRuntimeNode?.node_id === node.node_id ? "is-current" : ""}`.trim()}
                     style={{
-                      left: (canvasOrigin.x + node.position.x) * miniMap.scale,
-                      top: (canvasOrigin.y + node.position.y) * miniMap.scale,
+                      left: (canvasOrigin.x + node.position.x - miniMap.originX) * miniMap.scale,
+                      top: (canvasOrigin.y + node.position.y - miniMap.originY) * miniMap.scale,
                       width: Math.max(12, workflowNodeCanvasFrame(node).w * miniMap.scale),
                       height: Math.max(10, workflowNodeCanvasFrame(node).h * miniMap.scale)
                     }}
                   />
                 ))}
                 <div
+                  ref={miniMapViewportRef}
                   className="workflow-minimap-viewport"
                   style={{
-                    left: viewportWorldRect.x * miniMap.scale,
-                    top: viewportWorldRect.y * miniMap.scale,
-                    width: Math.min(miniMap.width, viewportWorldRect.width * miniMap.scale),
-                    height: Math.min(miniMap.height, viewportWorldRect.height * miniMap.scale)
+                    left: miniMapViewportRect.left,
+                    top: miniMapViewportRect.top,
+                    width: miniMapViewportRect.width,
+                    height: miniMapViewportRect.height
                   }}
                 />
               </div>
@@ -4301,9 +4589,9 @@ function WorkflowEditorPageContent({
                     <span className="eyebrow">节点预览</span>
                     <h3 id="workflow-artifact-modal-title">{previewNode.label}</h3>
                   </div>
-                  <button type="button" className="toolbar-button ghost compact" onClick={() => setPreviewNodeId(null)}>
+                  <Button size="small" appearance="subtle" onClick={() => setPreviewNodeId(null)}>
                     关闭
-                  </button>
+                  </Button>
                 </div>
                 {renderNodePreview(previewNode)}
                 <ArtifactBrowser
@@ -4317,11 +4605,18 @@ function WorkflowEditorPageContent({
           )}
         </section>
       </div>
-    </div>
+      </div>
+    </WorkflowWorkspace>
   );
 }
 
-function DictionariesPage() {
+function DictionariesPage({
+  workbenchSelection,
+  onWorkbenchSelect
+}: {
+  workbenchSelection?: WorkbenchSelection;
+  onWorkbenchSelect?: (selection: WorkbenchSelection) => void;
+}) {
   const {
     state: { snapshot, loading },
     exportDictionaryTable,
@@ -4409,6 +4704,25 @@ function DictionariesPage() {
   }, [activeKind, currentTableId, deferredEntrySearch]);
 
   useEffect(() => {
+    if (
+      workbenchSelection?.kind !== "lexicon_kind"
+      && workbenchSelection?.kind !== "lexicon_table"
+      && workbenchSelection?.kind !== "lexicon_entry"
+    ) {
+      return;
+    }
+    if (workbenchSelection.dictionaryKind !== activeKind) {
+      setActiveKind(workbenchSelection.dictionaryKind);
+    }
+    if (
+      (workbenchSelection.kind === "lexicon_table" || workbenchSelection.kind === "lexicon_entry")
+      && workbenchSelection.tableId !== activeTableId
+    ) {
+      setActiveTableId(workbenchSelection.tableId);
+    }
+  }, [activeKind, activeTableId, workbenchSelection]);
+
+  useEffect(() => {
     if (entryPage > totalEntryPages) {
       setEntryPage(totalEntryPages);
     }
@@ -4475,6 +4789,12 @@ function DictionariesPage() {
       };
     });
     setActiveTableId(nextTable.id);
+    onWorkbenchSelect?.({
+      kind: "lexicon_table",
+      projectId: project.id,
+      dictionaryKind: activeKind,
+      tableId: nextTable.id
+    });
   };
 
   const duplicateCurrentTable = () => {
@@ -4506,6 +4826,12 @@ function DictionariesPage() {
       };
     });
     setActiveTableId(nextTable.id);
+    onWorkbenchSelect?.({
+      kind: "lexicon_table",
+      projectId: project.id,
+      dictionaryKind: activeKind,
+      tableId: nextTable.id
+    });
   };
 
   const deleteCurrentTable = () => {
@@ -4623,6 +4949,53 @@ function DictionariesPage() {
     await exportDictionaryTable(activeKind, currentTable.id, path);
   };
 
+  const selectDictionaryKind = (kind: DictionaryKind) => {
+    setActiveKind(kind);
+    const nextCollection = draftSet.collections[kind];
+    setActiveTableId((current) =>
+      nextCollection.tables.some((table) => table.id === current)
+        ? current
+        : (nextCollection.tables[0]?.id ?? "")
+    );
+    onWorkbenchSelect?.({
+      kind: "lexicon_kind",
+      projectId: project.id,
+      dictionaryKind: kind
+    });
+  };
+
+  const selectDictionaryTable = (table: DictionaryTableResource) => {
+    setActiveTableId(table.id);
+    onWorkbenchSelect?.({
+      kind: "lexicon_table",
+      projectId: project.id,
+      dictionaryKind: activeKind,
+      tableId: table.id
+    });
+  };
+
+  const selectDictionaryEntry = (entry: DictionaryEntry) => {
+    if (!currentTable) {
+      return;
+    }
+    onWorkbenchSelect?.({
+      kind: "lexicon_entry",
+      projectId: project.id,
+      dictionaryKind: activeKind,
+      tableId: currentTable.id,
+      entryId: entry.id
+    });
+  };
+
+  const handleBindToWorkflow = () => {
+    onWorkbenchSelect?.({
+      kind: "workflow",
+      projectId: project.id,
+      workflowId: project.active_workflow_id || project.workflow_definitions[0]?.workflow_id || "active-workflow"
+    });
+    setActivePage("workflow");
+  };
+
   const enabledTableCount = currentCollection.tables.filter((table) => table.enabled).length;
   const activeCollectionEntryCount = currentCollection.tables.reduce((sum, table) => {
     if (!table.enabled) {
@@ -4637,46 +5010,39 @@ function DictionariesPage() {
   const currentTableEditable = Boolean(currentTable?.editable);
 
   return (
-    <>
+    <LexiconWorkspace
+      dictionarySet={draftSet}
+      activeKind={activeKind}
+      currentTable={currentTable}
+      loading={loading}
+      onImportTable={handleImportTable}
+      onExportTable={handleExportTable}
+      onAddTable={addTable}
+      onDuplicateTable={duplicateCurrentTable}
+      onBindToWorkflow={handleBindToWorkflow}
+    >
       <Panel
-        title="词表中心"
+        title="词库中心"
         actions={
           <div className="button-row">
-            <button type="button" className="toolbar-button ghost" onClick={addTable} disabled={loading}>
+            <Button appearance="subtle" onClick={addTable} disabled={loading}>
               新增资源
-            </button>
-            <button type="button" className="toolbar-button" onClick={() => void handleImportTable()} disabled={loading}>
+            </Button>
+            <Button onClick={() => void handleImportTable()} disabled={loading}>
               导入 JSON
-            </button>
-            <button type="button" className="toolbar-button ghost" onClick={duplicateCurrentTable} disabled={loading || !currentTable}>
+            </Button>
+            <Button appearance="subtle" onClick={duplicateCurrentTable} disabled={loading || !currentTable}>
               复制当前资源
-            </button>
-            <button type="button" className="toolbar-button ghost" onClick={deleteCurrentTable} disabled={loading || !currentTable || currentTable.built_in}>
+            </Button>
+            <Button appearance="subtle" onClick={deleteCurrentTable} disabled={loading || !currentTable || currentTable.built_in}>
               删除当前资源
-            </button>
-            <button type="button" className="toolbar-button accent" onClick={() => void saveDictionarySet()} disabled={loading}>
+            </Button>
+            <Button appearance="primary" onClick={() => void saveDictionarySet()} disabled={loading}>
               保存词表
-            </button>
+            </Button>
           </div>
         }
       >
-        <div className="dictionary-kind-tabs">
-          {dictionaryKindOrder.map((kind) => {
-            const collection = draftSet.collections[kind];
-            return (
-            <button
-              key={kind}
-              type="button"
-              className={`dictionary-kind-button ${activeKind === kind ? "is-active" : ""}`.trim()}
-              onClick={() => setActiveKind(kind)}
-              disabled={loading}
-            >
-              <strong>{collection.name}</strong>
-              <small>{collection.tables.length} 张资源表 · 生效于 {dictionaryGuideMap[kind].stepLabel}</small>
-            </button>
-          );
-          })}
-        </div>
         <div className="dictionary-overview-grid">
           <article className="project-card dictionary-guide-card">
             <div className="run-head">
@@ -4696,9 +5062,9 @@ function DictionariesPage() {
               <p className="helper-note">停用词已拆成独立资源表，默认只打开“项目自定义”，不再一股脑把所有内置停用词全部铺在页面上。</p>
             )}
             <div className="button-row">
-              <button type="button" className="toolbar-button ghost" onClick={() => setActivePage("workflow")} disabled={loading}>
-                去看流程里的这一步
-              </button>
+              <Button appearance="subtle" onClick={() => setActivePage("workflow")} disabled={loading}>
+                去看节点图里的这一步
+              </Button>
             </div>
           </article>
           <div className="stat-grid dictionary-stat-grid">
@@ -4724,11 +5090,11 @@ function DictionariesPage() {
         <div className="dictionary-library-layout">
           <div className="dictionary-resource-list">
             {currentCollection.tables.map((table) => (
-              <button
+              <Button
                 key={table.id}
-                type="button"
+                appearance="subtle"
                 className={`dictionary-resource-card ${currentTable?.id === table.id ? "is-active" : ""}`.trim()}
-                onClick={() => setActiveTableId(table.id)}
+                onClick={() => selectDictionaryTable(table)}
                 disabled={loading}
               >
                 <div className="dictionary-resource-head">
@@ -4741,7 +5107,7 @@ function DictionariesPage() {
                   <small>{table.editable ? "可编辑" : "只读"}</small>
                 </div>
                 <p>{table.description || "未填写说明。"}</p>
-              </button>
+              </Button>
             ))}
           </div>
           <article className="project-card dictionary-resource-detail">
@@ -4750,36 +5116,33 @@ function DictionariesPage() {
                 <p className="eyebrow">当前资源</p>
                 <h4>{currentTable?.name || "未选择资源"}</h4>
               </div>
-              <label className="switch-row compact">
-                <input
-                  type="checkbox"
-                  checked={Boolean(currentTable?.enabled)}
-                  onChange={(event) => updateCurrentTable((table) => {
-                    table.enabled = event.target.checked;
-                  })}
-                  disabled={loading || !currentTable}
-                />
-                <span>启用资源</span>
-              </label>
+              <Switch
+                checked={Boolean(currentTable?.enabled)}
+                onChange={(_, data) => updateCurrentTable((table) => {
+                  table.enabled = Boolean(data.checked);
+                })}
+                disabled={loading || !currentTable}
+                label="启用资源"
+              />
             </div>
             <div className="dictionary-resource-form">
               <label className="field">
                 <span>资源名称</span>
-                <input
+                <Input
                   value={currentTable?.name ?? ""}
-                  onChange={(event) => updateCurrentTable((table) => {
-                    table.name = event.target.value;
+                  onChange={(_, data) => updateCurrentTable((table) => {
+                    table.name = data.value;
                   })}
                   disabled={loading || !currentTableEditable}
                 />
               </label>
               <label className="field">
                 <span>资源说明</span>
-                <textarea
+                <Textarea
                   rows={3}
                   value={currentTable?.description ?? ""}
-                  onChange={(event) => updateCurrentTable((table) => {
-                    table.description = event.target.value;
+                  onChange={(_, data) => updateCurrentTable((table) => {
+                    table.description = data.value;
                   })}
                   disabled={loading || !currentTableEditable}
                 />
@@ -4812,14 +5175,19 @@ function DictionariesPage() {
           <div className="button-row">
             <label className="search-box">
               <span>筛选条目</span>
-              <input value={entrySearch} onChange={(event) => setEntrySearch(event.target.value)} placeholder="按原词、目标词、备注或标签检索" />
+              <Input
+                contentBefore={<SearchRegular />}
+                value={entrySearch}
+                onChange={(_, data) => setEntrySearch(data.value)}
+                placeholder="按原词、目标词、备注或标签检索"
+              />
             </label>
-            <button type="button" className="toolbar-button" onClick={() => void handleExportTable()} disabled={loading || !currentTable}>
+            <Button onClick={() => void handleExportTable()} disabled={loading || !currentTable}>
               导出当前 JSON
-            </button>
-            <button type="button" className="toolbar-button ghost" onClick={addEntry} disabled={loading || !currentTableEditable}>
+            </Button>
+            <Button appearance="subtle" onClick={addEntry} disabled={loading || !currentTableEditable}>
               新增条目
-            </button>
+            </Button>
           </div>
         }
       >
@@ -4827,30 +5195,29 @@ function DictionariesPage() {
           {currentTableEditable ? (
             pagedEntries.map((entry) => (
               <div className="dictionary-editor-row" key={entry.id}>
-                <input
+                <Input
                   value={entry.source}
-                  onChange={(event) => updateEntry(entry.id, { source: event.target.value })}
+                  onFocus={() => selectDictionaryEntry(entry)}
+                  onChange={(_, data) => updateEntry(entry.id, { source: data.value })}
                   placeholder={currentGuide.sourceHint}
                   disabled={loading || !currentTableEditable}
                 />
-                <input
+                <Input
                   value={entry.target ?? ""}
-                  onChange={(event) => updateEntry(entry.id, { target: event.target.value })}
+                  onFocus={() => selectDictionaryEntry(entry)}
+                  onChange={(_, data) => updateEntry(entry.id, { target: data.value })}
                   placeholder={currentGuide.targetHint}
                   disabled={loading || !currentGuide.usesTarget || !currentTableEditable}
                 />
-                <label className="switch-row compact">
-                  <input
-                    type="checkbox"
-                    checked={entry.enabled}
-                    onChange={(event) => updateEntry(entry.id, { enabled: event.target.checked })}
-                    disabled={loading || !currentTableEditable}
-                  />
-                  <span>启用</span>
-                </label>
-                <button type="button" className="toolbar-button ghost" onClick={() => removeEntry(entry.id)} disabled={loading || !currentTableEditable}>
+                <Switch
+                  checked={entry.enabled}
+                  onChange={(_, data) => updateEntry(entry.id, { enabled: Boolean(data.checked) })}
+                  disabled={loading || !currentTableEditable}
+                  label="启用"
+                />
+                <Button appearance="subtle" onClick={() => removeEntry(entry.id)} disabled={loading || !currentTableEditable}>
                   删除
-                </button>
+                </Button>
               </div>
             ))
           ) : (
@@ -4871,22 +5238,22 @@ function DictionariesPage() {
             第 {visibleEntries.length ? pageStartIndex + 1 : 0} - {Math.min(pageStartIndex + pagedEntries.length, visibleEntries.length)} 条，
             每页 {DICTIONARY_ENTRY_PAGE_SIZE} 条。
           </span>
-          <button type="button" className="toolbar-button ghost" onClick={() => setEntryPage((current) => Math.max(1, current - 1))} disabled={safeEntryPage <= 1}>
+          <Button appearance="subtle" icon={<ChevronLeftRegular />} onClick={() => setEntryPage((current) => Math.max(1, current - 1))} disabled={safeEntryPage <= 1}>
             上一页
-          </button>
-          <button type="button" className="toolbar-button ghost" onClick={() => setEntryPage((current) => Math.min(totalEntryPages, current + 1))} disabled={safeEntryPage >= totalEntryPages}>
+          </Button>
+          <Button appearance="subtle" icon={<ChevronRightRegular />} onClick={() => setEntryPage((current) => Math.min(totalEntryPages, current + 1))} disabled={safeEntryPage >= totalEntryPages}>
             下一页
-          </button>
+          </Button>
         </div>
         {!!entrySearch.trim() && (
           <p className="helper-note">当前按 “{entrySearch.trim()}” 显示 {visibleEntries.length} / {currentTable?.entries.length ?? 0} 条。</p>
         )}
         <label className="field">
           <span>批量粘贴</span>
-          <textarea
+          <Textarea
             rows={5}
             value={bulkText}
-            onChange={(event) => setBulkText(event.target.value)}
+            onChange={(_, data) => setBulkText(data.value)}
             placeholder={currentGuide.bulkExample}
             disabled={loading || !currentTableEditable}
           />
@@ -4895,190 +5262,12 @@ function DictionariesPage() {
           支持逐行粘贴，格式可以用“source,target”、“source to target”或只写左侧词项。
         </p>
         <div className="button-row">
-          <button type="button" className="toolbar-button" onClick={appendBulkEntries} disabled={loading || !currentTableEditable || !bulkText.trim()}>
+          <Button onClick={appendBulkEntries} disabled={loading || !currentTableEditable || !bulkText.trim()}>
             追加批量条目
-          </button>
+          </Button>
         </div>
       </Panel>
-    </>
-  );
-}
-
-function ResultsPage() {
-  const {
-    state: { snapshot, loading, lastExport },
-    compareRuns,
-    exportProject,
-    exportProjectBackup,
-    openPath,
-    revealPath,
-    saveProjectPackagePath
-  } = useWorkspace();
-  const project = snapshot.current_project;
-
-  if (!project) {
-    return <EmptyState title="还没有结果" body="先完成一次处理，这里就会出现表格、图表和报告。" />;
-  }
-
-  const currentProjectSummary = snapshot.recent_projects.find((item) => item.id === project.id);
-  const projectRootPath = currentProjectSummary?.path;
-  const fallbackExportDir = projectRootPath ? joinFsPath(projectRootPath, project.paths.exports_dir) : null;
-  const visibleExport = lastExport?.project_id === project.id ? lastExport : null;
-  const exportDirPath = visibleExport?.export_dir ?? fallbackExportDir;
-  const exportDirLabel = visibleExport?.relative_export_dir ?? project.paths.exports_dir;
-  const generatedFiles = projectRootPath
-    ? project.results.report_files.map((relativePath) => ({
-        path: joinFsPath(projectRootPath, relativePath),
-        relative_path: relativePath
-      }))
-    : [];
-
-  const handleExportProjectPackage = async () => {
-    const path = await saveProjectPackagePath(`${project.name}.tfproj`);
-    if (!path) {
-      return;
-    }
-    await exportProjectBackup(path);
-  };
-
-  const handleExportResults = async (formats: ("csv" | "xlsx" | "html" | "png")[]) => {
-    await exportProject(formats);
-  };
-
-  return (
-    <>
-      <Panel
-        title="第 5 步：导出结果"
-        actions={
-          <div className="button-row">
-            <button type="button" className="toolbar-button accent" onClick={() => void handleExportResults(["csv", "xlsx"])} disabled={loading}>
-              导出表格
-            </button>
-            <button type="button" className="toolbar-button" onClick={() => void handleExportResults(["html", "png"])} disabled={loading}>
-              导出报告与图表
-            </button>
-            <button type="button" className="toolbar-button ghost" onClick={() => void handleExportProjectPackage()} disabled={loading}>
-              导出 .tfproj 项目包
-            </button>
-          </div>
-        }
-      >
-        <ul className="feature-list">
-          <li>表格导出适合继续在 Excel 里筛选和汇总。</li>
-          <li>报告与图表导出会包含高频词图、项目关键词图、关键词词云、机构主题热力图和文档聚类图。</li>
-          <li>`.tfproj` 项目包会把项目、语料、词表、运行记录和导出文件一起打成一个单文件。</li>
-        </ul>
-        <div className="status-panel export-location-panel">
-          <strong>导出位置</strong>
-          <p className="project-path">{exportDirPath ?? "还没有导出过结果。导出后会自动打开导出文件夹。"}</p>
-          <div className="button-row">
-            <button
-              type="button"
-              className="toolbar-button"
-              onClick={() => exportDirPath ? void openPath(exportDirPath) : undefined}
-              disabled={loading || !exportDirPath}
-            >
-              打开导出文件夹
-            </button>
-            <button
-              type="button"
-              className="toolbar-button ghost"
-              onClick={() => visibleExport?.files[0] ? void revealPath(visibleExport.files[0].path) : undefined}
-              disabled={loading || !visibleExport?.files.length}
-            >
-              定位最近导出的文件
-            </button>
-          </div>
-          <span className="muted">
-            {visibleExport
-              ? `最近一次导出保存在 ${visibleExport.relative_export_dir}，导出完成后会自动打开该文件夹。`
-              : `当前项目的导出目录固定在 ${exportDirLabel}。`}
-          </span>
-        </div>
-      </Panel>
-
-        <RunHistoryPanel
-          runs={project.run_history}
-          reviewTasks={[]}
-          experiments={[]}
-          loading={loading}
-          onCompareRuns={async (leftRunId, rightRunId) => {
-            await compareRuns(leftRunId, rightRunId);
-          }}
-        />
-        <Panel title={visibleExport ? "最近一次导出的文件" : "已生成文件"}>
-          <div className="artifact-list">
-            {(visibleExport?.files.length ? visibleExport.files : generatedFiles).map((file) => (
-              <article key={file.path} className="project-card artifact-row">
-                <div>
-                  <h4>{fileNameFromPath(file.relative_path)}</h4>
-                  <p className="project-path">{file.relative_path}</p>
-                </div>
-                <div className="button-row">
-                  <button type="button" className="toolbar-button" onClick={() => void openPath(file.path)} disabled={loading}>
-                    打开
-                  </button>
-                  <button type="button" className="toolbar-button ghost" onClick={() => void revealPath(file.path)} disabled={loading}>
-                    定位
-                  </button>
-                </div>
-              </article>
-            ))}
-            {!(visibleExport?.files.length || generatedFiles.length) && (
-              <div className="status-panel">
-                <strong>还没有可查看的导出文件</strong>
-                <span className="muted">先运行一次导出，这里会显示文件列表，并支持打开或定位。</span>
-              </div>
-            )}
-          </div>
-        </Panel>
-      </>
-    );
-  }
-
-function ReportPage() {
-  const {
-    state: { snapshot }
-  } = useWorkspace();
-  const project = snapshot.current_project;
-
-  if (!project) {
-    return <EmptyState title="暂无报告" body="生成结果后即可预览 HTML 报告结构。" />;
-  }
-
-  const runtimeProfile = projectRuntimeProfile(project);
-
-  return (
-    <div className="report-layout">
-      <Panel title="HTML 报告结构">
-        <div className="report-block">
-          <h4>1. 项目概览</h4>
-          <p>{project.name}，共 {snapshot.corpus.length} 篇文档，最近更新时间 {project.updated_at}。</p>
-        </div>
-        <div className="report-block">
-          <h4>2. 数据规模与流程参数</h4>
-          <p>
-            Source profile 为 <strong>{project.import_template.source_profile}</strong>，
-            使用 {runtimeProfile.analysis.feature_term_count} 规模的特征词集进行后续分析。
-          </p>
-        </div>
-        <div className="report-block">
-          <h4>3. 关键词聚类摘要</h4>
-          <ul className="feature-list">
-            {project.results.keyword_cluster_result
-              .filter((row) => row.is_label_term)
-              .slice(0, 24)
-              .map((row) => (
-                <li key={`${row.cluster_id}-${row.term}`}>Cluster {row.cluster_id}: {row.topic_label}</li>
-              ))}
-          </ul>
-        </div>
-      </Panel>
-
-      <Panel title="规则审计摘要">
-        <AuditTable rows={project.results.audit_table} />
-      </Panel>
-    </div>
+    </LexiconWorkspace>
   );
 }
 
@@ -5099,14 +5288,13 @@ function SettingsPage() {
       <Panel
         title="界面缩放"
         actions={(
-          <button
-            type="button"
-            className="toolbar-button compact ghost"
+          <Button
+            appearance="subtle"
             onClick={() => setUiScale(1)}
             disabled={Math.abs(uiScale - 1) < 0.001}
           >
             恢复 100%
-          </button>
+          </Button>
         )}
       >
         <div className="settings-scale-grid">
@@ -5118,35 +5306,33 @@ function SettingsPage() {
           </div>
           <div className="settings-scale-actions">
             <div className="tab-row">
-              <button
-                type="button"
-                className="toolbar-button compact"
+              <Button
                 onClick={() => applyScaleStep(-0.05)}
                 disabled={uiScale <= 0.8}
               >
                 缩小 5%
-              </button>
-              <button
-                type="button"
-                className="toolbar-button compact"
+              </Button>
+              <Button
                 onClick={() => applyScaleStep(0.05)}
                 disabled={uiScale >= 1.2}
               >
                 放大 5%
-              </button>
+              </Button>
             </div>
-            <div className="tab-row">
+            <TabList
+              className="tab-row"
+              selectedValue={String(uiScale)}
+              onTabSelect={(_, data) => setUiScale(Number(data.value))}
+            >
               {scalePresets.map((preset) => (
-                <button
+                <Tab
                   key={preset}
-                  type="button"
-                  className={`tab-button ${Math.abs(uiScale - preset) < 0.001 ? "is-active" : ""}`}
-                  onClick={() => setUiScale(preset)}
+                  value={String(preset)}
                 >
                   {Math.round(preset * 100)}%
-                </button>
+                </Tab>
               ))}
-            </div>
+            </TabList>
           </div>
         </div>
       </Panel>

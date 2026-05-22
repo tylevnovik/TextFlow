@@ -1,5 +1,6 @@
 import type {
   ExportParameters,
+  RegisteredWorkflowNodeDefinition,
   WorkflowRuntimeProfile,
   WorkflowStepId,
   RunScopeDefinition,
@@ -633,4 +634,28 @@ export function builtinWorkflowOptionalToolboxNodes(): WorkflowNodeType[] {
     .filter(([, definition]) => !definition.hidden_from_toolbox)
     .sort((left, right) => left[1].category.localeCompare(right[1].category) || left[1].label.localeCompare(right[1].label, "zh-CN"))
     .map(([nodeType]) => nodeType);
+}
+
+export function builtinWorkflowToolboxDefinitions(): RegisteredWorkflowNodeDefinition[] {
+  return (Object.entries(builtinWorkflowNodeDefinitions) as Array<[WorkflowNodeType, WorkflowNodeDefinition]>)
+    .filter(([, definition]) => !definition.hidden_from_toolbox)
+    .sort((left, right) => left[1].category.localeCompare(right[1].category) || left[1].label.localeCompare(right[1].label, "zh-CN"))
+    .map(([nodeType, definition]) => ({
+      type: nodeType,
+      title: definition.label,
+      category: definition.category,
+      description: definition.description,
+      hidden_from_toolbox: definition.hidden_from_toolbox,
+      singleton: definition.singleton,
+      inputs: definition.inputs.map(({ result_bundle_key, png_chart_ids, include_in_html_audit, ...port }) => ({ ...port })),
+      outputs: definition.outputs.map(({ result_bundle_key, png_chart_ids, include_in_html_audit, ...port }) => ({ ...port })),
+      params: [],
+      runtime: {
+        step_id: definition.stepId,
+        executor: "builtin",
+        cacheable: true,
+        previewable: true,
+        output_node: definition.category === "output"
+      }
+    }));
 }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Button, Select } from "@fluentui/react-components";
 import type { RunRecord } from "@textflow/shared-types";
 import { Panel } from "../../ui";
 import type { RunDiffSummary } from "../../bridge/desktopBridge";
@@ -36,33 +37,31 @@ export function RunDiffPanel({ runs, diff, loading = false, onCompareRuns }: Run
     <Panel
       title="Run Diff"
       actions={
-        <button
-          type="button"
-          className="toolbar-button"
+        <Button
           onClick={() => canCompare ? void onCompareRuns(leftRunId, rightRunId) : undefined}
           disabled={loading || !canCompare}
         >
           Compare
-        </button>
+        </Button>
       }
     >
       <div className="two-column">
         <div className="stack-list">
           <label className="field">
             <span>Baseline run</span>
-            <select value={leftRunId} onChange={(event) => setLeftRunId(event.target.value)} disabled={loading || orderedRuns.length < 2}>
+            <Select value={leftRunId} onChange={(event) => setLeftRunId(event.target.value)} disabled={loading || orderedRuns.length < 2}>
               {orderedRuns.map((run) => (
                 <option key={`left-${run.run_id}`} value={run.run_id}>{runLabel(run)}</option>
               ))}
-            </select>
+            </Select>
           </label>
           <label className="field">
             <span>Comparison run</span>
-            <select value={rightRunId} onChange={(event) => setRightRunId(event.target.value)} disabled={loading || orderedRuns.length < 2}>
+            <Select value={rightRunId} onChange={(event) => setRightRunId(event.target.value)} disabled={loading || orderedRuns.length < 2}>
               {orderedRuns.map((run) => (
                 <option key={`right-${run.run_id}`} value={run.run_id}>{runLabel(run)}</option>
               ))}
-            </select>
+            </Select>
           </label>
           {orderedRuns.length < 2 && (
             <div className="status-panel">

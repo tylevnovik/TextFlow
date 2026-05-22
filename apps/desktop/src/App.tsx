@@ -1,19 +1,16 @@
-import type { CSSProperties } from "react";
-import type { PageId } from "@textflow/shared-types";
 import { useTaskProgress, useWorkspace } from "./store/workspaceStore";
-import { PageView, pageMeta } from "./screens";
-
-const primaryPages: PageId[] = ["home", "project", "data", "dictionaries", "workflow", "results", "settings"];
+import { AppShell } from "./app/AppShell";
+import { ProjectWorkbench } from "./app/ProjectWorkbench";
 
 export function App() {
   const {
     state: { activePage, snapshot, loading, statusLine, uiScale },
-    setActivePage
+    setActivePage,
+    runWorkflow,
+    exportProject
   } = useWorkspace();
   const progress = useTaskProgress();
 
-  const project = snapshot.current_project;
-  const isWorkflowPage = activePage === "workflow";
   const workflowRunDetail = progress.detail?.kind === "workflow_run" ? progress.detail : undefined;
   const currentNodeLabel = workflowRunDetail?.current_node_label
     ?? (progress.detail?.kind === "node" ? progress.detail.node_label : undefined);
@@ -30,83 +27,24 @@ export function App() {
   const progressDetail = [progressScopeLabel, workflowRunDetail?.detail, currentNodeLabel && progress.message !== `正在执行节点：${currentNodeLabel}` ? progress.message : progress.detail?.detail]
     .filter(Boolean)
     .join(" · ");
-  const appShellStyle = {
-    transform: `scale(${uiScale})`,
-    transformOrigin: "top left",
-    width: `${100 / uiScale}%`,
-    height: `calc(100vh / ${uiScale})`,
-    minHeight: `calc(100vh / ${uiScale})`
-  } as CSSProperties;
 
   return (
-    <div className="app-shell-frame">
-      <div className="background-grid" />
-      <div className="app-shell" style={appShellStyle}>
-        <aside className="sidebar">
-          <div className="brand-block">
-            <div className="brand-lockup">
-              <div className="brand-mark" aria-hidden="true">TF</div>
-              <div>
-                <p className="eyebrow">TextFlow Studio</p>
-                <h1>TextFlow</h1>
-              </div>
-            </div>
-            <p className="brand-copy">文本整理与基础分析工具。按项目保存数据、词表和结果。</p>
-          </div>
-
-          <nav className="nav-list" aria-label="主导航">
-            {primaryPages.map((page) => (
-              <button
-                key={page}
-                className={`nav-item ${activePage === page ? "is-active" : ""}`}
-                onClick={() => setActivePage(page as PageId)}
-                type="button"
-              >
-                <span>{pageMeta[page].title}</span>
-                <small>{pageMeta[page].tag}</small>
-              </button>
-            ))}
-          </nav>
-
-          <div className="sidebar-foot">
-            <div className="status-chip">
-              <span className={`dot ${loading ? "loading" : "ready"}`} />
-              {loading ? "后台处理" : "可以继续操作"}
-            </div>
-            <p>当前项目位置</p>
-            <strong>{project?.paths.root ?? "尚未加载 .tfproj"}</strong>
-          </div>
-        </aside>
-
-        <main className={`main-stage ${isWorkflowPage ? "is-workflow-page" : ""}`}>
-          <header className={`topbar ${isWorkflowPage ? "is-workflow-page" : ""}`}>
-            <div>
-              <p className="eyebrow">当前步骤</p>
-              <h2>{pageMeta[activePage].headline}</h2>
-              <p className="topbar-copy">{statusLine}</p>
-            </div>
-          </header>
-
-          {progress.status !== "idle" && (
-            <section className={`progress-strip status-${progress.status}`}>
-              <div className="progress-strip-copy">
-                <div className="progress-strip-labels">
-                  <strong>{progressHeadline}</strong>
-                  {progressDetail && <small className="progress-strip-detail">{progressDetail}</small>}
-                </div>
-                <span>{Math.round(progress.value * 100)}%</span>
-              </div>
-              <div className="progress-track" aria-hidden="true">
-                <div className="progress-fill" style={{ width: `${Math.max(6, progress.value * 100)}%` }} />
-              </div>
-            </section>
-          )}
-
-          <section className={`content-grid page-${activePage} ${isWorkflowPage ? "is-workflow-page" : ""}`}>
-            <PageView page={activePage} />
-          </section>
-        </main>
-      </div>
-    </div>
+    <AppShell uiScale={uiScale}>
+      <ProjectWorkbench
+        activePage={activePage}
+        snapshot={snapshot}
+        loading={loading}
+        statusLine={statusLine}
+        progress={{
+          status: progress.status,
+          value: progress.value,
+          headline: progressHeadline,
+          detail: progressDetail || undefined
+        }}
+        setActivePage={setActivePage}
+        onRunWorkflow={() => void runWorkflow()}
+        onExportArtifacts={(formats = ["csv", "xlsx", "html", "png"]) => void exportProject(formats)}
+      />
+    </AppShell>
   );
 }
