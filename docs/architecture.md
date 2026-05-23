@@ -20,7 +20,7 @@ apps/desktop/
 services/python-engine/
   app/                       # Python sidecar app package
   app/analysis/              # 文本处理、统计、关键词、主题、图和技术指标算法
-  app/api/                   # sidecar HTTP service 与 action dispatcher
+  app/api/                   # FastAPI sidecar service 与 action dispatcher
   app/domain/                # project/dictionary/workflow/result 领域 helper
   app/ingestion/             # 语料导入器与导入规范
   app/reporting/             # HTML、图表和运行输出报告
@@ -60,15 +60,16 @@ Python engine 当前仍处在从平铺模块向分层包结构迁移的阶段。
 
 ### 3. Tauri 与 sidecar 通信
 
-Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 HTTP 任务接口通信：
+Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 FastAPI 任务接口通信：
 
 - `GET /health`
 - `POST /tasks/start`
 - `GET /tasks/<task_id>`
+- `POST /shutdown`
 
 ### 4. 任务与进度
 
-- sidecar 任务管理器当前使用单 worker 顺序执行。
+- sidecar 由 FastAPI/Uvicorn 提供本地 HTTP 外壳，任务管理器当前使用单 worker 顺序执行。
 - 单次 workflow run 内部已支持同层就绪、parallel-safe 节点的并发执行。
 - Tauri 轮询任务状态并向前端发出 `engine-progress` 事件。
 - 前端会把 stage、当前节点、完成度和摘要映射到顶部进度条。

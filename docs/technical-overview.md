@@ -40,6 +40,7 @@
 ┌───────────────────────┴─────────────────────────────────┐
 │                   计算引擎层 (Python Sidecar)              │
 │     Python 3.11+ / PyInstaller 打包                      │
+│     • FastAPI/Uvicorn 本地 HTTP 任务接口                  │
 │     • DAG 运行时: 拓扑排序 → 并行批次执行                   │
 │     • 35 个节点执行器 / 40+ 节点定义                        │
 │     • jieba 分词 / sklearn 聚类 / YAKE 关键词 / NMF 主题   │
@@ -223,7 +224,7 @@ Fluent UI React v9 已先接入 `AppShell` 和 `ProjectWorkbench`，承担应用
 main.py
 ├── CLI 模式: python main.py <action> [json-payload]
 └── HTTP 模式: python main.py serve [host port]
-    └── service.py (ThreadingHTTPServer, port 8765)
+    └── service.py (FastAPI + Uvicorn, port 8765)
         ├── GET  /health           -> {"status": "ok"}
         ├── GET  /tasks/{task_id}  -> 任务快照
         ├── POST /tasks/start      -> {"action": "...", "payload": {...}}
@@ -593,9 +594,12 @@ npm run tauri:build                 # -> NSIS 安装程序
 | `numpy` | 数值计算 |
 | `scikit-learn` | TF-IDF/KMeans/NMF |
 | `yake` | 关键词提取 |
+| `fastapi` | sidecar 本地 HTTP API |
+| `uvicorn` | ASGI 服务运行时 |
 | `matplotlib` | 图表生成 |
 | `wordcloud` | 词云生成 |
 | `openpyxl` | XLSX 读写 |
+| `httpx` | FastAPI TestClient 支撑 (dev) |
 | `pytest` | 测试框架 (dev) |
 | `pyinstaller` | 打包工具 (build) |
 

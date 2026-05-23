@@ -3,13 +3,29 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from contextlib import asynccontextmanager
 from typing import Any, Callable
 from uuid import uuid4
 
+import uvicorn
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
 from .actions.dispatcher import execute_action
 from ..domain.defaults import json_ready, utc_now_iso
+
+
+class TextFlowJSONResponse(JSONResponse):
+    def render(self, content: Any) -> bytes:
+        return json.dumps(json_ready(content), ensure_ascii=False).encode("utf-8")
+
+
+class StartTaskRequest(BaseModel):
+    action: str = Field(default="")
+    payload: dict[str, Any] | None = None
 
 
 class TaskManager:
@@ -73,89 +89,102 @@ class TaskManager:
         self._update(task_id, status="completed", progress=1.0, message="处理完成", result=result)
 
 
-def build_handler(task_manager: TaskManager, shutdown_server: Callable[[], None]) -> type[BaseHTTPRequestHandler]:
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
-            if self.path == "/health":
-                self._send_json(HTTPStatus.OK, {"status": "ok"})
-                return
+def create_app(
+    task_manager: TaskManager | None = None,
+    shutdown_server: Callable[[], None] | None = None,
+) -> FastAPI:
+    owns_task_manager = task_manager is None
 
-            if self.path.startswith("/tasks/"):
-                task_id = self.path.rsplit("/", 1)[-1]
-                task = task_manager.get(task_id)
-                if task is None:
-                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "task not found"})
-                    return
-                self._send_json(HTTPStatus.OK, task)
-                return
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        manager = task_manager or TaskManager(max_workers=1)
+        app.state.task_manager = manager
+        app.state.shutdown_server = shutdown_server or (lambda: None)
+        try:
+            yield
+        finally:
+            if owns_task_manager:
+                manager.shutdown()
 
-            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+    app = FastAPI(
+        title="TextFlow Python Engine",
+        version="0.1.1",
+        default_response_class=TextFlowJSONResponse,
+        lifespan=lifespan,
+    )
+    # The service only binds to localhost. CORS lets the Vite dev server
+    # exercise the real engine from a browser smoke test.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type"],
+    )
 
-        def do_OPTIONS(self) -> None:  # noqa: N802
-            self.send_response(HTTPStatus.NO_CONTENT)
-            self._send_cors_headers()
-            self.end_headers()
+    def manager_from_request(request: Request) -> TaskManager:
+        manager = getattr(request.app.state, "task_manager", None)
+        if manager is None:
+            raise RuntimeError("task manager is not initialized")
+        return manager
 
-        def do_POST(self) -> None:  # noqa: N802
-            if self.path == "/tasks/start":
-                payload = self._read_json()
-                ticket = task_manager.start(payload.get("action", ""), payload.get("payload"))
-                self._send_json(HTTPStatus.OK, ticket)
-                return
+    @app.exception_handler(StarletteHTTPException)
+    async def handle_http_exception(_request: Request, exc: StarletteHTTPException) -> TextFlowJSONResponse:
+        detail = exc.detail
+        if isinstance(detail, dict):
+            payload = detail
+        else:
+            message = str(detail).lower() if detail else "not found"
+            payload = {"error": message}
+        return TextFlowJSONResponse(payload, status_code=exc.status_code, headers=getattr(exc, "headers", None))
 
-            if self.path == "/shutdown":
-                self._send_json(HTTPStatus.OK, {"status": "shutting_down"})
-                threading.Thread(target=shutdown_server, daemon=True).start()
-                return
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
 
-            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+    @app.get("/tasks/{task_id}")
+    def get_task(task_id: str, request: Request) -> dict[str, Any]:
+        task = manager_from_request(request).get(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail={"error": "task not found"})
+        return task
 
-        def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
-            return
+    @app.post("/tasks/start")
+    def start_task(request: Request, request_body: StartTaskRequest | None = None) -> dict[str, str]:
+        body = request_body or StartTaskRequest()
+        return manager_from_request(request).start(body.action, body.payload)
 
-        def _read_json(self) -> dict[str, Any]:
-            content_length = int(self.headers.get("Content-Length", "0"))
-            if content_length <= 0:
-                return {}
-            raw = self.rfile.read(content_length)
-            if not raw:
-                return {}
-            return json.loads(raw.decode("utf-8"))
+    @app.post("/shutdown")
+    def shutdown(background_tasks: BackgroundTasks, request: Request) -> dict[str, str]:
+        background_tasks.add_task(request.app.state.shutdown_server)
+        return {"status": "shutting_down"}
 
-        def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
-            body = json.dumps(json_ready(payload), ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self._send_cors_headers()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+    return app
 
-        def _send_cors_headers(self) -> None:
-            # The service only binds to localhost. CORS lets the Vite dev server
-            # exercise the real engine from a browser smoke test.
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
-    return Handler
+app = create_app()
 
 
 def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
-    task_manager = TaskManager(max_workers=1)
-    httpd: ThreadingHTTPServer | None = None
+    server_box: dict[str, uvicorn.Server] = {}
 
     def shutdown_server() -> None:
-        if httpd is not None:
-            httpd.shutdown()
+        server = server_box.get("server")
+        if server is not None:
+            server.should_exit = True
 
-    handler = build_handler(task_manager, shutdown_server)
-    httpd = ThreadingHTTPServer((host, port), handler)
-    httpd.daemon_threads = True
-
-    try:
-        httpd.serve_forever(poll_interval=0.2)
-    finally:
-        task_manager.shutdown()
-        httpd.server_close()
+    server_app = create_app(shutdown_server=shutdown_server)
+    config = uvicorn.Config(
+        server_app,
+        host=host,
+        port=port,
+        access_log=False,
+        http="h11",
+        lifespan="on",
+        log_level="warning",
+        loop="asyncio",
+        ws="none",
+    )
+    server = uvicorn.Server(config)
+    server_box["server"] = server
+    server.run()
 
