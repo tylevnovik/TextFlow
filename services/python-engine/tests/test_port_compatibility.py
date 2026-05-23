@@ -1,5 +1,5 @@
-from app.defaults import workflow_port_compatible
-from app.node_definitions import build_builtin_node_definitions
+from app.domain.defaults import workflow_port_compatible
+from app.workflow.definitions.builtin import build_builtin_node_definitions
 
 
 def test_all_analysis_output_ports_are_compatible_with_any_table_or_renderable():

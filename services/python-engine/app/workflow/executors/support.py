@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 def _analysis_ops():
-    from ... import analysis_ops as analysis_ops_module
+    from ... import analysis as analysis_ops_module
 
     return analysis_ops_module
 
@@ -20,7 +20,7 @@ def _text_ops():
 
 
 def _runtime_support():
-    from ... import runtime_support as runtime_support_module
+    from ...workflow.runtime import support as runtime_support_module
 
     return runtime_support_module
 

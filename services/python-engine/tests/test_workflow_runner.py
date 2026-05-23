@@ -8,29 +8,29 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from app.analysis_ops import (
+from app.analysis import (
     institution_keyword_and_topic,
     nmf_topic_model,
     parallel_yake_worker_count,
     tfidf_analysis,
     yake_keyword_rows,
 )
-from app.artifact_store import load_artifact_preview
+from app.storage.artifacts import load_artifact_preview
 from app.builtin_dictionary_data import builtin_dictionary_table_specs
-from app.dag_runtime import (
+from app.workflow.runtime.native import (
     NodeExecutionState,
     WorkflowExecutionContext,
     _export_selection_from_active_graph,
     dag_parallel_worker_count,
 )
-from app.defaults import default_workflow_definition, empty_result_bundle, workflow_payload_hash
-from app.incremental_runtime import select_incremental_scope
-from app.node_registry import build_node_registry
-from app.project_store import create_project, load_project, normalize_dictionary_set_record, save_project
-from app.reporting import build_html_report
-from app.runtime_support import dispatch_progress_callback
-from app.text_ops import apply_dictionary, apply_normalization
-from app.workflow_runner import run_project_workflow
+from app.domain.defaults import default_workflow_definition, empty_result_bundle, workflow_payload_hash
+from app.workflow.runtime.incremental import select_incremental_scope
+from app.workflow.registry import build_node_registry
+from app.storage.projects import create_project, load_project, normalize_dictionary_set_record, save_project
+from app.reporting.core import build_html_report
+from app.workflow.runtime.support import dispatch_progress_callback
+from app.analysis.text import apply_dictionary, apply_normalization
+from app.workflow.runner import run_project_workflow
 
 
 DICTIONARY_KINDS = [
@@ -922,7 +922,7 @@ def test_dag_parallel_worker_count_respects_env_overrides(monkeypatch):
 
 
 def test_manual_workflow_parallel_safe_analysis_nodes_run_concurrently(isolated_workspace, monkeypatch):
-    import app.node_executors as node_executor_module
+    import app.workflow.executors as node_executor_module
 
     project_name = f"pytest-{uuid4().hex[:8]}"
     project_dir, manifest, corpus = _create_test_project(project_name, "native dag parallel test")
@@ -1322,7 +1322,7 @@ def test_parallel_yake_worker_count_respects_env_overrides(monkeypatch):
 
 
 def test_parallel_yake_matches_serial_output(monkeypatch):
-    import app.analysis_ops as analysis_module
+    import app.analysis as analysis_module
 
     corpus = [
         {
@@ -1653,7 +1653,7 @@ def test_normalize_metadata_node_standardizes_institution_country_year_and_categ
     workflow = manifest["workflow_definitions"][0]
 
     # inject normalize_metadata between corpus_input and clean_text
-    from app.node_definitions import build_builtin_node_definitions
+    from app.workflow.definitions.builtin import build_builtin_node_definitions
     node_defs = {d["type"]: d for d in build_builtin_node_definitions()}
     norm_meta_node = {
         "node_id": "node-normalize-metadata",

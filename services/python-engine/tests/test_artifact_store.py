@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.artifact_store import load_artifact_payload, load_artifact_preview, write_artifact
+from app.storage.artifacts import load_artifact_payload, load_artifact_preview, write_artifact
 
 
 def test_artifact_preview_loads_without_materializing_full_payload(scratch_dir):
@@ -19,8 +19,8 @@ def test_artifact_preview_loads_without_materializing_full_payload(scratch_dir):
 
 
 def test_artifact_store_uses_project_database_when_available(scratch_dir):
-    from app.project_database import initialize_project_database
-    from app.project_store import PROJECT_DATABASE_FILENAME
+    from app.storage.database import initialize_project_database
+    from app.storage.projects import PROJECT_DATABASE_FILENAME
 
     project_dir = scratch_dir / "artifact-db-project"
     project_dir.mkdir()

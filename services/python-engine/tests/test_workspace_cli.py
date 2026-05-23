@@ -5,8 +5,8 @@ import textwrap
 
 import pytest
 
-from app.bundled_sample_workspace import BUNDLED_SAMPLE_WORKSPACE_ENV_VAR
-from app.cli import (
+from app.samples.bundled_workspace import BUNDLED_SAMPLE_WORKSPACE_ENV_VAR
+from app.api.actions.dispatcher import (
     action_create_project,
     action_create_project_from_template,
     action_delete_corpus_document,
@@ -30,10 +30,10 @@ from app.cli import (
     action_update_corpus_document,
     normalize_corpus_document,
 )
-from app.defaults import compile_runtime_profile_from_workflow, default_runtime_profile, normalize_workflow_edges
-from app.node_registry import build_node_registry
-from app.project_store import CORPUS_FILENAME, PROJECT_FILENAME, RESULT_PREVIEW_DEFAULT_LIMIT, create_project, find_project_dir, list_project_dirs, load_project, load_workspace_snapshot, load_workspace_state, remember_project, save_project, workspace_state_path
-from app.sample_projects import (
+from app.domain.defaults import compile_runtime_profile_from_workflow, default_runtime_profile, normalize_workflow_edges
+from app.workflow.registry import build_node_registry
+from app.storage.projects import CORPUS_FILENAME, PROJECT_FILENAME, RESULT_PREVIEW_DEFAULT_LIMIT, create_project, find_project_dir, list_project_dirs, load_project, load_workspace_snapshot, load_workspace_state, remember_project, save_project, workspace_state_path
+from app.samples.projects import (
     BUILTIN_SAMPLE_PROJECT_DATA_REVISION,
     BUILTIN_SAMPLE_PROJECTS,
     FIRST_BUILTIN_SAMPLE_PROJECT_NAME,
@@ -83,7 +83,7 @@ def test_workspace_snapshot_only_fully_loads_current_project(isolated_workspace,
         load_calls.append(str(project_dir))
         return original_load_project(project_dir)
 
-    monkeypatch.setattr("app.project_store.load_project", tracked_load_project)
+    monkeypatch.setattr("app.storage.projects.load_project", tracked_load_project)
 
     snapshot = load_workspace_snapshot()
 
@@ -317,7 +317,7 @@ def test_open_project_uses_manifest_summary_without_loading_full_project(isolate
     def fail_load_project_or_fail(_project_id):
         raise AssertionError("action_open_project should not fully load the project before refresh() reloads the workspace")
 
-    monkeypatch.setattr("app.cli.load_project_or_fail", fail_load_project_or_fail)
+    monkeypatch.setattr("app.api.actions.dispatcher.load_project_or_fail", fail_load_project_or_fail)
 
     summary = action_open_project({"project_id": project_id})
     assert summary["id"] == project_id

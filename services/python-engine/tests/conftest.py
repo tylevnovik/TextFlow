@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.bundled_sample_workspace import build_bundled_sample_workspace
+from app.samples.bundled_workspace import build_bundled_sample_workspace
 
 TEST_SAMPLE_ROW_LIMIT = 24
 

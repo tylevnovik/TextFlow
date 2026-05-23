@@ -1,4 +1,4 @@
-from app.technology_ops import technology_indicator_rows, technology_classification_rows
+from app.analysis.technology import technology_indicator_rows, technology_classification_rows
 
 
 def test_technology_indicators_score_recent_growth_and_graph_bridge():

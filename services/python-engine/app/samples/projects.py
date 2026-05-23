@@ -9,10 +9,10 @@ from typing import Any
 
 import pandas as pd
 
-from ..defaults import default_import_template, default_project_manifest, make_dictionary_entry, utc_now_iso
+from ..domain.defaults import default_import_template, default_project_manifest, make_dictionary_entry, utc_now_iso
 from ..ingestion import import_files
 from ..workflow.definitions.new_flow import build_new_flow_workflow
-from ..project_store import (
+from ..storage.projects import (
     create_project,
     list_project_dirs,
     load_project,

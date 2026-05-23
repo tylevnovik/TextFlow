@@ -1,4 +1,4 @@
-from app.graph_ops import (
+from app.analysis.graph import (
     build_term_graph_tables,
     graph_metric_rows,
     community_rows,

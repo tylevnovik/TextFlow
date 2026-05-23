@@ -19,10 +19,10 @@ if str(ROOT) not in sys.path:
 
 BENCHMARK_REQUIRES_ARTIFACT_STORE = True
 
-from app.defaults import default_import_template, utc_now_iso  # noqa: E402
+from app.domain.defaults import default_import_template, utc_now_iso  # noqa: E402
 from app.ingestion import import_files  # noqa: E402
-from app.workflow_runner import run_project_workflow  # noqa: E402
-from app.project_store import create_project, save_project  # noqa: E402
+from app.workflow.runner import run_project_workflow  # noqa: E402
+from app.storage.projects import create_project, save_project  # noqa: E402
 from app.samples.projects import _append_dictionary_terms  # noqa: E402
 from app.workflow.definitions.new_flow import build_new_flow_workflow  # noqa: E402
 

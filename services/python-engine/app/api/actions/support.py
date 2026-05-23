@@ -18,7 +18,7 @@ from ...samples.bundled_workspace import (
     restore_bundled_sample_workspace,
     restore_builtin_sample_projects_from_bundled,
 )
-from ...defaults import json_ready
+from ...domain.defaults import json_ready
 
 ProgressCallback = Callable[[float, str, dict[str, Any] | None], None]
 

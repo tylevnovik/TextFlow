@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.sample_seed_sources import (
+from app.samples.seed_sources import (
     SampleSeedSource,
     default_sample_seed_sources,
     validate_sample_seed_source,
@@ -48,7 +48,7 @@ def test_default_seed_sources_discover_direct_seed_folder_files(tmp_path, monkey
     wos_seed.write_text("wos", encoding="utf-8")
     incopat_seed.write_text("incopat", encoding="utf-8")
 
-    monkeypatch.setattr("app.sample_seed_sources.sample_seed_root", lambda: seed_root)
+    monkeypatch.setattr("app.samples.seed_sources.sample_seed_root", lambda: seed_root)
     monkeypatch.delenv("TEXTFLOW_SAMPLE_WOS_SOURCE", raising=False)
     monkeypatch.delenv("TEXTFLOW_SAMPLE_INCOPAT_SOURCE", raising=False)
     monkeypatch.delenv("TEXTFLOW_SAMPLE_SCOPUS_SOURCE", raising=False)

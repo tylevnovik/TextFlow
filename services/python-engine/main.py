@@ -40,7 +40,7 @@ def parse_service_payload(raw: str) -> dict[str, object]:
 
 def run_entrypoint() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "serve":
-        from app.service import serve
+        from app.api.service import serve
 
         if len(sys.argv) > 3:
             serve(host=sys.argv[2], port=int(sys.argv[3]))
@@ -49,7 +49,7 @@ def run_entrypoint() -> None:
             serve(host=payload.get("host", "127.0.0.1"), port=int(payload.get("port", 8765)))
         return
 
-    from app.cli import main
+    from app.api.actions.dispatcher import main
 
     main()
 

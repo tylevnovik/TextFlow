@@ -10,7 +10,7 @@ from .support import ProgressCallback, notify, ensure_bootstrap_project, load_pr
 from ...ingestion import import_files, ensure_sample_files, parse_optional_year
 from ...storage.projects import save_project, remember_project, export_project_package, import_project_package, read_json, write_json
 from ...ingestion.specs import save_ingestion_spec, list_ingestion_specs
-from ...defaults import json_ready
+from ...domain.defaults import json_ready
 
 
 def normalize_corpus_document(document: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from app.bundled_sample_workspace import restore_bundled_sample_workspace
-from app.project_store import PROJECT_DATABASE_FILENAME, PROJECT_FILENAME, create_project, list_project_dirs, load_project, save_project
-from app.sample_projects import (
+from app.samples.bundled_workspace import restore_bundled_sample_workspace
+from app.storage.projects import PROJECT_DATABASE_FILENAME, PROJECT_FILENAME, create_project, list_project_dirs, load_project, save_project
+from app.samples.projects import (
     BUILTIN_SAMPLE_PROJECT_DATA_REVISION,
     BUILTIN_SAMPLE_PROJECTS,
     FIRST_BUILTIN_SAMPLE_PROJECT_NAME,
@@ -17,7 +17,7 @@ from app.sample_projects import (
     create_builtin_sample_projects,
     reconcile_builtin_sample_projects,
 )
-from app.workflow_runner import run_project_workflow
+from app.workflow.runner import run_project_workflow
 from tests.conftest import TEST_SAMPLE_ROW_LIMIT, placeholder_row
 
 

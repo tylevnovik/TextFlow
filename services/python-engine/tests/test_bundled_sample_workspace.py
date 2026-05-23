@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from app.bundled_sample_workspace import (
+from app.samples.bundled_workspace import (
     bundled_sample_workspace_is_usable,
     load_bundled_sample_workspace_metadata,
     restore_bundled_sample_workspace,
 )
-from app.project_store import PROJECT_DATABASE_FILENAME, list_project_dirs, load_project, load_workspace_state
-from app.sample_projects import BUILTIN_SAMPLE_PROJECT_DATA_REVISION, BUILTIN_SAMPLE_PROJECTS
+from app.storage.projects import PROJECT_DATABASE_FILENAME, list_project_dirs, load_project, load_workspace_state
+from app.samples.projects import BUILTIN_SAMPLE_PROJECT_DATA_REVISION, BUILTIN_SAMPLE_PROJECTS
 from tests.conftest import TEST_SAMPLE_ROW_LIMIT
 
 

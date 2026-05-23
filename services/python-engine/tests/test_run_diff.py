@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.run_diff import compare_runs
+from app.storage.run_diff import compare_runs
 
 
 def test_run_diff_compares_artifact_summaries_and_metrics():

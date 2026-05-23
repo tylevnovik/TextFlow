@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from app.cli import action_create_corpus_view
-from app.project_store import create_project, read_json
+from app.api.actions.dispatcher import action_create_corpus_view
+from app.storage.projects import create_project, read_json
 
 
 def test_create_corpus_view_persists_filter_spec(isolated_workspace):

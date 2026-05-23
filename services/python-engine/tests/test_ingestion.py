@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import pandas as pd
 
-from app.defaults import default_import_template
-from app.ingestion import dataframe_from_source, import_files
+from app.domain.defaults import default_import_template
+from app.ingestion.importers import dataframe_from_source, import_files
 
 
 def test_import_files_supports_csv_json_and_txt(scratch_dir):

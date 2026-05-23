@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from app.project_database import (
+from app.storage.database import (
     initialize_project_database,
     load_dictionary_set,
     load_corpus_rows,

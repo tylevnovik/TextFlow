@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 from .support import ProgressCallback, notify, ensure_bootstrap_project, load_project_or_fail
-from ...defaults import deep_copy_manifest
+from ...domain.defaults import deep_copy_manifest
 from ...ingestion import import_files, ensure_sample_files
 from ...workflow.runner import run_project_workflow
 from ...storage.projects import (

@@ -7,7 +7,7 @@ import pickle
 from pathlib import Path
 from typing import Any
 
-from ...defaults import (
+from ...domain.defaults import (
     utc_now_iso,
     workflow_payload_hash,
 )

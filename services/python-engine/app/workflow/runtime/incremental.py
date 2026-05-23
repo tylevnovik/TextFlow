@@ -5,7 +5,7 @@ import json
 from copy import deepcopy
 from typing import Any
 
-from ...defaults import utc_now_iso
+from ...domain.defaults import utc_now_iso
 
 CORPUS_SOURCE_NODE_TYPES = {"corpus_input", "load_project_corpus"}
 DICTIONARY_SOURCE_NODE_TYPES = {

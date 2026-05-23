@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
-from ...defaults import default_runtime_profile
+from ...domain.defaults import default_runtime_profile
 
 if TYPE_CHECKING:
     from ..registry import NodeRegistryBuilder

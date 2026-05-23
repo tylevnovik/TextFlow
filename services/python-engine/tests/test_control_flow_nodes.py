@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.node_executors import (
+from app.workflow.executors import (
     execute_conditional_router,
     execute_manual_review_gate,
     execute_result_gate,

@@ -7,7 +7,7 @@ from time import perf_counter
 from typing import Any
 
 from ...storage.artifacts import write_artifact
-from ...defaults import (
+from ...domain.defaults import (
     normalize_workflow_edges,
     utc_now_iso,
     workflow_active_node_ids_from_sinks,

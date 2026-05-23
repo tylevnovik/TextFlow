@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from app.cli import action_list_ingestion_specs, action_save_ingestion_spec
-from app.project_store import create_project, read_json
+from app.api.actions.dispatcher import action_list_ingestion_specs, action_save_ingestion_spec
+from app.storage.projects import create_project, read_json
 
 
 def test_saved_ingestion_spec_has_stable_hash(isolated_workspace):

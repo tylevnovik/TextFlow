@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from ...defaults import default_workflow_definition
+from ...domain.defaults import default_workflow_definition
 from .builtin import build_builtin_node_definitions
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.project_store import CORPUS_FILENAME, PROJECT_FILENAME, create_project, ensure_project_layout, load_project, write_json
+from app.storage.projects import CORPUS_FILENAME, PROJECT_FILENAME, create_project, ensure_project_layout, load_project, write_json
 
 
 def test_default_project_manifest_contains_resource_collections(isolated_workspace):

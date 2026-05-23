@@ -5,7 +5,7 @@ import time
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from app.service import TaskManager, build_handler
+from app.api.service import TaskManager, build_handler
 
 
 def test_task_manager_tracks_progress_and_result(monkeypatch):
@@ -17,7 +17,7 @@ def test_task_manager_tracks_progress_and_result(monkeypatch):
             progress_callback(0.7, "处理中")
         return {"ok": True}
 
-    monkeypatch.setattr("app.service.execute_action", fake_execute_action)
+    monkeypatch.setattr("app.api.service.execute_action", fake_execute_action)
     manager = TaskManager(max_workers=1)
 
     try:

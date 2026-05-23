@@ -1,13 +1,13 @@
 from copy import deepcopy
 from types import SimpleNamespace
 
-from app.node_executors import (
+from app.workflow.executors import (
     execute_group_compare,
     execute_keyness_analysis,
     execute_overlay_dictionary_rules,
     execute_select_dictionary_tables,
 )
-from app.text_ops import apply_dictionary, build_dictionary_runtime_state
+from app.analysis.text import apply_dictionary, build_dictionary_runtime_state
 
 
 DICTIONARY_KINDS = [

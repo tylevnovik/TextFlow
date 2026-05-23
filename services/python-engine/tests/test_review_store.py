@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from app.cli import normalize_corpus_document
-from app.project_store import create_project, load_project, save_project
-from app.review_store import create_review_task, resolve_review_task
+from app.api.actions.imports import normalize_corpus_document
+from app.storage.projects import create_project, load_project, save_project
+from app.storage.reviews import create_review_task, resolve_review_task
 
 
 def test_create_review_task_for_keyword_merge(isolated_workspace):

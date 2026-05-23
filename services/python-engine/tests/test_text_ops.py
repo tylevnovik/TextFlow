@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.text_ops import tokenize_text
+from app.analysis.text import tokenize_text
 
 
 def test_tokenize_text_adds_configured_ngrams_after_base_tokens():

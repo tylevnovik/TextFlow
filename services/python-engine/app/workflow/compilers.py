@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from ..defaults import (
+from ..domain.defaults import (
     default_runtime_profile,
     normalize_workflow_edges,
     workflow_active_node_ids_from_sinks,

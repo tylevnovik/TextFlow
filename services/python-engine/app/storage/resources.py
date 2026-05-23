@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ..defaults import utc_now_iso
+from ..domain.defaults import utc_now_iso
 from .projects import CORPUS_VIEWS_FILENAME, write_json
 
 

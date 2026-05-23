@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ..defaults import utc_now_iso
+from ..domain.defaults import utc_now_iso
 from ..storage.projects import INGESTION_SPECS_FILENAME, read_json, write_json
 from .importers import stable_payload_hash
 

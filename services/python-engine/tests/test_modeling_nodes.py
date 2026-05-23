@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.node_executors import (
+from app.workflow.executors import (
     EXECUTORS_BY_TYPE,
     execute_cluster_evaluation,
     execute_focus_terms,

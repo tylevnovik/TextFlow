@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from app.node_executors import execute_legacy_passthrough
-from app.project_store import create_project
-from app.node_definitions import build_builtin_node_definitions
-from app.node_registry import build_node_registry
-from app.workflow_runner import run_project_workflow
+from app.workflow.executors.export import execute_legacy_passthrough
+from app.storage.projects import create_project
+from app.workflow.definitions.builtin import build_builtin_node_definitions
+from app.workflow.registry import build_node_registry
+from app.workflow.runner import run_project_workflow
 from benchmarks import large_workflow_benchmark
 
 
@@ -197,7 +197,7 @@ def test_plugin_nodes_can_emit_artifact_handles(tmp_path, monkeypatch):
     plugin_path = plugin_dir / "artifact_plugin.py"
     plugin_path.write_text(
         """
-from app.node_plugins import artifact_output_port
+from app.workflow.plugins import artifact_output_port
 
 
 def _execute(_context, _node, _inputs):

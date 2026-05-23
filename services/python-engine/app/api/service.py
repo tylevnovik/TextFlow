@@ -9,7 +9,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from .actions.dispatcher import execute_action
-from ..defaults import json_ready, utc_now_iso
+from ..domain.defaults import json_ready, utc_now_iso
 
 
 class TaskManager:

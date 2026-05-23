@@ -5,7 +5,7 @@ import hashlib
 from typing import Any
 from uuid import uuid4
 
-from ..defaults import build_dictionary_sheets_from_collections, utc_now_iso
+from ..domain.defaults import build_dictionary_sheets_from_collections, utc_now_iso
 from .projects import editable_dictionary_table_for_kind
 
 SUPPORTED_REVIEW_TYPES = {

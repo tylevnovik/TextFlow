@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from app.defaults import default_workflow_definition
-from app.incremental_runtime import (
+from app.domain.defaults import default_workflow_definition
+from app.workflow.runtime.incremental import (
     build_dependency_index,
     compute_dirty_node_ids,
     detect_changed_doc_ids,

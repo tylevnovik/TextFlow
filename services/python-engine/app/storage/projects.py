@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ..defaults import (
+from ..domain.defaults import (
     build_dictionary_sheets_from_collections,
     default_dictionary_set,
     default_dictionary_set_seed,
@@ -37,7 +37,7 @@ from .database import (
     replace_dictionary_set,
     replace_result_bundle,
 )
-from ..runtime_support import workflow_runtime_profile
+from ..workflow.runtime.support import workflow_runtime_profile
 
 PROJECT_FILENAME = "project.json"
 PROJECT_DATABASE_FILENAME = "project.db"

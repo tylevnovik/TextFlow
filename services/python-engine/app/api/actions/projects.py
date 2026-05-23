@@ -19,7 +19,7 @@ from ...storage.projects import (
     save_project,
     PROJECT_FILENAME,
 )
-from ...defaults import deep_copy_manifest
+from ...domain.defaults import deep_copy_manifest
 from ...storage.resources import create_corpus_view, update_corpus_view, delete_corpus_view
 
 
