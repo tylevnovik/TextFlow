@@ -149,6 +149,7 @@ def test_builtin_schema_includes_new_corpus_selection_nodes():
         "filter_by_metadata",
         "deduplicate_documents",
         "sample_corpus",
+        "focus_terms",
         "split_corpus",
         "bucket_by_time",
     ]:

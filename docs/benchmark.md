@@ -31,9 +31,10 @@ corpus_input
   -> apply_dictionary_rules
   -> filter_terms
   -> frequency_statistics
-  -> cooccurrence_analysis
   -> feature_term_selection
   -> keyword_extraction
+  -> focus_terms
+  -> cooccurrence_analysis
   -> keyword_clustering
   -> document_clustering
   -> save_csv / save_png / save_html_report
@@ -49,24 +50,29 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-large-benchmark.ps1 --lim
 
 结果：
 
-- 导入耗时：`0.04s`
-- 运行耗时：`14.068s`
-- 总耗时：`18.067s`
+- 导入耗时：`0.145s`
+- 运行耗时：`9.77s`
+- 总耗时：`14.57s`
 - 处理文档数：`1200`
 - 运行状态：`completed`
 - 产物数：`8`
 - artifact record 数：由 `manifest.artifact_records` 统计，需与 run artifact handle 数保持同向增长
-- 报告文件数：`11`
+- 报告文件数：`1`
 
 核心结果规模：
 
 - `frequency_rows`: `23279`
-- `cooccurrence_rows`: `88435`
-- `feature_term_rows`: `23279`
+- `cooccurrence_rows`: `2041`
+- `focus_term_summary_rows`: `1`
+- `feature_term_rows`: `23278`
 - `selected_feature_terms`: `1000`
-- `keyword_rows`: `9611`
+- `keyword_rows`: `9580`
 - `keyword_cluster_rows`: `1000`
 - `document_cluster_rows`: `1200`
+
+冷启动 import 观察：
+
+- `import app.cli` 5 次平均：`1151ms`
 
 ## 当前性能热点
 
@@ -105,6 +111,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-large-benchmark.ps1 --lim
 - native DAG 主链已经稳定可用
 - workflow-only 持久化没有带来明显性能回退
 - 当前瓶颈已经从“运行框架切换成本”转向“关键词提取 + 导出 I/O + 当前项目水合”
+- 当前 1200 条 benchmark 已同步真实分析链路：先经关键词提取和 `focus_terms` 收窄，再做共现分析，因此共现规模从旧全词项链路的高行数降到聚焦后的骨干关系规模。
 
 下一阶段最值得继续优化的是：
 

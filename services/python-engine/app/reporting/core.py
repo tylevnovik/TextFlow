@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 from matplotlib.font_manager import FontProperties  # noqa: E402
 
-from .runtime_support import build_run_params_snapshot
+from ..workflow.runtime.support import build_run_params_snapshot
 
 DEFAULT_CHART_DPI = 320
 CLUSTER_POINT_LABEL_LIMIT = 180
@@ -137,6 +137,7 @@ REPORT_RESULT_TITLES = {
     "cooccurrence_table": "共现关系预览",
     "similarity_table": "文档相似度预览",
     "selected_feature_terms": "特征词预览",
+    "focus_term_summary": "聚焦词项摘要",
     "keyword_result": "关键词概览",
     "keyword_cluster_result": "关键词聚类预览",
     "institution_keyword_cooccurrence": "机构-关键词关系预览",
@@ -1025,3 +1026,4 @@ def write_run_outputs(
     emit_export_progress(progress_callback, 1.0, "导出阶段已完成")
 
     return exported_files
+

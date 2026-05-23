@@ -206,6 +206,20 @@ export const builtinWorkflowNodeSchema: Record<WorkflowNodeType, GeneratedWorkfl
     outputs: [{ port_id: "filtered_token_corpus", port_type: "FilteredTokenCorpus", label: "分析词项" }],
     stepId: "filtering"
   },
+  focus_terms: {
+    label: "聚焦词项",
+    description: "用特征词或关键词结果收窄下游分析词项，降低共现网络和图计算规模。",
+    category: "process",
+    inputs: [
+      { port_id: "token_corpus_in", port_type: "FilteredTokenCorpus", label: "分析词项" },
+      { port_id: "term_table_in", port_type: "AnyTable", label: "候选词表" }
+    ],
+    outputs: [
+      { port_id: "focused_token_corpus", port_type: "FilteredTokenCorpus", label: "聚焦后词项" },
+      { port_id: "focus_term_summary", port_type: "AnyTable", label: "聚焦摘要", result_bundle_key: "focus_term_summary", include_in_html_audit: true }
+    ],
+    stepId: "filtering"
+  },
   frequency_statistics: {
     label: "词频统计",
     description: "生成高频词、文档频次和占比统计。",

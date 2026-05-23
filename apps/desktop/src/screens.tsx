@@ -4327,7 +4327,7 @@ function WorkflowEditorPageContent({
                       const edgePath = workflowEdgePath(fromNode, toNode, edge.from_port, edge.to_port, canvasOrigin);
                       const isSelected = selectedEdge?.edge_id === edge.edge_id;
                       return (
-                        <g key={edge.edge_id}>
+                        <g key={`${edge.edge_id}-${edge.from_port}-to-${edge.to_port}`}>
                           <path
                             d={edgePath}
                             className={`workflow-edge-path ${isSelected ? "is-selected" : ""}`}

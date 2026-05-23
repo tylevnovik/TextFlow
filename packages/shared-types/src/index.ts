@@ -55,6 +55,7 @@ export type BuiltinWorkflowNodeType =
   | "tokenize"
   | "apply_dictionary_rules"
   | "filter_terms"
+  | "focus_terms"
   | "frequency_statistics"
   | "term_document_analysis"
   | "term_year_analysis"
@@ -769,6 +770,7 @@ export interface ResultBundle {
   cooccurrence_table: CooccurrenceRow[];
   similarity_table?: GenericResultRow[];
   selected_feature_terms: FeatureTermRow[];
+  focus_term_summary?: GenericResultRow[];
   keyword_result: KeywordRow[];
   keyword_cluster_result: KeywordClusterRow[];
   topic_term_table?: GenericResultRow[];

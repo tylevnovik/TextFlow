@@ -194,6 +194,9 @@ const workflowNodeCompilers: Record<string, WorkflowNodeCompiler> = {
   tokenize: mergeRuntimeSection("tokenization", "tokenization"),
   apply_dictionary_rules: mergeRuntimeSection("dictionary", "dictionary_application"),
   filter_terms: mergeRuntimeSection("filtering", "filtering"),
+  focus_terms: (context) => {
+    context.enabledSteps.add("filtering");
+  },
   analyze_corpus: (context, node) => {
     context.compiled.analysis = {
       ...context.compiled.analysis,

@@ -23,8 +23,8 @@ from app.defaults import default_import_template, utc_now_iso  # noqa: E402
 from app.ingestion import import_files  # noqa: E402
 from app.workflow_runner import run_project_workflow  # noqa: E402
 from app.project_store import create_project, save_project  # noqa: E402
-from app.sample_projects import _append_dictionary_terms  # noqa: E402
-from app.new_flow_workflow import build_new_flow_workflow  # noqa: E402
+from app.samples.projects import _append_dictionary_terms  # noqa: E402
+from app.workflow.definitions.new_flow import build_new_flow_workflow  # noqa: E402
 
 KEEP_NODE_TYPES = {
     "corpus_input",
@@ -40,6 +40,7 @@ KEEP_NODE_TYPES = {
     "cooccurrence_analysis",
     "feature_term_selection",
     "keyword_extraction",
+    "focus_terms",
     "keyword_clustering",
     "document_clustering",
     "save_csv",
@@ -52,6 +53,7 @@ NODE_CONFIG_OVERRIDES = {
     "feature_term_selection": {"feature_term_count": 1000},
     "cooccurrence_analysis": {"cooccurrence_window": 3, "min_cooccurrence": 2},
     "keyword_extraction": {"top_k_per_doc": 8, "top_k_project": 120},
+    "focus_terms": {"term_source": "keywords", "term_field": "keyword", "max_terms": 120, "project_keywords_only": True},
     "keyword_clustering": {"keyword_cluster_k": 8, "topic_model_k": 8},
     "document_clustering": {"document_cluster_k": 8},
     "save_html_report": {"include_audit": False},
@@ -258,6 +260,7 @@ def main() -> int:
         "results": {
             "frequency_rows": len(result_bundle.get("frequency_table", [])),
             "cooccurrence_rows": len(result_bundle.get("cooccurrence_table", [])),
+            "focus_term_summary_rows": len(result_bundle.get("focus_term_summary", [])),
             "feature_term_rows": len(result_bundle.get("selected_feature_terms", [])),
             "selected_feature_terms": sum(1 for row in result_bundle.get("selected_feature_terms", []) if row.get("selected")),
             "keyword_rows": len(result_bundle.get("keyword_result", [])),

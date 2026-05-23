@@ -18,7 +18,15 @@ apps/desktop/
   src-tauri/                 # Tauri 命令、sidecar 启动与 bundling
 
 services/python-engine/
-  app/                       # 项目存储、导入、workflow 运行时、DAG、导出、插件
+  app/                       # Python sidecar app package
+  app/analysis/              # 文本处理、统计、关键词、主题、图和技术指标算法
+  app/api/                   # sidecar HTTP service 与 action dispatcher
+  app/domain/                # project/dictionary/workflow/result 领域 helper
+  app/ingestion/             # 语料导入器与导入规范
+  app/reporting/             # HTML、图表和运行输出报告
+  app/samples/               # 内置样例、seed 发现和打包样例工作区
+  app/storage/               # workspace、project、SQLite、artifact、resource、review、experiment 存储
+  app/workflow/              # workflow definitions、registry、compiler、executors、runtime、plugin boundary
   tests/                     # Python 测试
   benchmarks/                # 大语料 benchmark
 
@@ -28,6 +36,8 @@ packages/shared-types/
 plugins/nodes/
   *.py                       # 本地纯 Python 插件节点
 ```
+
+Python engine 当前仍处在从平铺模块向分层包结构迁移的阶段。最终模块边界、迁移顺序和性能评估见 [Python Engine 模块边界 ADR](./adr/2026-05-23-python-engine-module-boundaries.md)。
 
 ## 运行时数据流
 

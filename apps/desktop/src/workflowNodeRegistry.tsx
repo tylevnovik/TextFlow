@@ -1386,6 +1386,12 @@ export function renderWorkflowNodePreview(context: WorkflowNodeEditorContext) {
     return <small>特征词: {results.selected_feature_terms.slice(0, 3).map((row) => row.term).join(" / ") || "暂无结果"}</small>;
   }
 
+  if (context.node.node_type === "focus_terms") {
+    const rows = Array.isArray(dynamicResults.focus_term_summary) ? dynamicResults.focus_term_summary : [];
+    const summary = rows[0];
+    return <small>聚焦: {summary ? `${String(summary.tokens_before ?? 0)} -> ${String(summary.tokens_after ?? 0)} 词项` : "暂无结果"}</small>;
+  }
+
   if (context.node.node_type === "keyword_clustering") {
     return <small>聚类: {results.keyword_cluster_result.slice(0, 2).map((row) => row.topic_label ?? `簇${row.cluster_id}`).join(" / ") || "暂无结果"}</small>;
   }

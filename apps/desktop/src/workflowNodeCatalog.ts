@@ -128,6 +128,7 @@ export const defaultNodePositions: Partial<Record<WorkflowNodeType, { x: number;
   tokenize: { x: 2340, y: 480 },
   apply_dictionary_rules: { x: 2760, y: 480 },
   filter_terms: { x: 3180, y: 480 },
+  focus_terms: { x: 4080, y: 1640 },
   frequency_statistics: { x: 3660, y: 40 },
   term_document_analysis: { x: 3660, y: 360 },
   term_year_analysis: { x: 3660, y: 680 },
@@ -351,6 +352,17 @@ const builtinWorkflowNodeUiDefinitions: Partial<Record<WorkflowNodeType, Workflo
   filter_terms: {
     size: { w: 320, h: 230 },
     defaultConfig: (runtimeProfile) => ({ ...runtimeProfile.filtering })
+  },
+  focus_terms: {
+    size: { w: 360, h: 280 },
+    defaultConfig: () => ({
+      term_source: "auto",
+      term_field: "auto",
+      max_terms: 80,
+      selected_only: true,
+      project_keywords_only: true,
+      on_empty: "pass_through"
+    })
   },
   frequency_statistics: {
     size: { w: 280, h: 210 },

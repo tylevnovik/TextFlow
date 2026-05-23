@@ -633,6 +633,7 @@ function normalizeEdgesWithNodes(workflow: WorkflowDefinition, nodes: WorkflowNo
   const nodeMap = nodeLookupById(nodes);
   const candidateEdges = Array.isArray(workflow.edges) ? workflow.edges : [];
   const normalizedEdges: WorkflowEdge[] = [];
+  const seenEdgeIds = new Set<string>();
 
   for (const rawEdge of candidateEdges) {
     if (!rawEdge) {
@@ -647,12 +648,21 @@ function normalizeEdgesWithNodes(workflow: WorkflowDefinition, nodes: WorkflowNo
     const targetAllowsMultiple = portAcceptsMultiple(toNode, edge.to_port);
     const sameTargetIndex = normalizedEdges.findIndex((item) => item.to_node === edge.to_node && item.to_port === edge.to_port);
     if (!targetAllowsMultiple && sameTargetIndex >= 0) {
-      normalizedEdges.splice(sameTargetIndex, 1);
+      const removed = normalizedEdges.splice(sameTargetIndex, 1)[0];
+      if (removed) {
+        seenEdgeIds.delete(removed.edge_id);
+      }
     }
 
     if (edgeCreatesCycle(nodes, normalizedEdges, edge.from_node, edge.to_node)) {
       continue;
     }
+
+    if (!edge.edge_id || seenEdgeIds.has(edge.edge_id)) {
+      edge.edge_id = workflowEdgeId();
+    }
+
+    seenEdgeIds.add(edge.edge_id);
     normalizedEdges.push(edge);
   }
 
@@ -1041,7 +1051,7 @@ export function autoLayoutWorkflow(workflow: WorkflowDefinition): WorkflowDefini
 
   const categoryColumns: Array<Array<WorkflowNodeType>> = [
     ["corpus_input", "dictionary_input"],
-    ["merge_corpora", "clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms"],
+    ["merge_corpora", "clean_text", "normalize_text", "tokenize", "apply_dictionary_rules", "filter_terms", "focus_terms"],
     ["frequency_statistics", "term_document_analysis", "term_year_analysis", "cooccurrence_analysis", "similarity_analysis", "feature_term_selection"],
     ["keyword_extraction", "keyword_clustering", "topic_modeling", "institution_keyword_analysis", "institution_topic_analysis", "document_clustering"],
     ["save_csv", "save_xlsx", "save_png", "save_html_report"],

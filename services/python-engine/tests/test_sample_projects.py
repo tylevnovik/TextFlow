@@ -11,6 +11,7 @@ from app.sample_projects import (
     BUILTIN_SAMPLE_PROJECT_DATA_REVISION,
     BUILTIN_SAMPLE_PROJECTS,
     FIRST_BUILTIN_SAMPLE_PROJECT_NAME,
+    _build_workflow_for_spec,
     _is_synthetic_placeholder_row,
     _sample_row_count,
     create_builtin_sample_projects,
@@ -80,6 +81,19 @@ def test_builtin_sample_specs_are_three_revised_flow_samples():
     ]
 
 
+def test_builtin_sample_descriptions_are_goal_flow_result_briefs():
+    for spec in BUILTIN_SAMPLE_PROJECTS:
+        description = str(spec["description"])
+        assert "目标：" in description
+        assert "处理流程：" in description
+        assert "预期结果：" in description
+        assert any(str(output) in description for output in spec["target_outputs"])
+        assert any(
+            "聚焦词项" in item or "关键词" in item
+            for item in [description, *spec["screening_strategy"]]
+        )
+
+
 def test_sample_row_count_accepts_any_positive_override(monkeypatch):
     monkeypatch.setenv("TEXTFLOW_SAMPLE_PROJECT_ROW_LIMIT", "7")
     assert _sample_row_count(BUILTIN_SAMPLE_PROJECTS[0]) == 7
@@ -119,6 +133,35 @@ def test_bundled_sample_workflows_match_declared_coverage(bundled_builtin_sample
         assert "deduplicate_documents" in workflow_nodes
 
 
+def test_builtin_sample_workflows_focus_graph_branch_after_keyword_screening():
+    def has_edge(workflow: dict[str, object], from_type: str, from_port: str, to_type: str, to_port: str) -> bool:
+        nodes = {
+            str(node["node_id"]): str(node["node_type"])
+            for node in workflow["nodes"]
+        }
+        return any(
+            nodes.get(str(edge["from_node"])) == from_type
+            and str(edge["from_port"]) == from_port
+            and nodes.get(str(edge["to_node"])) == to_type
+            and str(edge["to_port"]) == to_port
+            for edge in workflow["edges"]
+        )
+
+    for spec in BUILTIN_SAMPLE_PROJECTS:
+        workflow = _build_workflow_for_spec(spec)
+        node_types = {str(node["node_type"]) for node in workflow["nodes"]}
+        assert {"sample_corpus", "keyword_extraction", "focus_terms", "cooccurrence_analysis"} <= node_types
+        assert has_edge(workflow, "keyword_extraction", "keyword_table", "focus_terms", "term_table_in")
+        assert has_edge(workflow, "focus_terms", "focused_token_corpus", "cooccurrence_analysis", "token_corpus_in")
+        assert not has_edge(workflow, "filter_terms", "filtered_token_corpus", "cooccurrence_analysis", "token_corpus_in")
+
+        config_by_type = {str(node["node_type"]): node["config"] for node in workflow["nodes"]}
+        assert int(config_by_type["filter_terms"]["min_term_frequency"]) >= 2
+        assert int(config_by_type["focus_terms"]["max_terms"]) <= 14
+        assert int(config_by_type["cooccurrence_analysis"]["min_cooccurrence"]) >= 2
+        assert int(config_by_type["build_network"]["max_edges"]) <= 1000
+
+
 @pytest.mark.parametrize(
     "sample_name",
     [
@@ -139,6 +182,9 @@ def test_revised_flow_sample_workflows_run(restored_builtin_sample_projects, sam
     assert manifest["results"]["frequency_table"]
     assert manifest["results"]["term_year_table"]
     assert manifest["results"]["cooccurrence_table"]
+    assert manifest["results"]["focus_term_summary"]
+    focus_summary = manifest["results"]["focus_term_summary"][0]
+    assert focus_summary["tokens_after"] < focus_summary["tokens_before"]
     assert manifest["results"]["keyword_result"]
     assert manifest["results"]["topic_summary_table"]
     assert "node-topic-modeling" in artifact_node_ids

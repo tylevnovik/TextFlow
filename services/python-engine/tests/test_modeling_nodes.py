@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from app.node_executors import (
     EXECUTORS_BY_TYPE,
     execute_cluster_evaluation,
+    execute_focus_terms,
     execute_frequency_statistics,
     execute_join_results,
     execute_topic_modeling,
@@ -191,6 +192,41 @@ def test_similarity_analysis_node_outputs_ranked_document_pairs():
     assert rows
     assert rows == sorted(rows, key=lambda row: (-row["similarity"], row["doc_id_a"], row["doc_id_b"]))
     assert {"doc_id_a", "doc_id_b", "similarity"} <= set(rows[0])
+
+
+def test_focus_terms_node_reduces_token_corpus_to_keyword_whitelist():
+    corpus = _filtered_token_corpus()
+    context = _context()
+
+    result = execute_focus_terms(
+        context,
+        {
+            "node_id": "node-focus",
+            "config": {
+                "term_source": "keywords",
+                "term_field": "keyword",
+                "max_terms": 2,
+                "project_keywords_only": True,
+            },
+        },
+        {
+            "token_corpus_in": corpus,
+            "term_table_in": [
+                {"scope": "doc", "keyword": "risk", "rank": 1},
+                {"scope": "project", "keyword": "battery", "rank": 1},
+                {"scope": "project", "keyword": "supply", "rank": 2},
+                {"scope": "project", "keyword": "writing", "rank": 3},
+            ],
+        },
+    )
+
+    focused = result["focused_token_corpus"]
+    assert focused[0]["filtered_tokens"] == ["battery", "supply"]
+    assert focused[1]["filtered_tokens"] == ["battery", "supply"]
+    assert focused[2]["filtered_tokens"] == []
+    summary = result["focus_term_summary"][0]
+    assert summary["selected_term_count"] == 2
+    assert summary["tokens_after"] < summary["tokens_before"]
 
 
 def test_cluster_evaluation_node_outputs_silhouette_and_cluster_sizes():
