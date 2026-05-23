@@ -64,7 +64,7 @@ TextFlow/
 │   └── src/index.ts          #   前后端共享的领域类型定义
 │
 ├── services/python-engine/   # Python 计算引擎
-│   ├── app/                  #   核心引擎逻辑 (~20 个模块)
+│   ├── app/                  #   核心引擎逻辑 (分包化为 analysis/workflow/api/storage/domain/ingestion/reporting/samples 等模块)
 │   ├── tests/                #   测试套件 (25 个测试文件)
 │   └── dist/                 #   PyInstaller 构建输出
 │
@@ -252,7 +252,7 @@ main.py
 
 ### 5.3 核心处理模块
 
-#### 文本操作 (`text_ops.py`, ~510 行)
+#### 文本操作与预处理 (`app/analysis/text.py`, ~532 行)
 
 | 功能 | 函数 | 说明 |
 |---|---|---|
@@ -263,74 +263,59 @@ main.py
 | 词典应用 | `apply_dictionary()` | 标准词->同义词->近义词->停用词->排除词 流水线 |
 | 过滤 | `filter_token_lists()` | 最小长度/数字过滤/词频过滤 |
 
-#### 分析操作 (`analysis_ops.py`, ~923 行)
+#### 分析与聚类操作 (`app/analysis/` 目录下多模块)
 
-| 分析类型 | 函数 | 算法/库 |
-|---|---|---|
-| 词频统计 | `frequency_table()` | TF/DF/ratio/词长/年份 |
-| 词-文档关系 | `term_document_table()` | 交叉表 |
-| 词-年份关系 | `term_year_table()` | 时间序列交叉表 |
-| 共现分析 | `cooccurrence_table()` | 滑动窗口共现 |
-| 关键词提取 | `yake_keyword_rows()` | YAKE (并行 ProcessPoolExecutor) |
-| TF-IDF 特征词 | `tfidf_feature_bundle()` | sklearn TfidfVectorizer |
-| 主题建模 | `nmf_topic_model()` | sklearn NMF |
-| 关键词聚类 | `keyword_clusters()` | MiniBatchKMeans |
-| 文档聚类 | `document_clusters()` | KMeans + 2D 坐标 |
-| 机构-关键词 | `institution_keyword_and_topic()` | 共现分析 |
-| 聚类评估 | `cluster_evaluation_rows()` | 轮廓系数 / Davies-Bouldin 指数 |
+分析算法与统计计算逻辑已重构分包，文件总规模 ~1200 行：
+- **`app/analysis/statistics.py`**：词频统计（`frequency_table()`）、词-文档关系（`term_document_table()`）、词-年份关系（`term_year_table()`）及共现分析（`cooccurrence_table()`）。
+- **`app/analysis/keywords.py`**：关键词提取（YAKE 算法，含 `yake_keyword_rows()` 等）、TF-IDF 特征词（`tfidf_feature_bundle()`）。
+- **`app/analysis/topics.py`**：主题建模（NMF 算法，`nmf_topic_model()`）、聚类与坐标评估（`keyword_clusters()`、`document_clusters()`、`cluster_evaluation_rows()` 等）。
+- **`app/analysis/technology.py`**：技术识别、分类以及主路径等分析。
+- **`app/analysis/graph.py`**：网络/图计算相关共现矩阵与图指标计算。
 
-#### 配置与工作流定义 (`defaults.py`, ~1443 行)
+#### 配置、默认值与编译逻辑 (`app/domain/defaults.py`, `app/workflow/` 目录下多模块)
 
-- 8 种字典类型、6 种导入配置文件
-- `default_workflow_definition()`: 构建完整 DAG (20+ 节点, 类型化端口连接)
-- `workflow_payload_hash()`: SHA256 哈希，忽略 UI-only 变更 (位置/标签/折叠状态)
-- `compile_runtime_profile_from_workflow()`: 从 DAG 编译运行时配置
-- `default_project_manifest()`: 创建含设置/路径/词表/工作流定义的项目
+- **`app/domain/defaults.py`**：定义 8 种字典类型、6 种导入配置文件和默认项目骨架（`default_project_manifest()`）。
+- **`app/workflow/compilers.py`**：包含从 DAG 编译运行时配置（`compile_runtime_profile_from_workflow()`）。
+- **`app/workflow/registry.py`**：提供工作流定义和节点注册服务，包括构建完整默认 DAG（`default_workflow_definition()`）。
+- **`app/workflow/runner.py`**：计算工作流哈希（`workflow_payload_hash()`）。
 
-### 5.4 DAG 执行引擎 (`dag_runtime.py`, ~1434 行)
+### 5.4 DAG 执行引擎 (`app/workflow/runtime/` 子包)
 
-```
-WorkflowExecutionContext (线程安全, RLock)
-    │
-    ├── _topological_active_node_batches()  ->  拓扑排序 -> 并行执行批次
-    │
-    ├── 对每个批次:
-    │   ├── _prepare_node_execution()       ->  从上游输出解析输入
-    │   ├── _execute_prepared_node()        ->  执行函数 / 返回缓存
-    │   └── _record_completed_node()        ->  更新状态 / 同步语料
-    │
-    └── 节点缓存: pickle + SHA256 缓存键
-```
+原 `dag_runtime.py` 的 DAG 执行逻辑已被重构并拆分为以下子模块：
+- **`native.py`**：工作流执行的主入口与装配器，驱动整体运行生命周期（`run_project_workflow_native()`）。
+- **`context.py`**：提供线程安全的执行上下文管理（`WorkflowExecutionContext`，含 `RLock`）。
+- **`scheduler.py`**：处理节点的拓扑排序与并行批次调度（`_topological_active_node_batches()`）。
+- **`cache.py`**：节点级缓存管理（基于 Pickle + SHA256 缓存键）。
+- **`artifacts.py`**：管理节点运行中产生的临时与持久化工件。
+- **`previews.py`**：负责节点执行结果的预览快照生成。
+- **`incremental.py`**：支持脏节点检测与局部增量重算。
+- **`support.py`**：其他辅助与支持函数。
 
-**关键特性**:
-- **并行安全调度**: 同一批次内的节点可并行执行
-- **节点级缓存**: `.pkl` 文件缓存，SHA256 缓存键，第二次运行显著加速
-- **增量处理**: 支持脏节点检测与局部重算
-- **进度推送**: 每个节点完成时推送增量进度到前端
+### 5.5 节点执行器 (`app/workflow/executors/` 子包)
 
-### 5.5 节点执行器 (`node_executors.py`, ~1563 行, 35 个执行函数)
+节点执行逻辑已按照功能类别拆分为 `app/workflow/executors/` 子包，并在 `__init__.py` 中统一对外注册：
+- **`corpus.py`**：语料相关输入与合并（如 `execute_corpus_input`、`execute_merge_corpora` 等）。
+- **`preprocessing.py`**：文本清洗、归一化、分词和词典过滤（如 `execute_clean_text`、`execute_normalize_text` 等）。
+- **`analysis.py`**：各种统计与挖掘算法分析（如 `execute_frequency_statistics`、`execute_topic_modeling`、`execute_document_clustering` 等）。
+- **`export.py`**：数据与报告导出（如 `execute_save_csv`、`execute_save_xlsx` 等）。
+- **`technology.py`**：技术识别分析。
+- **`support.py`**：辅助性节点执行器。
+- **`legacy.py`**：保留的旧版线性流水线执行器（如 `execute_legacy_analyze_corpus` 等）。
 
-| 类别 | 执行器 |
-|---|---|
-| **输入** | `execute_corpus_input`, `execute_dictionary_input`, `execute_merge_corpora` |
-| **处理** | `execute_clean_text`, `execute_normalize_text`, `execute_tokenize`, `execute_apply_dictionary_rules`, `execute_filter_terms` |
-| **数据操作** | `execute_filter_by_metadata`, `execute_deduplicate_documents`, `execute_sample_corpus`, `execute_split_corpus`, `execute_bucket_by_time` |
-| **控制流** | `execute_conditional_router`, `execute_result_gate`, `execute_manual_review_gate` |
-| **字典** | `execute_select_dictionary_tables`, `execute_overlay_dictionary_rules` |
-| **分析** | `execute_frequency_statistics`, `execute_term_document_analysis`, `execute_term_year_analysis`, `execute_cooccurrence_analysis`, `execute_group_compare`, `execute_keyness_analysis`, `execute_topic_modeling`, `execute_cluster_evaluation`, `execute_join_results`, `execute_feature_term_selection`, `execute_keyword_extraction`, `execute_keyword_clustering`, `execute_institution_keyword_analysis`, `execute_institution_topic_analysis`, `execute_document_clustering` |
-| **导出** | `execute_save_csv`, `execute_save_xlsx`, `execute_save_png`, `execute_save_html_report` |
-| **遗留** | `execute_legacy_analyze_corpus`, `execute_legacy_export_results` |
+### 5.6 节点定义 (`app/workflow/definitions/` 子包)
 
-### 5.6 节点定义 (`node_definitions.py`, ~1093 行, 40+ 节点定义)
+节点定义被组织在 `app/workflow/definitions/` 下，包括内置节点与工作流定制节点：
+- **`builtin.py`**：定义了所有系统内置节点（如语料输入、清洗、分词、分析等）。
+- **`new_flow.py`**：定义了新流（Revised-flow）的节点规范。
 
-每个节点定义包含:
+每个节点定义均包含：
 - `type`: 节点类型标识 (28 种内置类型)
 - `title` / `category`: UI 显示 (input/process/analysis/output/utility/legacy)
 - `inputs` / `outputs`: 类型化端口 (25 种端口类型)
 - `params`: 参数定义 (boolean/number/string/enum)
 - `runtime`: step_id, executor, cacheable, previewable
 
-### 5.7 插件系统 (`node_plugins.py`)
+### 5.7 插件系统 (`app/workflow/plugins.py`)
 
 插件扫描路径:
 1. `plugins/nodes/` (项目根)
@@ -346,20 +331,20 @@ def register_nodes(builder):
 
 > 当前状态: Alpha — 本地 Python 插件扫描与注册已实现，无安全隔离。
 
-### 5.8 支撑模块
+### 5.8 支撑模块与辅助逻辑
 
 | 模块 | 功能 |
 |---|---|
-| `workflow_runner.py` | 工作流运行入口，委托给 `run_project_workflow_native()` |
-| `runtime_support.py` | 运行作用域标准化、文档过滤、运行记录构建 |
-| `incremental_runtime.py` | 依赖索引、脏节点检测、增量状态更新 |
-| `run_diff.py` | 两次运行的工件计数/文件差异/指标对比 |
+| `app/workflow/runner.py` | 工作流运行入口，委托给 `run_project_workflow_native()` |
+| `app/workflow/runtime/support.py` | 运行作用域标准化、文档过滤、运行记录构建 |
+| `app/workflow/runtime/incremental.py` | 依赖索引、脏节点检测、增量状态更新 |
+| `app/storage/run_diff.py` | 两次运行的工件计数/文件差异/指标对比 |
 
 ---
 
 ## 六、数据管理
 
-### 6.1 项目持久化 (`project_store.py`, ~1506 行)
+### 6.1 项目持久化 (`app/storage/projects.py`, ~1500 行)
 
 ```
 {LOCALAPPDATA}/TextFlow Studio/projects/
@@ -377,9 +362,9 @@ def register_nodes(builder):
 - **脏段感知持久化**: `write_project_payload()` 仅写入变更段
 - **SQLite 项目存储**: 新项目将 corpus rows 和 artifact payload 写入 `project.db`；旧 `metadata/corpus.json` 会在加载时迁移
 - **字典增量存储**: 内置词表仅存储用户覆盖部分，自定义词表全量存储
-- **导入/导出**: Zip 格式的 .tfproj 包，支持 ID 冲突处理
+- **导入/导出**: Zip 格式 of .tfproj 包，支持 ID 冲突处理
 
-### 6.2 文件导入 (`ingestion.py`, ~445 行)
+### 6.2 文件导入 (`app/ingestion/importers.py` 与 `app/ingestion/specs.py`)
 
 支持格式: **CSV / XLSX / XLS / JSON / TXT**
 
@@ -391,11 +376,11 @@ def register_nodes(builder):
 
 | 模块 | 功能 |
 |---|---|
-| `artifact_store.py` | Gzip JSON 存储，预览 (前 50 行) / 完整载荷 |
-| `experiment_store.py` | 实验矩阵管理 (变体运行) |
-| `review_store.py` | 人工复核任务 (5 种类型: keyword_merge/institution_merge/cluster_rename/document_patch/dictionary_patch) |
-| `resource_store.py` | 语料视图管理 |
-| `ingestion_specs.py` | 导入规范 CRUD |
+| `app/storage/artifacts.py` | Gzip JSON 存储，预览 (前 50 行) / 完整载荷 |
+| `app/storage/experiments.py` | 实验矩阵管理 (变体运行) |
+| `app/storage/reviews.py` | 人工复核任务 (5 种类型: keyword_merge/institution_merge/cluster_rename/document_patch/dictionary_patch) |
+| `app/storage/resources.py` | 语料视图管理 |
+| `app/ingestion/specs.py` | 导入规范 CRUD |
 
 ---
 
@@ -432,7 +417,7 @@ DictionarySet (项目级)
 
 ---
 
-## 八、报告与导出 (`reporting.py`, ~1027 行)
+## 八、报告与导出 (`app/reporting/core.py`, ~1000 行)
 
 ### 8.1 图表生成 (matplotlib/PNG)
 

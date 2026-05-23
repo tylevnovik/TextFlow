@@ -7,6 +7,7 @@
 实现记录：
 
 - 2026-05-23：完成第一轮包化迁移。`analysis`、`api`、`domain`、`ingestion`、`reporting`、`samples`、`storage`、`workflow/definitions`、`workflow/executors`、`workflow/runtime` 已建立，旧平铺模块名保留为兼容入口。
+- 2026-05-23：彻底清理兼容性包装器（Wrappers），物理删除了所有旧平铺模块文件，并将全部测试和脚本的导入路径重定向到最新的新模块路径。
 
 ## 背景
 
@@ -104,7 +105,7 @@ services/python-engine/app/
     legacy_modules.md           # removal checklist for old flat imports
 ```
 
-During migration, old module paths such as `app.sample_projects`, `app.node_registry`, and `app.project_store` may remain as thin compatibility wrappers. New code should import from the target package path once a module has moved.
+经过对旧包装器的清理，所有过渡性的旧模块路径（如 `app.sample_projects`、`app.node_registry` 和 `app.project_store` 等）均已被彻底删除。新代码和现有代码必须直接导入对应的目标包路径。
 
 ## Dependency Rules
 
@@ -131,7 +132,7 @@ Rules:
 - `analysis` must not import `api`, `storage`, `workflow.runtime`, or sample modules.
 - `workflow.executors` may call analysis functions, but analysis functions must not know about node ids, run records, or UI artifact handles.
 - Heavy third-party imports such as `pandas`, `sklearn`, `yake`, `matplotlib`, `wordcloud`, and graph libraries must stay out of `api/service.py` cold-start paths unless already required by an action.
-- Compatibility wrappers must not add new behavior. They only forward imports while callers migrate.
+- Compatibility wrappers must not add new behavior. They only forward imports while callers migrate. （注：兼容性包装器已在重构完成后彻底清理移除）。
 
 ## Migration Strategy
 
@@ -141,7 +142,7 @@ Use a strangler pattern:
 2. Keep old flat module names as wrappers until all internal imports and tests use the new path.
 3. For each moved module, run import compatibility tests and the smallest relevant engine suite.
 4. Split large files only after their destination package and tests exist.
-5. Remove wrappers only in a later cleanup release after repo-wide imports are migrated.
+5. Remove wrappers only in a later cleanup release after repo-wide imports are migrated. （已完成：过渡包装器已被物理删除，所有代码的引用路径已被修正）。
 
 Recommended order:
 
@@ -197,7 +198,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-large-benchmark.ps1 --lim
 Acceptance criteria for structural refactors:
 
 - Existing public action payloads and manifest formats remain compatible.
-- Old module imports continue to work until wrappers are explicitly removed.
+- Old module imports continue to work until wrappers are explicitly removed. （已完成：包装器已物理删除，所有新老代码彻底统一到了新模块路径）。
 - Relevant tests pass.
 - No new eager import of heavy analysis/export libraries on `import app.cli` without a documented reason.
 - Benchmark changes, when measured, are explained by algorithm/data changes rather than file movement.
@@ -213,6 +214,5 @@ Benefits:
 
 Trade-offs:
 
-- During migration there will be both new package paths and old compatibility wrappers.
-- Some imports will temporarily look indirect.
-- Tests need to cover both behavior and import compatibility until the wrapper layer is removed.
+- （已完成移除）在迁移期间存在新旧路径并存的情况。目前旧包装器已被彻底移除，导入已经完全直接化。
+- 所有单元测试和脚本现直接针对新模块路径进行测试，移除了遗留的兼容性测试。
