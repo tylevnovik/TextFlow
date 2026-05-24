@@ -9,8 +9,8 @@ from typing import Any, Iterable
 
 import pandas as pd
 
-from ..domain.defaults import json_ready, utc_now_iso
-from ..storage.projects import data_root, workspace_root
+from ..domain.common import json_ready, utc_now_iso
+from ..storage.workspace import data_root, workspace_root
 
 CORE_FIELDS = {
     "doc_id",

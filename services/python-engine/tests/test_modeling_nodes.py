@@ -1,13 +1,16 @@
 from types import SimpleNamespace
 
-from app.workflow.executors import (
-    EXECUTORS_BY_TYPE,
-    execute_cluster_evaluation,
-    execute_focus_terms,
-    execute_frequency_statistics,
-    execute_join_results,
-    execute_topic_modeling,
-)
+from app.workflow.nodes.cluster_evaluation import execute_node as execute_cluster_evaluation
+from app.workflow.nodes.cooccurrence_analysis import execute_node as execute_cooccurrence_analysis
+from app.workflow.nodes.deduplicate_documents import execute_node as execute_deduplicate_documents
+from app.workflow.nodes.filter_by_metadata import execute_node as execute_filter_by_metadata
+from app.workflow.nodes.focus_terms import execute_node as execute_focus_terms
+from app.workflow.nodes.frequency_statistics import execute_node as execute_frequency_statistics
+from app.workflow.nodes.join_results import execute_node as execute_join_results
+from app.workflow.nodes.keyword_extraction import execute_node as execute_keyword_extraction
+from app.workflow.nodes.similarity_analysis import execute_node as execute_similarity_analysis
+from app.workflow.nodes.split_corpus import execute_node as execute_split_corpus
+from app.workflow.nodes.topic_modeling import execute_node as execute_topic_modeling
 
 
 def _filtered_token_corpus() -> list[dict[str, object]]:
@@ -94,7 +97,7 @@ def test_workflow_nodes_emit_real_stage_progress_before_completion():
     )
 
     similarity_context, similarity_events = _progress_context()
-    EXECUTORS_BY_TYPE["similarity_analysis"](
+    execute_similarity_analysis(
         similarity_context,
         {"node_id": "node-similarity", "node_type": "similarity_analysis", "config": {"min_similarity": 0.01}},
         {"token_corpus_in": corpus},
@@ -108,35 +111,35 @@ def test_workflow_nodes_emit_real_stage_progress_before_completion():
     )
 
     cooccurrence_context, cooccurrence_events = _progress_context()
-    EXECUTORS_BY_TYPE["cooccurrence_analysis"](
+    execute_cooccurrence_analysis(
         cooccurrence_context,
         {"node_id": "node-cooccurrence", "node_type": "cooccurrence_analysis", "config": {"min_cooccurrence": 1}},
         {"token_corpus_in": corpus},
     )
 
     keyword_context, keyword_events = _progress_context()
-    EXECUTORS_BY_TYPE["keyword_extraction"](
+    execute_keyword_extraction(
         keyword_context,
         {"node_id": "node-keyword", "node_type": "keyword_extraction", "config": {"top_k_per_doc": 2}},
         {"token_corpus_in": corpus},
     )
 
     filter_context, filter_events = _progress_context()
-    EXECUTORS_BY_TYPE["filter_by_metadata"](
+    execute_filter_by_metadata(
         filter_context,
         {"node_id": "node-filter", "node_type": "filter_by_metadata", "config": {"field": "source", "values": ["paper"]}},
         {"corpus_in": corpus},
     )
 
     dedupe_context, dedupe_events = _progress_context()
-    EXECUTORS_BY_TYPE["deduplicate_documents"](
+    execute_deduplicate_documents(
         dedupe_context,
         {"node_id": "node-dedupe", "node_type": "deduplicate_documents", "config": {"dedupe_keys_text": "title,year"}},
         {"corpus_in": corpus},
     )
 
     split_context, split_events = _progress_context()
-    EXECUTORS_BY_TYPE["split_corpus"](
+    execute_split_corpus(
         split_context,
         {"node_id": "node-split", "node_type": "split_corpus", "config": {"splits_text": "train:0.5\ntest:0.5"}},
         {"corpus_in": corpus},
@@ -180,9 +183,8 @@ def test_topic_modeling_node_outputs_topic_term_and_doc_topic_tables():
 
 def test_similarity_analysis_node_outputs_ranked_document_pairs():
     corpus = _filtered_token_corpus()
-    executor = EXECUTORS_BY_TYPE["similarity_analysis"]
 
-    result = executor(
+    result = execute_similarity_analysis(
         _context(),
         {"node_id": "node-similarity", "config": {"min_similarity": 0.01, "similarity_top_k": 4}},
         {"token_corpus_in": corpus},

@@ -8,8 +8,10 @@
     "packages/*"
   ],
   "scripts": {
+    "config:sync": "node scripts/sync-project-config.mjs",
+    "config:check": "node scripts/sync-project-config.mjs --check",
     "dev": "npm run dev --workspace apps/desktop",
-    "build": "npm run build --workspace apps/desktop",
+    "build": "npm run config:check && npm run build --workspace apps/desktop",
     "lint": "npm run lint --workspace apps/desktop",
     "dev:desktop:real": "node scripts/smoke-desktop-real.mjs --keep-open",
     "smoke:desktop:real": "node scripts/smoke-desktop-real.mjs",

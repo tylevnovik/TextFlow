@@ -8,17 +8,15 @@ from typing import Any, Callable
 from ...storage.projects import (
     find_project_dir,
     load_project,
-    load_workspace_state,
     list_project_dirs,
-    workspace_root,
-    mark_workspace_bootstrapped,
 )
 from ...samples.projects import BUILTIN_SAMPLE_PROJECT_DATA_REVISION
 from ...samples.bundled_workspace import (
     restore_bundled_sample_workspace,
     restore_builtin_sample_projects_from_bundled,
 )
-from ...domain.defaults import json_ready
+from ...domain.common import json_ready
+from ...storage.workspace import load_workspace_state, mark_workspace_bootstrapped, workspace_root
 
 ProgressCallback = Callable[[float, str, dict[str, Any] | None], None]
 

@@ -12,6 +12,11 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 
 Push-Location $projectRoot
 try {
+  npm run config:check
+  if ($LASTEXITCODE -ne 0) {
+    throw "Desktop release build stopped because project config is out of sync."
+  }
+
   $sidecarArgs = @{}
   if ($null -ne $RowLimit) {
     $sidecarArgs.RowLimit = $RowLimit

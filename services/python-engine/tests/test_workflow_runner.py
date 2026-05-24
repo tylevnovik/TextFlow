@@ -922,7 +922,7 @@ def test_dag_parallel_worker_count_respects_env_overrides(monkeypatch):
 
 
 def test_manual_workflow_parallel_safe_analysis_nodes_run_concurrently(isolated_workspace, monkeypatch):
-    import app.workflow.executors as node_executor_module
+    from app.workflow.nodes import frequency_statistics, term_document_analysis
 
     project_name = f"pytest-{uuid4().hex[:8]}"
     project_dir, manifest, corpus = _create_test_project(project_name, "native dag parallel test")
@@ -953,17 +953,17 @@ def test_manual_workflow_parallel_safe_analysis_nodes_run_concurrently(isolated_
 
         return execute
 
-    monkeypatch.setitem(
-        node_executor_module.EXECUTORS_BY_TYPE,
-        "frequency_statistics",
+    monkeypatch.setattr(
+        frequency_statistics,
+        "execute_node",
         build_executor(
             "frequency_table",
             {"term": "parallel-frequency", "tf": 2, "df": 1, "ratio": 1.0},
         ),
     )
-    monkeypatch.setitem(
-        node_executor_module.EXECUTORS_BY_TYPE,
-        "term_document_analysis",
+    monkeypatch.setattr(
+        term_document_analysis,
+        "execute_node",
         build_executor(
             "term_document_table",
             {"term": "parallel-term-doc", "doc_id": "DOC-001", "title": "并行测试", "term_count_in_doc": 1},
@@ -1653,8 +1653,8 @@ def test_normalize_metadata_node_standardizes_institution_country_year_and_categ
     workflow = manifest["workflow_definitions"][0]
 
     # inject normalize_metadata between corpus_input and clean_text
-    from app.workflow.definitions.builtin import build_builtin_node_definitions
-    node_defs = {d["type"]: d for d in build_builtin_node_definitions()}
+    from app.workflow.registry import builtin_node_definitions
+    node_defs = {d["type"]: d for d in builtin_node_definitions()}
     norm_meta_node = {
         "node_id": "node-normalize-metadata",
         "node_type": "normalize_metadata",

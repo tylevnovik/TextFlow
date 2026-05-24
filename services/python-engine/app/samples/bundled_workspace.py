@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from ..domain.defaults import utc_now_iso
+from ..domain.common import utc_now_iso
 from ..storage.projects import (
     PROJECT_FILENAME,
     WORKSPACE_ENV_VAR,

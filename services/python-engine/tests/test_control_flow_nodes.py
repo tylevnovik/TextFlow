@@ -3,11 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.workflow.executors import (
-    execute_conditional_router,
-    execute_manual_review_gate,
-    execute_result_gate,
-)
+from app.workflow.nodes.conditional_router import execute_node as execute_conditional_router
+from app.workflow.nodes.manual_review_gate import execute_node as execute_manual_review_gate
+from app.workflow.nodes.result_gate import execute_node as execute_result_gate
 
 
 @dataclass

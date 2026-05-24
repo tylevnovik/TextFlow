@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ..domain.defaults import utc_now_iso
-from .projects import CORPUS_VIEWS_FILENAME, write_json
+from ..domain.common import utc_now_iso
+from .constants import CORPUS_VIEWS_FILENAME
+from .io import write_json
 
 
 def normalize_corpus_view_payload(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:

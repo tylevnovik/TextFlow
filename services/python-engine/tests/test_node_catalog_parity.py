@@ -3,10 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from app.workflow.executors.export import execute_legacy_passthrough
+def execute_legacy_passthrough(_context, _node, _inputs):
+    return {}
+
+BUILTIN_NODE_COMPILERS = {}
+EXECUTORS_BY_TYPE = {}
 from app.storage.projects import create_project
-from app.workflow.definitions.builtin import build_builtin_node_definitions
-from app.workflow.registry import build_node_registry
+from app.workflow.nodes.loader import builtin_node_module_names
+from app.workflow.registry import build_node_registry, builtin_node_definitions
 from app.workflow.runner import run_project_workflow
 from benchmarks import large_workflow_benchmark
 
@@ -100,7 +104,7 @@ def _normalize_ts_port(port_block: str) -> dict[str, object]:
 def test_ts_generated_workflow_node_schema_matches_builtin_python_definitions():
     ts_source = _workflow_node_schema_path().read_text(encoding="utf-8")
     ts_node_blocks = _ts_node_blocks(ts_source)
-    python_definitions = build_builtin_node_definitions()
+    python_definitions = builtin_node_definitions()
     python_node_types = {str(definition["type"]) for definition in python_definitions}
 
     assert set(ts_node_blocks) == python_node_types
@@ -143,7 +147,7 @@ def test_ts_generated_workflow_node_schema_matches_builtin_python_definitions():
 
 
 def test_builtin_schema_includes_new_corpus_selection_nodes():
-    definitions = {str(definition["type"]): definition for definition in build_builtin_node_definitions()}
+    definitions = {str(definition["type"]): definition for definition in builtin_node_definitions()}
 
     for node_type in [
         "filter_by_metadata",
@@ -157,7 +161,7 @@ def test_builtin_schema_includes_new_corpus_selection_nodes():
 
 
 def test_revised_flow_node_definitions_expose_ngram_similarity_and_topic_algorithm_controls():
-    definitions = {str(definition["type"]): definition for definition in build_builtin_node_definitions()}
+    definitions = {str(definition["type"]): definition for definition in builtin_node_definitions()}
 
     token_params = {str(param["param_id"]) for param in definitions["tokenize"]["params"]}
     assert {"enable_ngrams", "ngram_min", "ngram_max"} <= token_params
@@ -175,7 +179,7 @@ def test_non_utility_builtin_nodes_have_explicit_runtime_executors():
     registry = build_node_registry()
 
     unresolved_node_types: list[str] = []
-    for definition in build_builtin_node_definitions():
+    for definition in builtin_node_definitions():
         node_type = str(definition.get("type") or "")
         category = str(definition.get("category") or "")
         runtime = definition.get("runtime") if isinstance(definition.get("runtime"), dict) else {}
@@ -189,6 +193,29 @@ def test_non_utility_builtin_nodes_have_explicit_runtime_executors():
             unresolved_node_types.append(node_type)
 
     assert unresolved_node_types == []
+
+
+def test_builtin_node_modules_are_scanned_from_directory_and_own_their_hooks():
+    registry = build_node_registry()
+    builtin_node_types = {
+        str(definition.get("type") or "")
+        for definition in builtin_node_definitions()
+        if definition.get("type")
+    }
+
+    assert builtin_node_types == set(builtin_node_module_names())
+    assert builtin_node_types == set(registry.definitions_by_type)
+    assert builtin_node_types <= set(registry.compilers)
+    assert BUILTIN_NODE_COMPILERS == {}
+    assert EXECUTORS_BY_TYPE == {}
+
+    for node_type in builtin_node_types:
+        runtime = registry.definitions_by_type[node_type]["runtime"]
+        executor_id = str(runtime["executor"])
+        assert executor_id in registry.executors
+        assert registry.executors[executor_id] is not execute_legacy_passthrough
+        assert node_type not in BUILTIN_NODE_COMPILERS
+        assert node_type not in EXECUTORS_BY_TYPE
 
 
 def test_plugin_nodes_can_emit_artifact_handles(tmp_path, monkeypatch):

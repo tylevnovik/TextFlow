@@ -8,9 +8,11 @@ import shutil
 
 from .support import ProgressCallback, notify, ensure_bootstrap_project, load_project_or_fail
 from ...ingestion import import_files, ensure_sample_files, parse_optional_year
-from ...storage.projects import save_project, remember_project, export_project_package, import_project_package, read_json, write_json
+from ...domain.common import json_ready
 from ...ingestion.specs import save_ingestion_spec, list_ingestion_specs
-from ...domain.defaults import json_ready
+from ...storage.io import read_json, write_json
+from ...storage.packages import export_project_package, import_project_package
+from ...storage.projects import save_project, remember_project
 
 
 def normalize_corpus_document(document: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:

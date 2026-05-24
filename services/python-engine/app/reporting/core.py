@@ -18,8 +18,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 from matplotlib.font_manager import FontProperties  # noqa: E402
 
-from ..workflow.runtime.support import build_run_params_snapshot
-
 DEFAULT_CHART_DPI = 320
 CLUSTER_POINT_LABEL_LIMIT = 180
 CHART_BACKGROUND = "#f7f1e6"
@@ -895,6 +893,7 @@ def write_run_outputs(
     corpus: list[dict[str, Any]],
     result_bundle: dict[str, Any],
     run_record: dict[str, Any],
+    params_snapshot: dict[str, Any],
     export_selection: dict[str, set[str]] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> list[str]:
@@ -957,7 +956,7 @@ def write_run_outputs(
         }
 
     emit_export_progress(progress_callback, 0.05, "正在写出参数快照")
-    write_json_snapshot(run_root / "params_snapshot.json", build_run_params_snapshot(workflow_definition, runtime_profile))
+    write_json_snapshot(run_root / "params_snapshot.json", params_snapshot)
     emit_export_progress(progress_callback, 0.12, "正在写出日志快照")
     write_json_snapshot(run_root / "logs.json", run_record["logs"])
     (run_root / "logs.txt").write_text(

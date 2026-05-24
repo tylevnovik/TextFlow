@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from app.storage.experiments import run_experiment_matrix, save_experiment_spec
+from app.storage.experiments import save_experiment_spec
 from app.storage.projects import create_project
+from app.workflow.experiments import run_experiment_matrix
 
 
 def test_run_experiment_matrix_creates_multiple_runs(isolated_workspace, monkeypatch):
@@ -72,7 +73,7 @@ def test_run_experiment_matrix_creates_multiple_runs(isolated_workspace, monkeyp
         manifest_arg.setdefault("run_history", []).append(run_record)
         return manifest_arg, corpus_arg, run_record
 
-    monkeypatch.setattr("app.storage.experiments.run_project_workflow", fake_run)
+    monkeypatch.setattr("app.workflow.experiments.run_project_workflow", fake_run)
 
     executed = run_experiment_matrix(project_dir, manifest, corpus, saved["experiment_id"])
 

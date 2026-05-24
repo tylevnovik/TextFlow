@@ -24,7 +24,7 @@ from app.ingestion import import_files  # noqa: E402
 from app.workflow.runner import run_project_workflow  # noqa: E402
 from app.storage.projects import create_project, save_project  # noqa: E402
 from app.samples.projects import _append_dictionary_terms  # noqa: E402
-from app.workflow.definitions.new_flow import build_new_flow_workflow  # noqa: E402
+from app.workflow.templates import build_new_flow_workflow  # noqa: E402
 
 KEEP_NODE_TYPES = {
     "corpus_input",

@@ -7,7 +7,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from ...domain.defaults import empty_result_bundle, utc_now_iso
+from ...domain.common import utc_now_iso
+from ...domain.results import empty_result_bundle
 from .previews import _compact_runtime_preview_scalar, _compact_runtime_preview_row, _preview_runtime_outputs
 from .support import (
     dispatch_progress_callback,

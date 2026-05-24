@@ -7,10 +7,8 @@ import pickle
 from pathlib import Path
 from typing import Any
 
-from ...domain.defaults import (
-    utc_now_iso,
-    workflow_payload_hash,
-)
+from ...domain.common import utc_now_iso
+from ...domain.workflow import workflow_payload_hash
 from .previews import _json_ready
 
 CORPUS_PORT_TYPES = {

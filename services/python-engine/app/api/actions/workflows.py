@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 from .support import ProgressCallback, notify, ensure_bootstrap_project, load_project_or_fail
-from ...domain.defaults import deep_copy_manifest
+from ...domain.project import deep_copy_manifest
 from ...ingestion import import_files, ensure_sample_files
 from ...workflow.runner import run_project_workflow
 from ...storage.projects import (
@@ -16,6 +16,8 @@ from ...storage.projects import (
     remember_project,
     load_project,
     compact_results_bundle,
+)
+from ...storage.templates import (
     list_project_templates,
     save_import_template_record,
     list_import_templates,
@@ -335,4 +337,3 @@ def action_save_project_template(payload: dict[str, Any], progress_callback: Pro
     remember_project(manifest["id"], set_current=True)
     notify(progress_callback, 1.0, "项目模板已保存")
     return template
-

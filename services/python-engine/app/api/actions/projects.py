@@ -7,20 +7,20 @@ from .support import ProgressCallback, notify, ensure_bootstrap_project, load_pr
 from ...storage.projects import (
     load_workspace_snapshot,
     create_project,
-    remember_project,
     build_project_summary,
-    load_project_template,
     create_project_from_template,
     find_project_dir,
-    read_json,
     backfill_manifest_summary_fields,
-    duplicate_project,
     delete_project,
     save_project,
     PROJECT_FILENAME,
 )
-from ...domain.defaults import deep_copy_manifest
+from ...domain.project import deep_copy_manifest
+from ...storage.io import read_json
+from ...storage.packages import duplicate_project
 from ...storage.resources import create_corpus_view, update_corpus_view, delete_corpus_view
+from ...storage.templates import load_project_template
+from ...storage.workspace import remember_project
 
 
 def _save_sections_from_project_payload(payload: dict[str, Any]) -> set[str]:

@@ -30,7 +30,8 @@ from app.api.actions.dispatcher import (
     action_update_corpus_document,
     normalize_corpus_document,
 )
-from app.domain.defaults import compile_runtime_profile_from_workflow, default_runtime_profile, normalize_workflow_edges
+from app.domain.defaults import default_runtime_profile, normalize_workflow_edges
+from app.workflow.runtime_profile_compiler import compile_runtime_profile_from_workflow
 from app.workflow.registry import build_node_registry
 from app.storage.projects import CORPUS_FILENAME, PROJECT_FILENAME, RESULT_PREVIEW_DEFAULT_LIMIT, create_project, find_project_dir, list_project_dirs, load_project, load_workspace_snapshot, load_workspace_state, remember_project, save_project, workspace_state_path
 from app.samples.projects import (

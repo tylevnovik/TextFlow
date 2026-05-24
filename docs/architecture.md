@@ -27,6 +27,7 @@ services/python-engine/
   app/samples/               # 内置样例、seed 发现和打包样例工作区
   app/storage/               # workspace、project、SQLite、artifact、resource、review、experiment 存储
   app/workflow/              # workflow definitions、registry、compiler、executors、runtime、plugin boundary
+  app/workflow/nodes/        # 可扫描的内置节点模块
   tests/                     # Python 测试
   benchmarks/                # 大语料 benchmark
 
@@ -35,9 +36,22 @@ packages/shared-types/
 
 plugins/nodes/
   *.py                       # 本地纯 Python 插件节点
+
+textflow.config.json         # 产品名、identifier、发布版本等仓库级配置入口
 ```
 
-Python engine 当前仍处在从平铺模块向分层包结构迁移的阶段。最终模块边界、迁移顺序和性能评估见 [Python Engine 模块边界 ADR](./adr/2026-05-23-python-engine-module-boundaries.md)。
+Python engine 当前仍处在从平铺模块向分层包结构迁移的阶段。2026-05-24 起，`domain/defaults.py` 已收敛为兼容聚合入口，领域实现分散到 `domain/common.py`、`domain/dictionary.py`、`domain/import_profiles.py`、`domain/runtime_profile.py`、`domain/workflow.py`、`domain/results.py` 和 `domain/project.py`；`storage/projects.py` 也开始把 workspace、template、dictionary serialization 和 project package 职责外移。最终模块边界、迁移顺序和性能评估见 [Python Engine 模块边界 ADR](./adr/2026-05-23-python-engine-module-boundaries.md)，本轮执行计划见 [2026-05-24 Python Engine Boundary Refactor](./plans/2026-05-24-python-engine-boundary-refactor.md)。
+
+## 仓库级配置入口
+
+`textflow.config.json` 是产品发布元数据的唯一人工修改入口。当前包含：
+
+- `product.name`
+- `product.identifier`
+- `product.version`
+- `engine.serviceTitle`
+
+由于 npm、Tauri、Cargo 和 Python packaging 都要求各自的 manifest 中存在版本字段，仓库用 `scripts/sync-project-config.mjs` 将根配置同步到这些 manifest，并用 `npm run config:check` 做漂移校验。桌面 release 脚本会先运行该校验；开发者修改版本时应先改 `textflow.config.json`，再运行 `npm run config:sync`。
 
 ## 运行时数据流
 
@@ -212,13 +226,23 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 FastA
 
 ## 插件节点架构
 
-sidecar 启动时会扫描：
+节点注册分为两层，但入口形状保持一致：
 
-- 仓库根目录 `plugins/nodes`
-- 打包 sidecar 同级 `plugins/nodes`
-- `TEXTFLOW_NODE_PLUGIN_DIR`
+- 内置节点：`services/python-engine/app/workflow/nodes/*.py`
+- 外部插件节点：仓库根目录 `plugins/nodes`、打包 sidecar 同级 `plugins/nodes`、`TEXTFLOW_NODE_PLUGIN_DIR`
 
-插件可以注册：
+内置节点模块可以暴露：
+
+- `node_definition(runtime_profile?)`
+- `node_definitions(runtime_profile?)`
+- `register_nodes(builder, runtime_profile?)`
+- `register(builder, runtime_profile?)`
+
+每个内置节点文件应同时拥有节点级 definition、compiler、executor 和注册函数。节点可以调用 `analysis`、`storage`、`reporting` 或 `workflow/executors/support.py` 里的共享算法/工具，但不应再要求开发者为了修改同一个节点而同时改 `definitions/builtin.py`、`compilers.py` 和 `executors/__init__.py`。
+
+外部插件节点继续使用同样的 `register_nodes` / `register` 入口。registry 会先扫描内置节点目录，再加载外部插件；旧的 `workflow/definitions/builtin.py` 仅作为 catalog 兼容入口保留，其内容来自这些目录模块。所有内置节点都已经迁移到 `app/workflow/nodes`，旧的全局 compiler/executor map 不再参与节点注册。
+
+节点可以注册：
 
 - node definition
 - compiler hook

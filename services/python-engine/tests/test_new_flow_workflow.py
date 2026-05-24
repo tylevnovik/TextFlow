@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from app.workflow.definitions.new_flow import build_new_flow_workflow
+from app.workflow.templates import build_new_flow_workflow
 
 
 def _frontend_node_sizes() -> dict[str, tuple[int, int]]:

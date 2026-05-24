@@ -15,7 +15,8 @@ from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .actions.dispatcher import execute_action
-from ..domain.defaults import json_ready, utc_now_iso
+from ..config import engine_service_title, product_version
+from ..domain.common import json_ready, utc_now_iso
 
 
 class TextFlowJSONResponse(JSONResponse):
@@ -107,8 +108,8 @@ def create_app(
                 manager.shutdown()
 
     app = FastAPI(
-        title="TextFlow Python Engine",
-        version="0.1.1",
+        title=engine_service_title(),
+        version=product_version(),
         default_response_class=TextFlowJSONResponse,
         lifespan=lifespan,
     )

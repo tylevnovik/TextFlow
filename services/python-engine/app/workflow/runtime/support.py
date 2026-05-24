@@ -5,7 +5,10 @@ from inspect import Parameter, signature
 from typing import Any, Callable
 from uuid import uuid4
 
-from ...domain.defaults import compile_runtime_profile_from_workflow, default_runtime_profile, utc_now_iso, workflow_payload_hash
+from ...domain.common import utc_now_iso
+from ...domain.runtime_profile import default_runtime_profile
+from ...domain.workflow import workflow_payload_hash
+from ..runtime_profile_compiler import compile_runtime_profile_from_workflow
 
 ProgressCallback = Callable[[float, str, dict[str, Any] | None], None]
 

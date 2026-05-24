@@ -7,9 +7,9 @@ from time import perf_counter
 from typing import Any
 
 from ...storage.artifacts import write_artifact
-from ...domain.defaults import (
+from ...domain.common import utc_now_iso
+from ...domain.workflow import (
     normalize_workflow_edges,
-    utc_now_iso,
     workflow_active_node_ids_from_sinks,
     workflow_reachable_node_ids,
 )
@@ -58,6 +58,7 @@ from .scheduler import (
 )
 from .support import (
     build_artifact_handle,
+    build_run_params_snapshot,
     build_run_record,
     describe_output_bundle,
     describe_run_scope,
@@ -512,6 +513,7 @@ def run_project_workflow_native(
         scoped_corpus,
         context.result_bundle,
         run_record,
+        build_run_params_snapshot(active_workflow, runtime_profile),
         export_selection=export_selection,
         progress_callback=(
             (lambda fraction, message: notify_progress(progress_callback, min(0.995, 0.94 + fraction * 0.055), message))

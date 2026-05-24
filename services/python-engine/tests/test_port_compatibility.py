@@ -1,9 +1,9 @@
 from app.domain.defaults import workflow_port_compatible
-from app.workflow.definitions.builtin import build_builtin_node_definitions
+from app.workflow.registry import builtin_node_definitions
 
 
 def test_all_analysis_output_ports_are_compatible_with_any_table_or_renderable():
-    definitions = build_builtin_node_definitions()
+    definitions = builtin_node_definitions()
     table_targets = {"AnyTable", "AnyAnalysisResult"}
     renderable_targets = {"AnyRenderable", "AnyAnalysisResult"}
     missing: list[tuple[str, str]] = []
@@ -30,7 +30,7 @@ def test_all_analysis_output_ports_are_compatible_with_any_table_or_renderable()
 def test_technology_indicators_declares_graph_metric_input():
     definitions = {
         str(definition.get("type") or ""): definition
-        for definition in build_builtin_node_definitions()
+        for definition in builtin_node_definitions()
     }
     technology_inputs = {
         str(port.get("port_id") or ""): str(port.get("port_type") or "")

@@ -1,12 +1,10 @@
 from copy import deepcopy
 from types import SimpleNamespace
 
-from app.workflow.executors import (
-    execute_group_compare,
-    execute_keyness_analysis,
-    execute_overlay_dictionary_rules,
-    execute_select_dictionary_tables,
-)
+from app.workflow.nodes.group_compare import execute_node as execute_group_compare
+from app.workflow.nodes.keyness_analysis import execute_node as execute_keyness_analysis
+from app.workflow.nodes.overlay_dictionary_rules import execute_node as execute_overlay_dictionary_rules
+from app.workflow.nodes.select_dictionary_tables import execute_node as execute_select_dictionary_tables
 from app.analysis.text import apply_dictionary, build_dictionary_runtime_state
 
 

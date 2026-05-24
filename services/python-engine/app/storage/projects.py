@@ -11,199 +11,75 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ..domain.defaults import (
-    build_dictionary_sheets_from_collections,
-    default_dictionary_set,
-    default_dictionary_set_seed,
-    default_import_template,
-    default_runtime_profile,
-    default_project_manifest,
-    default_workflow_definition,
-    empty_result_bundle,
-    json_ready,
-    utc_now_iso,
-    workflow_payload_hash,
-)
+from ..domain.common import utc_now_iso
+from ..domain.dictionary import default_dictionary_set_seed
+from ..domain.import_profiles import default_import_template
+from ..domain.project import default_project_manifest
+from ..domain.results import empty_result_bundle
+from ..domain.runtime_profile import default_runtime_profile
+from ..domain.workflow import default_workflow_definition, workflow_payload_hash
 from ..workflow.registry import builtin_node_definitions
+from .constants import (
+    CORPUS_FILENAME,
+    CORPUS_VIEWS_FILENAME,
+    IMPORT_TEMPLATES_DIRNAME,
+    INGESTION_SPECS_FILENAME,
+    PERSISTED_CORPUS_FIELDS,
+    PROJECT_DATABASE_FILENAME,
+    PROJECT_FILENAME,
+    PROJECT_PACKAGE_EXTENSION,
+    PROJECT_TEMPLATES_DIRNAME,
+    RESULT_PREVIEW_DEFAULT_LIMIT,
+    RESULT_PREVIEW_LIMITS,
+    WORKSPACE_ENV_VAR,
+    WORKSPACE_FILENAME,
+)
 from .database import (
     initialize_project_database,
     list_artifact_records,
     load_corpus_rows,
-    load_dictionary_set,
     load_result_bundle,
     migrate_corpus_from_json,
-    project_database_integrity_check,
     replace_corpus_rows,
     replace_dictionary_set,
     replace_result_bundle,
 )
+from .dictionaries import (
+    dictionary_entry_signature_for_storage,
+    dictionary_set_manifest_reference,
+    editable_dictionary_table_for_kind,
+    load_dictionary_set_from_database,
+    load_dictionary_set_payload,
+    normalize_dictionary_set_record,
+    serialize_builtin_entry_delta_for_storage,
+    serialize_dictionary_collection_for_storage,
+    serialize_dictionary_entry_for_storage,
+    serialize_dictionary_set_for_storage,
+    serialize_dictionary_table_for_storage,
+)
+from .io import read_json, write_json
+from .workspace import (
+    data_root,
+    default_user_workspace_root,
+    default_workspace_state,
+    forget_missing_projects,
+    import_templates_root,
+    load_workspace_state,
+    mark_workspace_bootstrapped,
+    normalize_workspace_state,
+    project_templates_root,
+    projects_root,
+    remember_project,
+    remove_project_from_workspace,
+    save_workspace_state,
+    templates_root,
+    workspace_root,
+    workspace_state_path,
+)
 from ..workflow.runtime.support import workflow_runtime_profile
 
-PROJECT_FILENAME = "project.json"
-PROJECT_DATABASE_FILENAME = "project.db"
-CORPUS_FILENAME = "metadata/corpus.json"
-CORPUS_VIEWS_FILENAME = "metadata/corpus_views.json"
-INGESTION_SPECS_FILENAME = "metadata/ingestion_specs.json"
-WORKSPACE_FILENAME = "workspace.json"
-WORKSPACE_ENV_VAR = "TEXTFLOW_WORKSPACE_ROOT"
-PROJECT_TEMPLATES_DIRNAME = "project_templates"
-IMPORT_TEMPLATES_DIRNAME = "import_templates"
-PROJECT_PACKAGE_EXTENSION = ".tfproj"
-RESULT_PREVIEW_DEFAULT_LIMIT = 500
-RESULT_PREVIEW_LIMITS = {
-    "audit_table": 100,
-}
-PERSISTED_CORPUS_FIELDS = (
-    "id",
-    "doc_id",
-    "source_profile",
-    "language",
-    "title",
-    "raw_text",
-    "year",
-    "source",
-    "author",
-    "institution",
-    "country_or_region",
-    "category_or_tag",
-    "keyword_field",
-    "extra_metadata",
-    "status",
-    "raw_hash",
-)
 
 
-def default_user_workspace_root() -> Path:
-    system = platform.system().lower()
-    if system == "windows":
-        base = Path(os.getenv("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-        return base / "TextFlow Studio"
-    if system == "darwin":
-        return Path.home() / "Library" / "Application Support" / "TextFlow Studio"
-    return Path(os.getenv("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "textflow-studio"
-
-
-def workspace_root() -> Path:
-    configured_root = os.getenv(WORKSPACE_ENV_VAR)
-    if configured_root:
-        root = Path(configured_root)
-    else:
-        root = default_user_workspace_root()
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def projects_root() -> Path:
-    root = workspace_root() / "projects"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def data_root() -> Path:
-    root = workspace_root() / "data"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def templates_root() -> Path:
-    root = workspace_root() / "templates"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def project_templates_root() -> Path:
-    root = templates_root() / PROJECT_TEMPLATES_DIRNAME
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def import_templates_root() -> Path:
-    root = templates_root() / IMPORT_TEMPLATES_DIRNAME
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def workspace_state_path() -> Path:
-    return projects_root() / WORKSPACE_FILENAME
-
-
-def default_workspace_state() -> dict[str, Any]:
-    return {
-        "version": "1.0.0",
-        "current_project_id": None,
-        "recent_project_ids": [],
-        "bootstrap_completed": False,
-        "builtin_samples_revision": 0,
-    }
-
-
-def normalize_workspace_state(state: dict[str, Any] | None) -> dict[str, Any]:
-    normalized = default_workspace_state()
-    if not state:
-        return normalized
-
-    normalized["version"] = state.get("version", normalized["version"])
-    normalized["current_project_id"] = state.get("current_project_id")
-    normalized["recent_project_ids"] = [
-        str(project_id)
-        for project_id in state.get("recent_project_ids", [])
-        if project_id
-    ]
-    normalized["bootstrap_completed"] = bool(state.get("bootstrap_completed", False))
-    try:
-        normalized["builtin_samples_revision"] = max(int(state.get("builtin_samples_revision", 0) or 0), 0)
-    except (TypeError, ValueError):
-        normalized["builtin_samples_revision"] = 0
-    return normalized
-
-
-def load_workspace_state() -> dict[str, Any]:
-    path = workspace_state_path()
-    if not path.exists():
-        return default_workspace_state()
-    return normalize_workspace_state(read_json(path))
-
-
-def save_workspace_state(state: dict[str, Any]) -> None:
-    write_json(workspace_state_path(), normalize_workspace_state(state))
-
-
-def remember_project(project_id: str, set_current: bool = False) -> dict[str, Any]:
-    state = load_workspace_state()
-    recent = [item for item in state["recent_project_ids"] if item != project_id]
-    recent.insert(0, project_id)
-    state["recent_project_ids"] = recent[:24]
-    if set_current:
-        state["current_project_id"] = project_id
-    save_workspace_state(state)
-    return state
-
-
-def remove_project_from_workspace(project_id: str) -> dict[str, Any]:
-    state = load_workspace_state()
-    state["recent_project_ids"] = [item for item in state["recent_project_ids"] if item != project_id]
-    if state["current_project_id"] == project_id:
-        state["current_project_id"] = state["recent_project_ids"][0] if state["recent_project_ids"] else None
-    save_workspace_state(state)
-    return state
-
-
-def mark_workspace_bootstrapped(*, builtin_samples_revision: int | None = None) -> dict[str, Any]:
-    state = load_workspace_state()
-    state["bootstrap_completed"] = True
-    if builtin_samples_revision is not None:
-        state["builtin_samples_revision"] = max(int(builtin_samples_revision), 0)
-    save_workspace_state(state)
-    return state
-
-
-def forget_missing_projects(valid_project_ids: set[str]) -> dict[str, Any]:
-    state = load_workspace_state()
-    state["recent_project_ids"] = [item for item in state["recent_project_ids"] if item in valid_project_ids]
-    if state["current_project_id"] not in valid_project_ids:
-        state["current_project_id"] = state["recent_project_ids"][0] if state["recent_project_ids"] else None
-    save_workspace_state(state)
-    return state
 
 
 def slugify(name: str) -> str:
@@ -243,21 +119,6 @@ def ensure_project_layout(project_dir: Path) -> None:
         (project_dir / relative).mkdir(parents=True, exist_ok=True)
 
 
-def write_json(path: Path, data: Any) -> bool:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = json.dumps(json_ready(data), ensure_ascii=False, indent=2)
-    if path.exists():
-        try:
-            if path.read_text(encoding="utf-8") == serialized:
-                return False
-        except OSError:
-            pass
-    path.write_text(serialized, encoding="utf-8")
-    return True
-
-
-def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _result_preview_limit(result_key: str) -> int | None:
@@ -319,37 +180,6 @@ def project_relative_root(project_dir: Path) -> str:
     return project_dir.relative_to(workspace_root()).as_posix()
 
 
-def template_path(root: Path, template_id: str) -> Path:
-    return root / f"{template_id}.json"
-
-
-def list_templates(root: Path) -> list[dict[str, Any]]:
-    templates: list[dict[str, Any]] = []
-    for path in sorted(root.glob("*.json")):
-        payload = read_json(path)
-        if isinstance(payload, dict):
-            templates.append(payload)
-    templates.sort(key=lambda item: (item.get("updated_at", ""), item.get("name", "")), reverse=True)
-    return templates
-
-
-def load_template(root: Path, template_id: str) -> dict[str, Any]:
-    path = template_path(root, template_id)
-    if not path.exists():
-        raise ValueError(f"Template {template_id} not found")
-    payload = read_json(path)
-    if not isinstance(payload, dict):
-        raise ValueError(f"Invalid template payload: {path}")
-    return payload
-
-
-def save_template(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    record = deepcopy(payload)
-    timestamp = utc_now_iso()
-    record.setdefault("created_at", timestamp)
-    record["updated_at"] = timestamp
-    write_json(template_path(root, str(record["id"])), record)
-    return record
 
 
 def refresh_manifest_paths(manifest: dict[str, Any], project_dir: Path) -> dict[str, Any]:
@@ -385,489 +215,6 @@ def normalize_import_template_record(import_template: dict[str, Any] | None) -> 
     return normalized
 
 
-def normalize_dictionary_set_record(dictionary_set: dict[str, Any] | None) -> dict[str, Any]:
-    def is_hydrated_dictionary_set(
-        payload: dict[str, Any],
-        baseline_payload: dict[str, Any],
-    ) -> bool:
-        collections = payload.get("collections")
-        sheets = payload.get("sheets")
-        if not isinstance(collections, dict) or not isinstance(sheets, dict):
-            return False
-        for kind, baseline_collection in baseline_payload.get("collections", {}).items():
-            collection = collections.get(kind)
-            sheet = sheets.get(kind)
-            if not isinstance(collection, dict) or not isinstance(sheet, dict):
-                return False
-            baseline_tables = baseline_collection.get("tables", [])
-            tables = collection.get("tables")
-            if not isinstance(tables, list) or len(tables) < len(baseline_tables):
-                return False
-            if not isinstance(sheet.get("entries"), list):
-                return False
-            for table in tables:
-                if not isinstance(table, dict) or not isinstance(table.get("entries"), list):
-                    return False
-        return True
-
-    def entry_signature(entry: dict[str, Any], fallback_key: str) -> str:
-        source = str(entry.get("source") or "").strip()
-        target = str(entry.get("target") or "").strip()
-        if not source:
-            return fallback_key
-        return f"{source.casefold()}::{target.casefold()}"
-
-    def merge_sheet_entries(
-        baseline_entries: list[dict[str, Any]],
-        provided_entries: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        def normalize_entry_payload(
-            payload: dict[str, Any],
-            *,
-            baseline_entry: dict[str, Any] | None = None,
-        ) -> dict[str, Any]:
-            baseline = baseline_entry if isinstance(baseline_entry, dict) else {}
-            raw_tags = payload.get("tags") if "tags" in payload else baseline.get("tags", [])
-            notes_value = payload.get("notes") if "notes" in payload else baseline.get("notes", "")
-            return {
-                "id": payload.get("id") or baseline.get("id"),
-                "source": str(payload.get("source") or baseline.get("source") or ""),
-                "target": payload["target"] if "target" in payload else baseline.get("target"),
-                "tags": [str(tag) for tag in raw_tags if str(tag).strip()],
-                "enabled": bool(payload.get("enabled", baseline.get("enabled", True))),
-                "hits": int(payload.get("hits", baseline.get("hits", 0)) or 0),
-                "notes": str(notes_value or ""),
-            }
-
-        merged_entries = [normalize_entry_payload(entry) for entry in baseline_entries if isinstance(entry, dict)]
-        signature_to_index = {
-            entry_signature(entry, f"baseline::{index}"): index
-            for index, entry in enumerate(merged_entries)
-        }
-        for index, entry in enumerate(provided_entries):
-            if not isinstance(entry, dict):
-                continue
-            normalized_entry = normalize_entry_payload(entry)
-            signature = entry_signature(normalized_entry, f"provided::{index}")
-            existing_index = signature_to_index.get(signature)
-            if existing_index is None:
-                signature_to_index[signature] = len(merged_entries)
-                merged_entries.append(normalized_entry)
-                continue
-            merged_entries[existing_index] = normalize_entry_payload(
-                entry,
-                baseline_entry=merged_entries[existing_index],
-            )
-        return merged_entries
-
-    def normalize_table_payload(
-        kind: str,
-        payload: dict[str, Any],
-        *,
-        fallback_id: str,
-        fallback_name: str,
-        baseline_table: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        baseline = baseline_table if isinstance(baseline_table, dict) else {}
-        table: dict[str, Any] = {}
-        table["id"] = str(payload.get("id") or baseline.get("id") or fallback_id)
-        table["kind"] = kind
-        table["name"] = str(payload.get("name") or baseline.get("name") or fallback_name)
-        table["version"] = str(payload.get("version") or baseline.get("version") or "2.0.0")
-        table["description"] = str(payload.get("description") or baseline.get("description") or "")
-        source_url = payload.get("source_url") if "source_url" in payload else baseline.get("source_url")
-        table["source_url"] = str(source_url) if source_url else None
-        table["built_in"] = bool(payload.get("built_in", baseline.get("built_in", False)))
-        table["editable"] = bool(payload.get("editable", baseline.get("editable", not table["built_in"])))
-        table["enabled"] = bool(payload.get("enabled", baseline.get("enabled", True)))
-        raw_tags = payload.get("tags") if "tags" in payload else baseline.get("tags", [])
-        table["tags"] = [str(tag) for tag in raw_tags if str(tag).strip()]
-        provided_entries = payload.get("entries", []) if isinstance(payload.get("entries"), list) else []
-        baseline_entries = baseline.get("entries", []) if isinstance(baseline.get("entries"), list) else []
-        table["entries"] = merge_sheet_entries(baseline_entries, provided_entries)
-        return table
-
-    def merge_table_lists(
-        kind: str,
-        baseline_tables: list[dict[str, Any]],
-        provided_tables: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        merged_tables = [
-            normalize_table_payload(
-                kind,
-                {},
-                fallback_id=f"{kind}-baseline-{index}",
-                fallback_name=str(table.get("name") or f"{kind} {index + 1}"),
-                baseline_table=table,
-            )
-            for index, table in enumerate(baseline_tables)
-            if isinstance(table, dict)
-        ]
-        id_to_index = {str(table.get("id") or f"{kind}-baseline-{index}"): index for index, table in enumerate(merged_tables)}
-
-        for index, payload in enumerate(provided_tables):
-            if not isinstance(payload, dict):
-                continue
-            table_id = str(payload.get("id") or f"{kind}-imported-{index}")
-            existing_index = id_to_index.get(table_id)
-            if existing_index is None:
-                merged_tables.append(
-                    normalize_table_payload(
-                        kind,
-                        payload,
-                        fallback_id=table_id,
-                        fallback_name=str(payload.get("name") or f"{kind} 导入资源"),
-                    )
-                )
-                id_to_index[table_id] = len(merged_tables) - 1
-                continue
-
-            baseline_table = merged_tables[existing_index]
-            merged_tables[existing_index] = normalize_table_payload(
-                kind,
-                payload,
-                fallback_id=table_id,
-                fallback_name=str(payload.get("name") or baseline_table.get("name") or f"{kind} 资源"),
-                baseline_table=baseline_table,
-            )
-        return merged_tables
-
-    def ensure_project_table(collection: dict[str, Any], kind: str) -> dict[str, Any]:
-        tables = collection.setdefault("tables", [])
-        if not isinstance(tables, list):
-            tables = []
-            collection["tables"] = tables
-        for index, table in enumerate(tables):
-            if not isinstance(table, dict):
-                continue
-            if table.get("built_in"):
-                continue
-            if table.get("editable", True):
-                tables[index] = normalize_table_payload(
-                    kind,
-                    table,
-                    fallback_id=f"{kind}-project-custom",
-                    fallback_name="项目自定义",
-                )
-                return tables[index]
-        project_table = normalize_table_payload(
-            kind,
-            {
-                "id": f"{kind}-project-custom",
-                "kind": kind,
-                "name": "项目自定义",
-                "version": "2.0.0",
-                "description": "从旧版项目或手工录入迁移而来的可编辑资源。",
-                "built_in": False,
-                "editable": True,
-                "enabled": True,
-                "tags": [],
-                "entries": [],
-            },
-            fallback_id=f"{kind}-project-custom",
-            fallback_name="项目自定义",
-        )
-        tables.insert(0, project_table)
-        return project_table
-
-    baseline = default_dictionary_set_seed()
-    if not isinstance(dictionary_set, dict):
-        return baseline
-    normalized = {
-        "id": str(dictionary_set.get("id") or baseline.get("id") or "dict-default"),
-        "name": str(dictionary_set.get("name") or baseline.get("name") or "默认词表集"),
-        "version": str(dictionary_set.get("version") or baseline.get("version") or "2.0.0"),
-        "bound_to_project": bool(dictionary_set.get("bound_to_project", baseline.get("bound_to_project", True))),
-        "collections": {},
-    }
-    for key, value in dictionary_set.items():
-        if key not in {"id", "name", "version", "bound_to_project", "sheets", "collections"}:
-            normalized[key] = deepcopy(value)
-
-    provided_collections = dictionary_set.get("collections", {})
-    baseline_collections = baseline.get("collections", {}) if isinstance(baseline.get("collections"), dict) else {}
-    for kind, baseline_collection in baseline_collections.items():
-        payload = provided_collections.get(kind) if isinstance(provided_collections, dict) else None
-        merged_collection = {
-            "kind": kind,
-            "name": str((payload or {}).get("name") or baseline_collection.get("name") or ""),
-            "description": str((payload or {}).get("description") or baseline_collection.get("description") or ""),
-            "tables": merge_table_lists(
-                kind,
-                baseline_collection.get("tables", []) if isinstance(baseline_collection.get("tables"), list) else [],
-                payload.get("tables", []) if isinstance(payload, dict) and isinstance(payload.get("tables"), list) else [],
-            ),
-        }
-        if isinstance(payload, dict):
-            for field, value in payload.items():
-                if field in {"kind", "name", "description", "tables"}:
-                    continue
-                merged_collection[field] = deepcopy(value)
-        normalized["collections"][kind] = merged_collection
-
-    if isinstance(provided_collections, dict):
-        for kind, payload in provided_collections.items():
-            if kind in normalized["collections"] or not isinstance(payload, dict):
-                continue
-            normalized["collections"][kind] = {
-                **{field: deepcopy(value) for field, value in payload.items() if field != "tables"},
-                "kind": kind,
-                "tables": merge_table_lists(kind, [], payload.get("tables", []) if isinstance(payload.get("tables"), list) else []),
-            }
-
-    provided_sheets = dictionary_set.get("sheets", {})
-    if isinstance(provided_sheets, dict):
-        for kind, payload in provided_sheets.items():
-            if kind not in normalized["collections"] or not isinstance(payload, dict):
-                continue
-            collection_payload = provided_collections.get(kind) if isinstance(provided_collections, dict) else None
-            if isinstance(collection_payload, dict) and isinstance(collection_payload.get("tables"), list) and collection_payload["tables"]:
-                continue
-            project_table = ensure_project_table(normalized["collections"][kind], kind)
-            if isinstance(payload.get("entries"), list):
-                project_table["entries"] = merge_sheet_entries(
-                    project_table.get("entries", []) if isinstance(project_table.get("entries"), list) else [],
-                    payload["entries"],
-                )
-
-    normalized["sheets"] = build_dictionary_sheets_from_collections(normalized.get("collections", {}))
-    return normalized
-
-
-def dictionary_entry_signature_for_storage(entry: dict[str, Any], fallback_key: str) -> str:
-    source = str(entry.get("source") or "").strip()
-    target = entry.get("target")
-    if not source:
-        return fallback_key
-    normalized_target = str(target).strip().casefold() if isinstance(target, str) else ""
-    return f"{source.casefold()}::{normalized_target}"
-
-
-def serialize_dictionary_entry_for_storage(entry: dict[str, Any]) -> dict[str, Any]:
-    tags = [str(tag) for tag in entry.get("tags", []) if str(tag).strip()]
-    return {
-        "id": entry.get("id"),
-        "source": str(entry.get("source") or ""),
-        "target": entry.get("target"),
-        "tags": tags,
-        "enabled": bool(entry.get("enabled", True)),
-        "hits": int(entry.get("hits", 0) or 0),
-        "notes": str(entry.get("notes") or ""),
-    }
-
-
-def serialize_builtin_entry_delta_for_storage(
-    entry: dict[str, Any],
-    baseline_entry: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if not isinstance(baseline_entry, dict):
-        return serialize_dictionary_entry_for_storage(entry)
-
-    payload = {
-        "source": str(entry.get("source") or ""),
-        "target": entry.get("target"),
-    }
-    changed = False
-
-    for field, default in (
-        ("enabled", True),
-        ("hits", 0),
-        ("notes", ""),
-    ):
-        current = entry.get(field, default)
-        baseline = baseline_entry.get(field, default)
-        if field == "hits":
-            current = int(current or 0)
-            baseline = int(baseline or 0)
-        elif field == "notes":
-            current = str(current or "")
-            baseline = str(baseline or "")
-        else:
-            current = bool(current)
-            baseline = bool(baseline)
-        if current != baseline:
-            payload[field] = current
-            changed = True
-
-    current_tags = [str(tag) for tag in entry.get("tags", []) if str(tag).strip()]
-    baseline_tags = [str(tag) for tag in baseline_entry.get("tags", []) if str(tag).strip()]
-    if current_tags != baseline_tags:
-        payload["tags"] = current_tags
-        changed = True
-
-    entry_id = entry.get("id")
-    baseline_id = baseline_entry.get("id")
-    if entry_id and entry_id != baseline_id and changed:
-        payload["id"] = entry_id
-
-    return payload if changed else None
-
-
-def serialize_dictionary_table_for_storage(
-    table: dict[str, Any],
-    baseline_table: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    payload = {
-        "id": str(table.get("id") or ""),
-        "kind": str(table.get("kind") or ""),
-        "name": str(table.get("name") or ""),
-        "version": str(table.get("version") or "2.0.0"),
-        "description": str(table.get("description") or ""),
-        "source_url": str(table.get("source_url")) if table.get("source_url") else None,
-        "built_in": bool(table.get("built_in", False)),
-        "editable": bool(table.get("editable", not table.get("built_in", False))),
-        "enabled": bool(table.get("enabled", True)),
-        "tags": [str(tag) for tag in table.get("tags", []) if str(tag).strip()],
-    }
-
-    baseline_entry_lookup = {
-        dictionary_entry_signature_for_storage(entry, f"baseline::{index}"): entry
-        for index, entry in enumerate((baseline_table or {}).get("entries", []))
-        if isinstance(entry, dict)
-    }
-    entries: list[dict[str, Any]] = []
-    for index, entry in enumerate(table.get("entries", [])):
-        if not isinstance(entry, dict):
-            continue
-        if payload["built_in"]:
-            signature = dictionary_entry_signature_for_storage(entry, f"provided::{index}")
-            compact_entry = serialize_builtin_entry_delta_for_storage(entry, baseline_entry_lookup.get(signature))
-            if compact_entry is not None:
-                entries.append(compact_entry)
-        else:
-            entries.append(serialize_dictionary_entry_for_storage(entry))
-    payload["entries"] = entries
-    return payload
-
-
-def serialize_dictionary_collection_for_storage(
-    kind: str,
-    collection: dict[str, Any],
-    baseline_collection: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    baseline_table_lookup = {
-        str(table.get("id") or f"{kind}-baseline-{index}"): table
-        for index, table in enumerate((baseline_collection or {}).get("tables", []))
-        if isinstance(table, dict)
-    }
-    tables = [
-        serialize_dictionary_table_for_storage(
-            table,
-            baseline_table_lookup.get(str(table.get("id") or f"{kind}-table-{index}")),
-        )
-        for index, table in enumerate(collection.get("tables", []))
-        if isinstance(table, dict)
-    ]
-    return {
-        "kind": kind,
-        "name": str(collection.get("name") or kind),
-        "description": str(collection.get("description") or ""),
-        "tables": tables,
-    }
-
-
-def serialize_dictionary_set_for_storage(dictionary_set: dict[str, Any] | None) -> dict[str, Any]:
-    baseline = default_dictionary_set_seed()
-    current = dictionary_set if isinstance(dictionary_set, dict) else baseline
-    serialized = {
-        "id": str(current.get("id") or baseline.get("id") or "dict-default"),
-        "name": str(current.get("name") or baseline.get("name") or "默认词表集"),
-        "version": str(current.get("version") or baseline.get("version") or "2.0.0"),
-        "bound_to_project": bool(current.get("bound_to_project", baseline.get("bound_to_project", True))),
-        "collections": {},
-    }
-
-    for kind, baseline_collection in baseline.get("collections", {}).items():
-        current_collection = current.get("collections", {}).get(kind, baseline_collection)
-        if not isinstance(current_collection, dict):
-            current_collection = baseline_collection
-        serialized["collections"][kind] = serialize_dictionary_collection_for_storage(
-            kind,
-            current_collection,
-            baseline_collection,
-        )
-
-    for kind, collection in current.get("collections", {}).items():
-        if kind in serialized["collections"] or not isinstance(collection, dict):
-            continue
-        serialized["collections"][kind] = serialize_dictionary_collection_for_storage(kind, collection)
-
-    return serialized
-
-
-def dictionary_set_manifest_reference(dictionary_set: dict[str, Any]) -> dict[str, Any]:
-    collections: dict[str, Any] = {}
-    for kind, collection in dictionary_set.get("collections", {}).items():
-        if not isinstance(collection, dict):
-            continue
-        tables = collection.get("tables", []) if isinstance(collection.get("tables"), list) else []
-        entry_delta_count = 0
-        for table in tables:
-            if isinstance(table, dict) and isinstance(table.get("entries"), list):
-                entry_delta_count += len(table["entries"])
-        collections[kind] = {
-            "kind": str(collection.get("kind") or kind),
-            "name": str(collection.get("name") or kind),
-            "description": str(collection.get("description") or ""),
-            "table_count": len(tables),
-            "entry_count": entry_delta_count,
-        }
-    return {
-        "id": str(dictionary_set.get("id") or "dict-default"),
-        "name": str(dictionary_set.get("name") or "默认词表集"),
-        "version": str(dictionary_set.get("version") or "2.0.0"),
-        "bound_to_project": bool(dictionary_set.get("bound_to_project", True)),
-        "storage": "project.db",
-        "table": "dictionary_tables",
-        "collections": collections,
-    }
-
-
-def load_dictionary_set_from_database(project_dir: Path) -> dict[str, Any] | None:
-    db_path = project_dir / PROJECT_DATABASE_FILENAME
-    if not db_path.exists():
-        return None
-    db = initialize_project_database(db_path)
-    return load_dictionary_set(db)
-
-
-def load_dictionary_set_payload(project_dir: Path, manifest: dict[str, Any]) -> dict[str, Any] | None:
-    db_dictionary_set = load_dictionary_set_from_database(project_dir)
-    if db_dictionary_set is not None:
-        return db_dictionary_set
-
-    manifest_dictionary_set = manifest.get("dictionary_set")
-    payload = deepcopy(manifest_dictionary_set) if isinstance(manifest_dictionary_set, dict) else {}
-    collections: dict[str, Any] = {}
-    manifest_collections = payload.get("collections") if isinstance(payload.get("collections"), dict) else {}
-    baseline_collections = default_dictionary_set_seed().get("collections", {})
-    collection_kinds = [
-        *[kind for kind in baseline_collections.keys()],
-        *[kind for kind in manifest_collections.keys() if kind not in baseline_collections],
-    ]
-
-    for kind in collection_kinds:
-        manifest_collection = manifest_collections.get(kind) if isinstance(manifest_collections, dict) else None
-        relative_path = (
-            str(manifest_collection.get("path"))
-            if isinstance(manifest_collection, dict) and manifest_collection.get("path")
-            else f"dictionaries/{kind}.json"
-        )
-        collection_path = project_dir / relative_path
-        if collection_path.exists():
-            loaded_collection = read_json(collection_path)
-            if isinstance(loaded_collection, dict):
-                collections[kind] = loaded_collection
-                continue
-        if isinstance(manifest_collection, dict) and isinstance(manifest_collection.get("tables"), list):
-            collections[kind] = manifest_collection
-
-    if collections:
-        payload["collections"] = collections
-        payload.pop("storage", None)
-        payload.pop("table", None)
-        return payload
-    return manifest_dictionary_set if isinstance(manifest_dictionary_set, dict) else None
 
 
 def result_bundle_manifest_reference(project_dir: Path, results: dict[str, Any]) -> dict[str, Any]:
@@ -896,15 +243,6 @@ def load_results_payload(project_dir: Path, manifest: dict[str, Any]) -> dict[st
     return manifest_results if isinstance(manifest_results, dict) else None
 
 
-def editable_dictionary_table_for_kind(dictionary_set: dict[str, Any], kind: str) -> dict[str, Any]:
-    collection = dictionary_set.get("collections", {}).get(kind)
-    if not isinstance(collection, dict):
-        raise ValueError(f"Dictionary collection {kind} not found")
-
-    for table in collection.get("tables", []):
-        if isinstance(table, dict) and bool(table.get("editable", False)):
-            return table
-    raise ValueError(f"Editable dictionary table for {kind} not found")
 
 
 def write_project_payload(
@@ -1307,45 +645,6 @@ def create_project_from_template(
     return project_dir, manifest
 
 
-def save_project_template(
-    manifest: dict[str, Any],
-    name: str | None = None,
-    description: str | None = None,
-    template_id: str | None = None,
-) -> dict[str, Any]:
-    payload = build_project_template(manifest, name=name, description=description, template_id=template_id)
-    return save_template(project_templates_root(), payload)
-
-
-def list_project_templates() -> list[dict[str, Any]]:
-    return list_templates(project_templates_root())
-
-
-def load_project_template(template_id: str) -> dict[str, Any]:
-    return load_template(project_templates_root(), template_id)
-
-
-def save_import_template_record(
-    import_template: dict[str, Any],
-    name: str | None = None,
-    description: str | None = None,
-    template_id: str | None = None,
-) -> dict[str, Any]:
-    payload = deepcopy(import_template)
-    payload["id"] = template_id or payload.get("id") or f"import-template-{uuid_suffix()}"
-    if name:
-        payload["name"] = name
-    if description is not None:
-        payload["description"] = description
-    return save_template(import_templates_root(), payload)
-
-
-def list_import_templates() -> list[dict[str, Any]]:
-    return list_templates(import_templates_root())
-
-
-def load_import_template(template_id: str) -> dict[str, Any]:
-    return load_template(import_templates_root(), template_id)
 
 
 def save_project(
@@ -1451,104 +750,6 @@ def delete_project(project_id: str) -> dict[str, Any]:
     }
 
 
-def project_package_name(manifest: dict[str, Any]) -> str:
-    timestamp = str(manifest.get("updated_at") or utc_now_iso()).replace(":", "-").replace(".", "-")
-    return f"{slugify(str(manifest.get('name') or manifest.get('id') or 'textflow-project'))}-{timestamp}{PROJECT_PACKAGE_EXTENSION}"
-
-
-def normalize_project_package_path(path: Path) -> Path:
-    if path.suffix.lower() == PROJECT_PACKAGE_EXTENSION:
-        return path
-    return path.with_suffix(PROJECT_PACKAGE_EXTENSION)
-
-
-def find_project_root(search_root: Path) -> Path:
-    direct_project = search_root / PROJECT_FILENAME
-    if direct_project.exists():
-        return search_root
-
-    for manifest_path in sorted(search_root.rglob(PROJECT_FILENAME)):
-        return manifest_path.parent
-    raise ValueError(f"No project manifest found in {search_root}")
-
-
-def _archive_members(project_dir: Path) -> list[Path]:
-    members: list[Path] = []
-    for path in sorted(project_dir.rglob("*")):
-        if path.is_dir():
-            continue
-        relative_path = path.relative_to(project_dir)
-        if relative_path.parts[:2] == ("exports", "backups"):
-            continue
-        members.append(path)
-    return members
-
-
-def export_project_package(project_dir: Path, output_path: Path | None = None) -> Path:
-    manifest, _corpus = load_project(project_dir)
-    if output_path is None:
-        backup_dir = project_dir / "exports" / "backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        output_path = backup_dir / project_package_name(manifest)
-    output_path = normalize_project_package_path(output_path.expanduser().resolve())
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_output_path = output_path.with_name(f"{output_path.stem}-{uuid_suffix()}{output_path.suffix}.tmp")
-    if temp_output_path.exists():
-        temp_output_path.unlink()
-
-    try:
-        with zipfile.ZipFile(temp_output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in _archive_members(project_dir):
-                relative_path = path.relative_to(project_dir)
-                archive.write(path, arcname=str(Path(project_dir.name) / relative_path))
-        temp_output_path.replace(output_path)
-    finally:
-        if temp_output_path.exists():
-            temp_output_path.unlink()
-
-    return output_path
-
-
-def import_project_package(package_path: Path) -> tuple[Path, dict[str, Any], list[dict[str, Any]]]:
-    package_path = package_path.expanduser().resolve()
-    if not package_path.exists():
-        raise FileNotFoundError(f"Project package not found: {package_path}")
-
-    temp_root = projects_root() / f".import-{uuid_suffix()}"
-    if temp_root.exists():
-        shutil.rmtree(temp_root)
-    temp_root.mkdir(parents=True, exist_ok=True)
-
-    try:
-        shutil.unpack_archive(str(package_path), str(temp_root), format="zip")
-        source_project_dir = find_project_root(temp_root)
-        manifest = read_json(source_project_dir / PROJECT_FILENAME)
-        corpus = read_json(source_project_dir / CORPUS_FILENAME) if (source_project_dir / CORPUS_FILENAME).exists() else []
-        db_path = source_project_dir / PROJECT_DATABASE_FILENAME
-        if db_path.exists():
-            db = initialize_project_database(db_path)
-            integrity = project_database_integrity_check(db)
-            if integrity != "ok":
-                raise ValueError(f"Project database integrity check failed: {integrity}")
-        existing_dir = find_project_dir(str(manifest.get("id")))
-        target_dir = ensure_unique_project_dir(str(manifest.get("name") or source_project_dir.stem))
-        shutil.copytree(source_project_dir, target_dir)
-        manifest, corpus = load_project(target_dir)
-
-        if existing_dir is not None:
-            timestamp = utc_now_iso()
-            manifest["id"] = f"project-{uuid_suffix()}"
-            manifest["name"] = f"{manifest['name']} 导入副本"
-            manifest["created_at"] = timestamp
-            manifest["updated_at"] = timestamp
-            for run in manifest.get("run_history", []):
-                run["project_id"] = manifest["id"]
-
-        save_project(target_dir, manifest, corpus, already_normalized=True)
-        return target_dir, manifest, corpus
-    finally:
-        if temp_root.exists():
-            shutil.rmtree(temp_root, ignore_errors=True)
 
 
 def build_project_summary(
@@ -1611,29 +812,6 @@ def backfill_manifest_summary_fields(project_dir: Path, manifest: dict[str, Any]
     return next_manifest
 
 
-def duplicate_project(project_id: str, duplicated_name: str | None = None) -> tuple[Path, dict[str, Any], list[dict[str, Any]]]:
-    source_dir = find_project_dir(project_id)
-    if source_dir is None:
-        raise ValueError(f"Project {project_id} not found")
-
-    source_manifest, _ = load_project(source_dir)
-    target_name = duplicated_name or f"{source_manifest['name']} 副本"
-    target_dir = ensure_unique_project_dir(target_name)
-    shutil.copytree(source_dir, target_dir)
-
-    manifest, corpus = load_project(target_dir)
-    timestamp = utc_now_iso()
-    manifest["id"] = f"project-{uuid_suffix()}"
-    manifest["name"] = target_name
-    manifest["created_at"] = timestamp
-    manifest["updated_at"] = timestamp
-    refresh_manifest_paths(manifest, target_dir)
-
-    for run in manifest.get("run_history", []):
-        run["project_id"] = manifest["id"]
-
-    save_project(target_dir, manifest, corpus, already_normalized=True)
-    return target_dir, manifest, corpus
 
 
 def uuid_suffix() -> str:
@@ -1696,4 +874,3 @@ def load_workspace_snapshot() -> dict[str, Any]:
         "selected_run": selected_run,
         "node_definitions": builtin_node_definitions(),
     }
-

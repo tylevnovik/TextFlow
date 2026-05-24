@@ -1,0 +1,10 @@
+{
+  "product": {
+    "name": "TextFlow Studio",
+    "identifier": "com.textflow.studio",
+    "version": "0.1.1"
+  },
+  "engine": {
+    "serviceTitle": "TextFlow Python Engine"
+  }
+}

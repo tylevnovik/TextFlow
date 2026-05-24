@@ -75,6 +75,7 @@ try {
     --hidden-import uvicorn.lifespan.on `
     --hidden-import uvicorn.loops.asyncio `
     --hidden-import uvicorn.protocols.http.h11_impl `
+    --add-data "$projectRoot\textflow.config.json;app" `
     --add-data "$engineRoot\app\builtin_dictionary_sources;app\builtin_dictionary_sources" `
     --add-data "$bundledWorkspaceDir;app\bundled_sample_workspace" `
     --name textflow-engine `

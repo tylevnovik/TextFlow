@@ -119,15 +119,11 @@ class NodeRegistryBuilder:
 
 
 def build_node_registry(runtime_profile: dict[str, Any] | None = None) -> NodeRegistry:
-    from .executors import register_builtin_node_executors
-    from .compilers import register_builtin_node_compilers
-    from .definitions.builtin import register_builtin_node_definitions
+    from .nodes.loader import register_builtin_node_modules
     from .plugins import load_node_plugins
 
     builder = NodeRegistryBuilder(runtime_profile)
-    register_builtin_node_definitions(builder)
-    register_builtin_node_compilers(builder)
-    register_builtin_node_executors(builder)
+    register_builtin_node_modules(builder)
     load_node_plugins(builder)
     return builder.build()
 

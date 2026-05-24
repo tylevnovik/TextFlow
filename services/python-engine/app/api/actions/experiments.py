@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from .support import ProgressCallback, notify, ensure_bootstrap_project, load_project_or_fail
-from ...storage.experiments import list_experiment_specs, run_experiment_matrix, save_experiment_spec
+from ...storage.experiments import list_experiment_specs, save_experiment_spec
 from ...storage.projects import save_project, remember_project, load_project
+from ...workflow.experiments import run_experiment_matrix
 from ...ingestion import import_files, ensure_sample_files
 
 
