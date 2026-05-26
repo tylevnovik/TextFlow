@@ -78,16 +78,33 @@ export function buildWorkbenchNavigation(snapshot: WorkspaceSnapshot): Workbench
       id: "project",
       label: "项目",
       summary: project ? project.name : "尚未打开项目",
-      items: [
-        {
-          id: "project-overview",
-          label: project ? "三核心概览" : "打开或新建项目",
-          detail: project ? `${snapshot.corpus.length} 篇文档 · ${project.workflow_definitions.length} 张图` : "先创建本地项目工作区",
-          badge: project ? "核心" : undefined,
-          page: project ? "project" : "home",
-          selection: { kind: "project", projectId }
-        }
-      ]
+      items: project
+        ? [
+            {
+              id: "project-overview",
+              label: "三核心概览",
+              detail: `${snapshot.corpus.length} 篇文档 · ${project.workflow_definitions.length} 张图`,
+              badge: "核心",
+              page: "project",
+              selection: { kind: "project", projectId }
+            },
+            {
+              id: "project-management",
+              label: "项目管理",
+              detail: "打开、创建或导入其它项目",
+              page: "home",
+              selection: { kind: "project", projectId }
+            }
+          ]
+        : [
+            {
+              id: "project-overview",
+              label: "打开或新建项目",
+              detail: "先创建本地项目工作区",
+              page: "home",
+              selection: { kind: "project", projectId }
+            }
+          ]
     },
     {
       id: "corpus",
