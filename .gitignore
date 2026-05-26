@@ -38,8 +38,8 @@ sample_seed_sources/*.csv
 sample_seed_sources/*.tsv
 sample_seed_sources/*.xls
 sample_seed_sources/*.xlsx
-!sample_seed_sources/稀土wos.xls
-!sample_seed_sources/稀缺稀土元素.xlsx
+!sample_seed_sources/wos_sample.xlsx
+!sample_seed_sources/incopat_sample.xlsx
 services/python-engine/app/workflow/nodes/_builtin_list.py
 screenshots_smoke/
 
