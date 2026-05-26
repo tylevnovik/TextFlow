@@ -23,7 +23,7 @@ TextFlow 已经完成了一个可运行的本地桌面应用主链，不再只�
 | 节点缓存 | 已接入 | 当前是节点级 `.pkl` 缓存，已在 benchmark 中体现二次运行收益。 |
 | 资源、产物、复核和实验 surfaces | 可用，正在工作台化 | 项目模型、bridge/store 和运行产物支撑面已接入语料视图、导入规格、review queue、experiment matrix 和 run diff；底部运行面板可打开 run/artifact 支撑 workspace，artifact preview 也可从已运行 workflow 节点弹窗查看。 |
 | 插件节点 | Alpha | 已支持本地纯 Python 节点插件扫描、注册 definition/compiler/executor，并可通过 `artifact_kind` 输出口写入项目 artifact store。 |
-| Windows 安装包 | 已通过本地打包验证 | Tauri NSIS bundling 已配置，sidecar 会随安装包带上；本地已产出 `TextFlow Studio_0.2.0_x64-setup.exe`。 |
+| Windows 安装包 | 已通过本地与 CI 打包验证 | Tauri NSIS bundling 已配置，sidecar 会随安装包带上；本地已产出 `TextFlow Studio_0.2.0_x64-setup.exe`，并已配置 GitHub Actions Release 自动构建工作流。 |
 | macOS 可移植性 | 保持约束，未完成验证 | 路径、字体、工作区根目录选择都在照顾可移植性，但当前没有成体系的 macOS 构建验证。 |
 
 ## 当前已经稳定的主链
@@ -87,32 +87,29 @@ Phase 4 已开始把旧 `WorkflowEditorPage` 迁移为节点图默认主工作�
 
 ## 质量与验证
 
-截至 `2026-05-14`，本地前端验证结果如下：
+截至 `2026-05-26`，本地与 CI 验证结果如下：
 
 - `npm run lint` 通过
-- `npm run test --workspace apps/desktop` 通过
+- `npm run test --workspace apps/desktop` 通过（56 个测试全部通过）
 - `npm run build` 通过
-
-截至 `2026-04-28`，引擎与打包链路本地验证结果如下：
-
-- `npm run test:engine` 通过
+- `npm run test:engine` (或 `test:engine:fast`) 通过（154 个测试全部通过）
 - `npm run test:engine:full` 通过
 - `powershell -ExecutionPolicy Bypass -File .\scripts\build-python-sidecar.ps1` 通过
-- `npm run tauri:build --workspace apps/desktop` 通过，并产出 NSIS installer
+- `npm run tauri:build --workspace apps/desktop` 通过，且 GitHub Actions 自动化 CI 和 Release 打包工作流正常运行
 - 当前测试覆盖重点在 Python 引擎、工作区 CLI、workflow 节点目录一致性和 native DAG 行为
 
 ## 当前明显缺口
 
-- 前端已有基础组件/store 测试，但仍缺少系统化覆盖和 E2E 测试。
-- 仓库中还没有持续集成配置。
+- 前端已有基础组件/store 测试，但仍缺少系统化的 E2E 自动化测试覆盖。
 - workflow 画布虽然可用，但仍然偏工程态，距“稳定交付给终端用户”的产品化体验还有差距。
 - native DAG 还缺少更细粒度的 ready-queue 调度、面向用户的局部重跑、跨项目 artifact registry 和更完整的 dirty 传播可视化。
 - 插件节点没有签名、隔离和安全边界设计，当前只适合开发态本地扩展。
-- Windows 安装链路已通过本地打包验证，但仍缺少自动化 release checklist 和持续验证记录。
+- Windows 安装与发布链路虽然在 GitHub Actions 中配置了自动 Release 工作流，但多平台的自动化集成机制仍需持续演进。
+- 缺少成体系的 macOS 构建与运行验证。
 
 ## 当前最值得继续推进的方向
 
 1. 把工作台相关文档、命名和 UI 文案继续统一，减少“数据页/词表页/结果页”等旧页面式表达。
-2. 补齐前端测试与 CI，让当前已经不小的功能面有持续回归保护。
+2. 补齐前端 E2E 测试，让当前已经不小的功能面有持续回归保护。
 3. 继续优化大语料导出和 snapshot 写盘，避免 benchmark 成绩被后半段 I/O 拖慢。
 4. 把安装包、示例项目、插件节点和工作流能力做一轮“面向交付”的整理，而不是继续只面向内部研发迭代。

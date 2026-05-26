@@ -296,8 +296,8 @@ npm run tauri:build --workspace apps/desktop
 
 当前配置行为：
 
-- Tauri 在 build 前会先执行 `scripts/build-desktop-release.ps1`
-- `build-desktop-release.ps1` 会先重建 Python sidecar，再构建前端
+- Tauri 在 build 前会自动执行 `beforeBuildCommand` 中配置的 `scripts/build-desktop-release-local-samples.ps1`
+- `build-desktop-release-local-samples.ps1` 会利用本地样例种子（在 `sample_seed_sources` 目录下）调用 `build-desktop-release.ps1` 重建 Python sidecar，然后再由 Tauri 完成前端构建与打包
 - bundling 目标当前为 `NSIS`
 - 发版前应确认 `apps/desktop/src-tauri/target/release/bundle/nsis/` 下生成 Windows installer
 
@@ -328,19 +328,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-large-benchmark.ps1 --lim
 
 ## 当前测试与验证情况
 
-截至 `2026-05-14`，前端工作台本地验证：
+截至 `2026-05-26`，本地与 CI 验证情况如下：
 
 - `npm run lint` 通过
-- `npm run test --workspace apps/desktop` 通过
+- `npm run test --workspace apps/desktop` 通过（56 个测试全部通过）
 - `npm run build` 通过
-- Codex 内置 Browser 已用于 `http://127.0.0.1:5174/` 本地烟测；后续视觉/布局/工作台改动默认按“本地浏览器烟测”流程复核
-
-截至 `2026-04-28`，引擎与安装包链路已验证或纳入最终验证清单：
-
-- `npm run test:engine` 通过
+- `npm run test:engine` (或 `test:engine:fast`) 通过（154 个测试全部通过）
 - `npm run test:engine:full` 通过
 - `powershell -ExecutionPolicy Bypass -File .\scripts\build-python-sidecar.ps1` 通过
-- `npm run tauri:build --workspace apps/desktop` 通过，并已产出 NSIS installer
+- `npm run tauri:build --workspace apps/desktop` 通过，且 GitHub Actions 自动化 CI 和 Release 打包工作流正常运行
+- Codex 内置 Browser 已用于 `http://127.0.0.1:5174/` 本地烟测；后续视觉/布局/工作台改动默认按“本地浏览器烟测”流程复核
 
 当前 Windows installer 输出位置：
 
@@ -358,7 +355,7 @@ apps/desktop/src-tauri/target/release/bundle/nsis/TextFlow Studio_0.2.0_x64-setu
 ## 当前开发注意事项
 
 - 目前已有少量前端组件/store 测试，但还没有系统化前端测试矩阵和 E2E 测试。
-- 仓库中没有 CI 配置，回归主要依赖本地命令。
+- 虽已配置 GitHub Actions CI/CD 流水线，但本地提交前仍应按需在本地运行验证命令。
 - `test:engine:fast` 应保持适合日常迭代；`test:engine:full` 会明显更慢，因为它覆盖样例生成、刷新和打包期模板校验。
 - sidecar 打包依赖 `PyInstaller`，首次构建会慢一些。
 - 大语料性能当前主要受关键词提取和导出写盘影响。

@@ -91,7 +91,7 @@ TextFlow/
   docs/                      # 当前有效文档
   docs/archive/              # 历史方案、旧规格、旧计划
   scripts/                   # 引导、测试、打包、词表更新脚本
-  samples/                   # 样例数据与旧示例项目
+  sample_seed_sources/       # 本地样例数据种子源（如 wos、incopat 样本数据）
 ```
 
 ## 快速开始
@@ -112,9 +112,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-frontend.ps1
 
 ### 本地开发
 
-```powershell
-npm run dev
-```
+- **网页端（浏览器模式开发）**：
+  ```powershell
+  npm run dev
+  ```
+- **桌面客户端（Tauri 调试模式开发）**：
+  ```powershell
+  npm run tauri:dev --workspace apps/desktop
+  ```
 
 ### 常用验证命令
 
@@ -136,7 +141,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-python-sidecar.ps1
 npm run tauri:build --workspace apps/desktop
 ```
 
-`tauri:build` 会先执行 `scripts/build-desktop-release.ps1`，自动重建 Python sidecar，然后再产出 NSIS 安装包。
+`tauri:build` 会自动执行 `beforeBuildCommand` 中配置的 `scripts/build-desktop-release-local-samples.ps1`，该脚本利用本地的样例数据种子（位于 `sample_seed_sources` 目录下）重新构建 Python sidecar 并打入安装包，然后再产出 NSIS 安装包。
 
 ## Built-In Scenario Samples
 
@@ -154,15 +159,19 @@ See `docs/examples.md`.
 - [开发与构建说明](./docs/development.md)
 - [内置场景样例](./docs/examples.md)
 - [大规模压测记录](./docs/benchmark.md)
+- [技术全景与架构设计](./docs/technical-overview.md)
+- [样例项目内置与管理](./docs/sample-projects.md)
+- [节点 Catalog 规范定义](./docs/node-catalog-schema.md)
+- [架构决策记录 (ADR)](./docs/adr/)
 - [插件节点说明](./plugins/nodes/README.md)
 - [发布记录](./CHANGELOG.md)
 - [历史方案与旧文档归档](./docs/archive/README.md)
 
 ## 已知仍需继续收敛的部分
 
-- workflow 画布的产品化体验
-- 更系统的前端自动化测试、E2E 与 CI
-- Windows 发版链路的持续自动化验证
-- macOS 构建与运行验证
-- native DAG 更细粒度的 ready-queue 调度、局部重跑和更完整的 artifact 管理
-- 超大项目的冷启动、结果页首屏和导出阶段 I/O 仍有继续优化空间
+- **工作台与画布体验**：workflow 画布虽然可用，但仍然偏工程态，距离“稳定交付给终端用户”的产品化体验还有一定差距。
+- **质量保障**：虽然已配置 GitHub Actions CI 工作流，但前端仍缺少系统化的 E2E 自动化测试覆盖，需要进一步补齐前端测试用例。
+- **native DAG 调度与产物管理**：目前仍缺少更细粒度的 ready-queue 调度、面向用户的局部重跑支持、跨项目 artifact registry，以及更完整的 dirty 传播可视化。
+- **插件节点安全性**：本地纯 Python 插件节点尚未进行签名、隔离与安全边界设计，目前仅适合开发态本地扩展。
+- **多平台验证**：虽然 Windows 安装链路已通过本地手动打包及 GitHub Actions Release 自动构建流配置，但依然缺少成体系的 macOS 构建与运行验证。
+- **大项目性能表现**：超大项目的冷启动、大语料导出、结果页首屏以及大文件 snapshot 写盘 I/O 仍有较大的持续优化空间。

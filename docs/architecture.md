@@ -263,7 +263,7 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 FastA
 ### Desktop installer
 
 - Tauri bundling 目标当前为 `NSIS`
-- `beforeBuildCommand` 会先执行 `scripts/build-desktop-release.ps1`
+- `beforeBuildCommand` 会自动执行 `scripts/build-desktop-release-local-samples.ps1`，该脚本利用本地的样例数据种子重建 Python sidecar，然后再由 Tauri 进行打包
 - 安装包资源中会带上 `services/python-engine/dist/textflow-engine`
 
 ## 当前架构边界

@@ -515,7 +515,8 @@ npm run tauri:build                 # -> NSIS 安装程序
 | `bootstrap-python.ps1` | 初始化 Python 环境 (.venv) |
 | `build-python-sidecar.ps1` | PyInstaller 构建 sidecar |
 | `build-bundled-sample-workspace.ps1` | 构建示例工作区模板 |
-| `build-desktop-release.ps1` | 构建完整桌面发布包 |
+| `build-desktop-release.ps1` | 构建完整桌面发布包 (核心逻辑) |
+| `build-desktop-release-local-samples.ps1` | 基于本地样例种子构建桌面发布包 (Tauri beforeBuild 触发) |
 | `test-engine.ps1` | 运行引擎测试 (fast/full) |
 | `update-builtin-dictionaries.ps1` | 更新内置词表快照 |
 | `run-large-benchmark.ps1` | 大规模基准测试 |
@@ -626,12 +627,12 @@ npm run tauri:build                 # -> NSIS 安装程序
 
 | 差距 | 影响 |
 |---|---|
-| 无 CI/CD 流水线 | 回归依赖本地手动测试 |
+| 缺少系统化 E2E 测试 | 前端无 E2E 覆盖，CI 流水线仅支持单元与快速集成测试 |
 | 前端测试不足 | 仅少量组件测试，无 E2E 测试 |
 | 工作流画布 UX 待打磨 | 可用但不精致 |
 | macOS 未验证 | 可移植性保留但未正式构建验证 |
 | 插件节点无安全隔离 | 恶意插件可访问全进程 |
-| 无自动化发布清单 | 发布流程依赖人工 |
+| 自动化发布平台单一 | 已配置 Windows 的自动构建与 Release 发布，但 macOS 缺失 |
 
 ---
 
