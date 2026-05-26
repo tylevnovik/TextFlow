@@ -28,7 +28,7 @@ function writeText(relativePath, value) {
 function writeIfChanged(relativePath, next, writer) {
   const target = path.join(projectRoot, relativePath);
   const current = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : "";
-  if (current === next) {
+  if (current.replace(/\r\n/g, "\n") === next.replace(/\r\n/g, "\n")) {
     return;
   }
   if (checkOnly) {
