@@ -1,0 +1,63 @@
+name: Sync Docs to GitHub Wiki
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - '.github/workflows/wiki-sync.yml'
+      - 'scripts/sync-to-wiki.py'
+  workflow_dispatch: # 允许在 GitHub UI 中手动触发同步
+
+jobs:
+  sync-wiki:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout main repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run wiki conversion script
+        run: |
+          python scripts/sync-to-wiki.py
+
+      - name: Push to GitHub Wiki
+        env:
+          # 优先使用自定义的 WIKI_SYNC_TOKEN (PAT) 以防默认 token 权限不足
+          WIKI_TOKEN: ${{ secrets.WIKI_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # Wiki 仓库的 Git 地址
+          WIKI_REPO_URL="https://x-access-token:${WIKI_TOKEN}@github.com/${{ github.repository }}.wiki.git"
+          
+          echo "Cloning Wiki repository..."
+          git clone "$WIKI_REPO_URL" wiki-temp
+          
+          # 清理临时 Wiki 目录中的旧文件（保留 .git）
+          cd wiki-temp
+          find . -maxdepth 1 -not -name '.' -not -name '..' -not -name '.git' -exec rm -rf {} +
+          
+          # 拷贝转换后的扁平化 Markdown 文件与侧边栏配置
+          cp -r ../out-wiki/* .
+          
+          # 检查内容是否发生改变
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Changes detected. Committing and pushing..."
+            git add .
+            git commit -m "docs: auto-sync documentation to Wiki [skip ci]"
+            # 兼容 main 和 master 分支
+            git push origin main || git push origin master || git push
+          else
+            echo "No changes detected. Wiki is up to date."
+          fi

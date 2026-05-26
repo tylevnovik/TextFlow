@@ -43,3 +43,7 @@ screenshots_smoke/
 
 # Antigravity local config
 .antigravityignore
+
+# Temp out-wiki directory
+out-wiki/
+
