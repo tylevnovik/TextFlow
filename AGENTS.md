@@ -86,6 +86,12 @@ The product must be install-and-run and must not require users to configure Pyth
 - Use a DOM snapshot plus a visible screenshot when the change is visual or layout-sensitive. Keep temporary smoke logs outside the repo, such as under `%TEMP%`.
 - If the dev server is left running for the user, report the exact local URL; otherwise stop the temporary server after verification.
 
+## CI/CD Diagnosis Rules
+- Future agents can check GitHub Actions workflow status and logs directly from the terminal if the local system has an authenticated GitHub CLI (`gh`).
+- Use `gh run list --limit <N>` to view recent workflow run statuses.
+- Use `gh run view <run-id>` to check run details and jobs.
+- Use `gh run view --log --job=<job-id>` to fetch and debug failing step logs.
+
 ## Deliverables
 - Working desktop app skeleton
 - Python engine skeleton
