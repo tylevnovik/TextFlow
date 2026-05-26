@@ -23,7 +23,7 @@ TextFlow 已经完成了一个可运行的本地桌面应用主链，不再只�
 | 节点缓存 | 已接入 | 当前是节点级 `.pkl` 缓存，已在 benchmark 中体现二次运行收益。 |
 | 资源、产物、复核和实验 surfaces | 可用，正在工作台化 | 项目模型、bridge/store 和运行产物支撑面已接入语料视图、导入规格、review queue、experiment matrix 和 run diff；底部运行面板可打开 run/artifact 支撑 workspace，artifact preview 也可从已运行 workflow 节点弹窗查看。 |
 | 插件节点 | Alpha | 已支持本地纯 Python 节点插件扫描、注册 definition/compiler/executor，并可通过 `artifact_kind` 输出口写入项目 artifact store。 |
-| Windows 安装包 | 已通过本地打包验证 | Tauri NSIS bundling 已配置，sidecar 会随安装包带上；本地已产出 `TextFlow Studio_0.1.1_x64-setup.exe`。 |
+| Windows 安装包 | 已通过本地打包验证 | Tauri NSIS bundling 已配置，sidecar 会随安装包带上；本地已产出 `TextFlow Studio_0.2.0_x64-setup.exe`。 |
 | macOS 可移植性 | 保持约束，未完成验证 | 路径、字体、工作区根目录选择都在照顾可移植性，但当前没有成体系的 macOS 构建验证。 |
 
 ## 当前已经稳定的主链

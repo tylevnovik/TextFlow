@@ -1,6 +1,6 @@
 {
   "name": "@textflow/desktop",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,7 +15,7 @@
     "@fluentui/react-components": "^9.73.8",
     "@fluentui/react-icons": "^2.0.326",
     "@tauri-apps/api": "2.0.0",
-    "@textflow/shared-types": "0.1.1",
+    "@textflow/shared-types": "0.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

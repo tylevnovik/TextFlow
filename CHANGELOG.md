@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 - 2026-05-26
+
+### Highlights
+
+- **Backend-Driven Node Schema Refactor**: Replaced frontend-coupled node configurations with schemas dynamically served by the Python backend catalog.
+- **FastAPI Migration**: Ported the Python engine sidecar API from custom request dispatchers to a robust FastAPI application structure.
+- **Fluent UI Workbench Integration**: Refactored the workflow workspace, adding dynamic node editing panels and slots using Fluent UI component guidelines.
+- **Python Engine Restructuring**: Consolidated domain models, registry, and execution scheduler to improve modularity and clean architectural boundaries.
+- **Performance & Testing**: Split engine tests into fast and full suites, and added contract validation tests for node schemas and catalog parity.
 
 ### Performance
 

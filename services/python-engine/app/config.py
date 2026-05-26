@@ -11,7 +11,7 @@ DEFAULT_PROJECT_CONFIG: dict[str, Any] = {
     "product": {
         "name": "TextFlow Studio",
         "identifier": "com.textflow.studio",
-        "version": "0.1.1",
+        "version": "0.2.0",
     },
     "engine": {
         "serviceTitle": "TextFlow Python Engine",

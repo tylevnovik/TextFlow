@@ -345,7 +345,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-large-benchmark.ps1 --lim
 当前 Windows installer 输出位置：
 
 ```text
-apps/desktop/src-tauri/target/release/bundle/nsis/TextFlow Studio_0.1.1_x64-setup.exe
+apps/desktop/src-tauri/target/release/bundle/nsis/TextFlow Studio_0.2.0_x64-setup.exe
 ```
 
 当前测试重点在：

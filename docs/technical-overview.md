@@ -9,7 +9,7 @@
 | 属性 | 值 |
 |---|---|
 | 项目名称 | `textflow-studio` |
-| 当前版本 | `0.1.1` |
+| 当前版本 | `0.2.0` |
 | 许可证 | 私有 |
 | 仓库地址 | https://github.com/tylevnovik/TextFlow |
 | 目标平台 | Windows (主), macOS (可移植, 未正式验证) |
@@ -496,7 +496,7 @@ scripts/build-bundled-sample-workspace.ps1
 npm run tauri:build                 # -> NSIS 安装程序
 ```
 
-**输出**: `apps/desktop/src-tauri/target/release/bundle/nsis/TextFlow Studio_0.1.1_x64-setup.exe`
+**输出**: `apps/desktop/src-tauri/target/release/bundle/nsis/TextFlow Studio_0.2.0_x64-setup.exe`
 
 ### 10.3 测试分层
 
@@ -569,7 +569,7 @@ npm run tauri:build                 # -> NSIS 安装程序
 | `@fluentui/react-components` | ^9.73.8 | Fluent UI React v9 组件 |
 | `@fluentui/react-icons` | ^2.0.326 | Fluent 图标 |
 | `@tauri-apps/api` | 2.0.0 | Tauri IPC |
-| `@textflow/shared-types` | 0.1.1 | 共享类型 |
+| `@textflow/shared-types` | 0.2.0 | 共享类型 |
 
 ### 12.2 前端开发依赖
 
