@@ -7,7 +7,7 @@ if (-not (Test-Path $seedRoot)) {
 }
 
 $wosSeedItem = Get-ChildItem -LiteralPath $seedRoot -File | Where-Object {
-  $_.Extension -ieq ".xls" -and $_.Name -like "*wos*"
+  ($_.Extension -ieq ".xls" -or $_.Extension -ieq ".xlsx") -and $_.Name -like "*wos*"
 } | Select-Object -First 1
 $incopatSeedItem = Get-ChildItem -LiteralPath $seedRoot -File | Where-Object {
   $_.Extension -ieq ".xlsx" -and $_.Name -notlike "*wos*" -and $_.Name -notlike "*scopus*"

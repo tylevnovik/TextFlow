@@ -44,6 +44,12 @@ jobs:
         shell: powershell
         run: .\scripts\bootstrap-python.ps1
 
+      # 5.5. 生成模拟种子数据用于构建内置示例项目
+      - name: Generate Mock Seed Data
+        shell: powershell
+        run: |
+          .venv\Scripts\python.exe scripts/generate-mock-seeds.py
+
       # 6. 使用 Tauri 官方 Action 进行前端构建和 Tauri 打包
       # 它内部会执行 cargo tauri build，进而自动触发 beforeBuildCommand (即 build-desktop-release-local-samples.ps1)
       - name: Build Tauri App & Publish
