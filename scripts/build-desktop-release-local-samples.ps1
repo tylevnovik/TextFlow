@@ -7,30 +7,20 @@ if (-not (Test-Path $seedRoot)) {
 }
 
 $wosSeedItem = Get-ChildItem -LiteralPath $seedRoot -File | Where-Object {
-  ($_.Extension -ieq ".xls" -or $_.Extension -ieq ".xlsx") -and $_.Name -like "*稀土wos*"
+  ($_.Extension -ieq ".xls" -or $_.Extension -ieq ".xlsx") -and $_.Name -like "*wos*" -and $_.Name -notlike "*sample*"
 } | Select-Object -First 1
 if (-not $wosSeedItem) {
   $wosSeedItem = Get-ChildItem -LiteralPath $seedRoot -File | Where-Object {
     ($_.Extension -ieq ".xls" -or $_.Extension -ieq ".xlsx") -and $_.Name -like "*wos_sample*"
   } | Select-Object -First 1
 }
-if (-not $wosSeedItem) {
-  $wosSeedItem = Get-ChildItem -LiteralPath $seedRoot -File | Where-Object {
-    ($_.Extension -ieq ".xls" -or $_.Extension -ieq ".xlsx") -and $_.Name -like "*wos*"
-  } | Select-Object -First 1
-}
 
 $incopatSeedItem = Get-ChildItem -LiteralPath $seedRoot -File | Where-Object {
-  $_.Extension -ieq ".xlsx" -and $_.Name -like "*稀缺稀土*"
+  $_.Extension -ieq ".xlsx" -and $_.Name -like "*incopat*" -and $_.Name -notlike "*sample*"
 } | Select-Object -First 1
 if (-not $incopatSeedItem) {
   $incopatSeedItem = Get-ChildItem -LiteralPath $seedRoot -File | Where-Object {
     $_.Extension -ieq ".xlsx" -and $_.Name -like "*incopat_sample*"
-  } | Select-Object -First 1
-}
-if (-not $incopatSeedItem) {
-  $incopatSeedItem = Get-ChildItem -LiteralPath $seedRoot -File | Where-Object {
-    $_.Extension -ieq ".xlsx" -and $_.Name -notlike "*wos*" -and $_.Name -notlike "*scopus*"
   } | Select-Object -First 1
 }
 
