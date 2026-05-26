@@ -181,7 +181,7 @@ def normalize_dictionary_set_record(dictionary_set: dict[str, Any] | None) -> di
                 "kind": kind,
                 "name": "项目自定义",
                 "version": "2.0.0",
-                "description": "从旧版项目或手工录入迁移而来的可编辑资源。",
+                "description": "从项目内词表或手工录入整理而来的可编辑资源。",
                 "built_in": False,
                 "editable": True,
                 "enabled": True,

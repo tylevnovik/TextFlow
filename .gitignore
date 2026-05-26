@@ -38,3 +38,6 @@ sample_seed_sources/*.csv
 sample_seed_sources/*.tsv
 sample_seed_sources/*.xls
 sample_seed_sources/*.xlsx
+services/python-engine/app/workflow/nodes/_builtin_list.py
+screenshots_smoke/
+

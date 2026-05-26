@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import bool_param, number_param, port, runtime, runtime_section_compiler
+from ._common import bool_param, number_param, port, runtime, runtime_section_compiler, field, graph, slot, ui
 from ._support import _clone_corpus_rows, _report_node_progress, _scoped_corpus_from_inputs
 
 
@@ -36,6 +36,16 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             "workflow.filter_terms",
             cacheable=True,
             previewable=True,
+        ),
+        "graph": graph((320, 230), (3180, 480), toolbox_order=240),
+        "ui": ui(
+            [
+                field("number", "min_term_frequency", "最小词频", step=1),
+                field("number", "min_token_length", "最小词长", step=1),
+                field("switch", "filter_numeric_tokens", "过滤纯数字"),
+                field("switch", "filter_by_pos", "按词性过滤"),
+                field("switch", "keep_single_char_important_terms", "保留关键单字词"),
+            ],
         ),
     }
 

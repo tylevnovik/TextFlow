@@ -65,29 +65,72 @@ if ($LASTEXITCODE -ne 0) {
 
 Push-Location $engineRoot
 try {
-  & $venvPython -m PyInstaller `
-    --noconfirm `
-    --clean `
-    --onedir `
-    --contents-directory . `
-    --collect-data yake `
-    --collect-data wordcloud `
-    --hidden-import uvicorn.lifespan.on `
-    --hidden-import uvicorn.loops.asyncio `
-    --hidden-import uvicorn.protocols.http.h11_impl `
-    --add-data "$projectRoot\textflow.config.json;app" `
-    --add-data "$engineRoot\app\builtin_dictionary_sources;app\builtin_dictionary_sources" `
-    --add-data "$bundledWorkspaceDir;app\bundled_sample_workspace" `
-    --name textflow-engine `
-    --distpath $pyinstallerDistRoot `
-    --workpath $pyinstallerWorkRoot `
-    --specpath $pyinstallerSpecRoot `
-    main.py
+  $nodesDir = Join-Path $engineRoot "app\workflow\nodes"
+  $nodeModuleNames = Get-ChildItem -LiteralPath $nodesDir -Filter "*.py" -File |
+    ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Name) } |
+    Where-Object { -not $_.StartsWith("_") -and $_ -notin @("loader", "__init__") } |
+    Sort-Object
+
+  if (-not $nodeModuleNames) {
+    throw "No built-in workflow node modules were found under $nodesDir."
+  }
+
+  $builtinListFile = Join-Path $nodesDir "_builtin_list.py"
+  $builtinListLines = @(
+    "# Auto-generated during PyInstaller build. Do not edit.",
+    "from . import ("
+  )
+  foreach ($nodeModuleName in $nodeModuleNames) {
+    $builtinListLines += "    $nodeModuleName,"
+  }
+  $builtinListLines += @(
+    ")",
+    "",
+    "BUILTIN_NODE_MODULES = ["
+  )
+  foreach ($nodeModuleName in $nodeModuleNames) {
+    $builtinListLines += "    `"$nodeModuleName`","
+  }
+  $builtinListLines += "]"
+  [System.IO.File]::WriteAllLines($builtinListFile, $builtinListLines, [System.Text.UTF8Encoding]::new($false))
+
+  $pyInstallerArgs = @(
+    "--noconfirm",
+    "--clean",
+    "--onedir",
+    "--contents-directory", ".",
+    "--collect-data", "yake",
+    "--collect-data", "wordcloud",
+    "--hidden-import", "app.workflow.nodes._builtin_list",
+    "--hidden-import", "uvicorn.lifespan.on",
+    "--hidden-import", "uvicorn.loops.asyncio",
+    "--hidden-import", "uvicorn.protocols.http.h11_impl",
+    "--add-data", "$projectRoot\textflow.config.json;app",
+    "--add-data", "$engineRoot\app\builtin_dictionary_sources;app\builtin_dictionary_sources",
+    "--add-data", "$bundledWorkspaceDir;app\bundled_sample_workspace",
+    "--name", "textflow-engine",
+    "--distpath", $pyinstallerDistRoot,
+    "--workpath", $pyinstallerWorkRoot,
+    "--specpath", $pyinstallerSpecRoot,
+    "main.py"
+  )
+
+  foreach ($nodeModuleName in $nodeModuleNames) {
+    if ($nodeModuleName) {
+      $pyInstallerArgs = @("--hidden-import", "app.workflow.nodes.$nodeModuleName") + $pyInstallerArgs
+    }
+  }
+
+  & $venvPython -m PyInstaller @pyInstallerArgs
   if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller failed to build the Python sidecar."
   }
 }
 finally {
+  $builtinListFile = Join-Path $engineRoot "app\workflow\nodes\_builtin_list.py"
+  if (Test-Path $builtinListFile) {
+    Remove-Item -LiteralPath $builtinListFile -Force
+  }
   Pop-Location
 }
 

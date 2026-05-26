@@ -42,6 +42,7 @@ import type {
 } from "../bridge/desktopBridge";
 import { desktopBridge } from "../bridge/desktopBridge";
 import type { ReviewResolutionInput } from "../features/review/reviewTypes";
+import { configureWorkflowNodeCatalog } from "../workflowNodeCatalog";
 
 interface TaskProgressState {
   action: string;
@@ -615,6 +616,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     });
     try {
       const snapshot = await desktopBridge.loadWorkspace();
+      configureWorkflowNodeCatalog(snapshot.node_definitions ?? [], snapshot.port_compatibility);
       const effectiveAction = actionLabel ?? lastActionAt;
       dispatch({
         type: "loadSnapshot",

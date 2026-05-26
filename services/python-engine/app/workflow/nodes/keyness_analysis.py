@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import analysis_passthrough_compiler, number_param, port, runtime, string_param
+from ._common import analysis_passthrough_compiler, number_param, port, runtime, string_param, field, graph, slot, ui
 from ._support import (
     _clone_corpus_rows,
     _group_term_statistics,
@@ -36,6 +36,15 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=True,
             previewable=True,
             parallel_safe=True,
+        ),
+        "graph": graph((360, 260), (4080, 1640), toolbox_order=400),
+        "ui": ui(
+            [
+                field("text", "group_field", "分组字段"),
+                field("text", "baseline_group", "基准分组"),
+                field("text", "comparison_group", "目标分组"),
+                field("number", "min_frequency", "最小词频", step=1),
+            ],
         ),
     }
 

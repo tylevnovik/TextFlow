@@ -30,7 +30,7 @@ if ($AllowRestrictedSampleData) {
   $env:TEXTFLOW_ALLOW_RESTRICTED_SAMPLE_DATA = "1"
 }
 
-$pythonArgs = @("-m", "app.bundled_sample_workspace", "--output", $bundledWorkspaceDir)
+$pythonArgs = @("-m", "app.samples.bundled_workspace", "--output", $bundledWorkspaceDir)
 if ($null -ne $RowLimit) {
   $pythonArgs += @("--row-limit", [string]$RowLimit)
 }

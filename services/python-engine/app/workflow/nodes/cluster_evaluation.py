@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import analysis_passthrough_compiler, port, runtime
+from ._common import analysis_passthrough_compiler, port, runtime, field, graph, slot, ui
 from ._support import _analysis_ops, _report_node_progress
 
 
@@ -26,6 +26,8 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             previewable=True,
             parallel_safe=True,
         ),
+        "graph": graph((320, 210), (4500, 1640), toolbox_order=460),
+        "ui": ui([]),
     }
 
 

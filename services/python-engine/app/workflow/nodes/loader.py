@@ -26,6 +26,19 @@ class _DefinitionCollector:
 
 
 def iter_builtin_node_modules() -> Iterable[ModuleType]:
+    import sys
+    if getattr(sys, "frozen", False):
+        try:
+            from . import _builtin_list
+            for name in _builtin_list.BUILTIN_NODE_MODULES:
+                yield importlib.import_module(f"{__package__}.{name}")
+            return
+        except ImportError as exc:
+            raise RuntimeError(
+                "Frozen Python sidecar is missing the built-in workflow node list. "
+                "Rebuild it with scripts/build-python-sidecar.ps1."
+            ) from exc
+
     package = importlib.import_module(__package__ or "app.workflow.nodes")
     prefix = f"{package.__name__}."
     for module_info in sorted(pkgutil.iter_modules(package.__path__, prefix), key=lambda item: item.name):

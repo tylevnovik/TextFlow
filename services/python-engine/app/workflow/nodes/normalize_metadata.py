@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import bool_param, passthrough_compiler, port, runtime, string_param
+from ._common import bool_param, passthrough_compiler, port, runtime, string_param, field, graph, slot, ui
 from ._support import _clone_corpus_rows, _report_corpus_progress, _scoped_corpus_from_inputs
 
 
@@ -32,6 +32,17 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             "workflow.normalize_metadata",
             cacheable=True,
             previewable=True,
+        ),
+        "graph": graph((380, 320), (640, 480), toolbox_order=140),
+        "ui": ui(
+            [
+                field("textarea", "institution_aliases_text", "机构别名映射"),
+                field("textarea", "country_aliases_text", "国家别名映射"),
+                field("textarea", "category_aliases_text", "类别别名映射"),
+                field("text", "split_delimiters", "分隔符"),
+                field("switch", "keep_first_institution", "仅保留首个机构"),
+                field("text", "year_source_field", "年份来源字段"),
+            ],
         ),
     }
 

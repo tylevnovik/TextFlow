@@ -21,8 +21,7 @@ const categoryLabels: Record<RegisteredWorkflowNodeDefinition["category"], strin
   process: "处理",
   analysis: "分析",
   output: "输出",
-  utility: "辅助",
-  legacy: "兼容"
+  utility: "辅助"
 };
 
 export function buildWorkflowExplorerNodes(

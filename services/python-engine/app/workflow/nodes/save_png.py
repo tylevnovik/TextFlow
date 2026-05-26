@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from ._support import _report_node_progress
-from ._common import number_param, port, runtime, string_param
+from ._common import bool_param, field, graph, number_param, port, runtime, string_param, ui
 
 
 def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -18,6 +18,7 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
         "outputs": [{**port("artifact", "ExportArtifact", "导出产物"), "artifact_kind": "export"}],
         "params": [
             string_param("file_prefix", "文件名前缀", "charts"),
+            bool_param("export_png", "启用 PNG 导出", True),
             number_param("chart_dpi", "PNG 分辨率（DPI）", int(export.get("chart_dpi", 320))),
         ],
         "runtime": runtime(
@@ -28,13 +29,22 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             output_node=True,
             parallel_safe=True,
         ),
+        "graph": graph((300, 220), (5340, 680), toolbox_order=430, starter_roles=["chart_export_sink"]),
+        "ui": ui(
+            [
+                field("text", "file_prefix", "文件名前缀"),
+                field("switch", "export_png", "启用 PNG 导出"),
+                field("number", "chart_dpi", "PNG 分辨率（DPI）", min=72, max=1200, step=1),
+            ],
+            summary_template="PNG · {file_prefix}",
+        ),
     }
 
 
 def compile_node(context: Any, node: dict[str, Any]) -> None:
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
     chart_dpi = int(config.get("chart_dpi") or context.export_config.get("chart_dpi", 320))
-    context.enable_export(export_png=True, chart_dpi=chart_dpi)
+    context.enable_export(export_png=bool(config.get("export_png", True)), chart_dpi=chart_dpi)
 
 
 def execute_node(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:

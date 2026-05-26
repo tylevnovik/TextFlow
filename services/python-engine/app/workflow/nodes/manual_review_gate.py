@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import enum_param, string_param, port, runtime, node_definition_from_base, passthrough_compiler
+from ._common import enum_param, string_param, port, runtime, node_definition_from_base, passthrough_compiler, field, graph, slot, ui
 from ._support import (
     _control_rows_from_inputs,
     _report_node_progress,
@@ -51,6 +51,12 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=False,
             previewable=True,
             output_node=False,
+        ),
+        "graph": graph((360, 260), (5340, 680), toolbox_order=260),
+        "ui": ui(
+            [
+                slot("review_task_selector"),
+            ],
         ),
     }
     return node_definition_from_base(base, runtime_profile, None)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import enum_param, string_param, port, runtime, node_definition_from_base, passthrough_compiler
+from ._common import enum_param, string_param, port, runtime, node_definition_from_base, passthrough_compiler, field, graph, slot, ui
 from ._support import (
     _clone_corpus_rows,
     _scoped_corpus_from_inputs,
@@ -41,6 +41,13 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             previewable=True,
             output_node=False,
             parallel_safe=True,
+        ),
+        "graph": graph((320, 220), (1080, 480), toolbox_order=170),
+        "ui": ui(
+            [
+                field("textarea", "dedupe_keys_text", "去重字段"),
+                field("select", "strategy", "保留策略"),
+            ],
         ),
     }
     return node_definition_from_base(base, runtime_profile, None)

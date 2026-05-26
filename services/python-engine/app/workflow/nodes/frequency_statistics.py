@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from ._support import _analysis_ops, _report_node_progress, _scoped_corpus_from_inputs, _token_frame
-from ._common import number_param, port, runtime
+from ._common import number_param, port, runtime, field, graph, slot, ui
 
 
 def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -33,6 +33,12 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=True,
             previewable=True,
             parallel_safe=True,
+        ),
+        "graph": graph((280, 210), (3660, 40), toolbox_order=290),
+        "ui": ui(
+            [
+                field("number", "top_n", "Top N", step=1),
+            ],
         ),
     }
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import enum_param, number_param, string_param, port, runtime, node_definition_from_base, analysis_passthrough_compiler
+from ._common import enum_param, number_param, string_param, port, runtime, node_definition_from_base, analysis_passthrough_compiler, field, graph, slot, ui
 from ._support import (
     _control_rows_from_inputs,
     _compare_control_value,
@@ -60,6 +60,12 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=True,
             previewable=True,
             output_node=False,
+        ),
+        "graph": graph((360, 280), (4920, 1320), toolbox_order=520),
+        "ui": ui(
+            [
+                slot("threshold_gate_editor"),
+            ],
         ),
     }
     return node_definition_from_base(base, runtime_profile, None)

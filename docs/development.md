@@ -182,6 +182,20 @@ $env:TEXTFLOW_REAL_STACK_HEADLESS = "0"
 
 当画布内选择节点或连线时，应更新 `WorkbenchSelection` 为 `workflow_node` 或 `workflow_edge`，不要只维护画布局部选中态。对象树里的语料集合和词库资源表可通过 `WORKBENCH_SELECTION_MIME` 拖放到画布，节点图负责解析 selection 并绑定到 `Corpus Input` 或 `Dictionary Input`。
 
+### 新增或修改 workflow 节点
+
+节点定义只改 Python 节点模块，不要在前端新增内置节点 schema、尺寸、默认位置、默认配置或属性编辑器分支。完整 schema 见 [节点 Catalog Schema](./node-catalog-schema.md)。
+
+推荐流程：
+
+1. 在 `services/python-engine/app/workflow/nodes/<node>.py` 定义或修改 `node_definition()`。
+2. 在同一模块注册 compiler 和 executor，复用 `_common.py` 中的 `port()`、`graph()`、`ui()`、`field()`、`slot()` helper。
+3. 在 `params` 写默认值，在 `graph` 写画布尺寸/默认位置，在 `ui.layout` 写动态属性面板。
+4. 复杂属性交互只声明白名单 `slot(component_id)`，不要让后端下发 UI 代码。
+5. 运行 `npm run test:engine:fast`。
+6. 如果改默认样例、模板图、导出/import 流或 bootstrap 路径，补跑 `npm run test:engine:full`。
+7. 触及前端动态解释器、工具箱、连线或属性面板时，补跑相关 Vitest，例如 `workflowNodeCatalog.test.ts`、`DynamicNodeEditor.test.tsx`、`pluginNodeCatalog.test.tsx`、`workflow.test.ts`。
+
 ### Python 测试
 
 ```powershell
@@ -338,7 +352,7 @@ apps/desktop/src-tauri/target/release/bundle/nsis/TextFlow Studio_0.1.1_x64-setu
 
 - 项目存储与工作区 CLI
 - 导入与 workflow 主链
-- workflow 节点目录和前后端 schema 一致性
+- 后端 node catalog 契约、插件节点、端口兼容和前端动态脚手架
 - native DAG 的关键路径
 
 ## 当前开发注意事项

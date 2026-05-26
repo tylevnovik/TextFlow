@@ -13,7 +13,7 @@
 ## 当前事实
 
 - 后端已经通过 `load_workspace_snapshot()` 返回 `node_definitions`，前端在 workbench toolbox 中已经优先使用 snapshot catalog。
-- 前端仍然在 `apps/desktop/src/generatedBuiltinWorkflowNodeSchema.ts` 和 `apps/desktop/src/workflowNodeCatalog.ts` 维护节点标题、端口、尺寸、默认配置、默认位置、工具箱列表、sink 类型、端口类型集合和 starter workflow 辅助逻辑。
+- 前端仍然在旧的生成式节点 schema 文件和 `apps/desktop/src/workflowNodeCatalog.ts` 维护节点标题、端口、尺寸、默认配置、默认位置、工具箱列表、sink 类型、端口类型集合和 starter workflow 辅助逻辑。
 - Python 节点模块已经拥有执行相关 definition、compiler 和 executor，但缺少 UI schema、graph schema、slot schema 和统一校验。
 - 插件节点现在可以被 registry 扫描并执行，但不能完整驱动前端节点卡片、属性面板、默认布局和工具箱。
 
@@ -22,7 +22,7 @@
 - 新增或修改一个节点只需要改对应 Python 节点模块；不需要改任何前端节点 schema 文件。
 - 插件节点只要在 Python plugin 中注册完整 definition，就能出现在 toolbox、拖到画布、显示端口、创建默认 config、渲染属性面板并参与运行。
 - 前端没有 `node_type === "save_xlsx"` 这类节点类型分支来决定节点 schema、尺寸、默认配置或属性编辑器。
-- `generatedBuiltinWorkflowNodeSchema.ts` 被删除；`workflowNodeCatalog.ts` 如保留，只能是动态 catalog adapter，不能包含内置节点声明。
+- 旧的生成式节点 schema 文件被删除；`workflowNodeCatalog.ts` 如保留，只能是动态 catalog adapter，不能包含内置节点定义。
 - Python 后端提供 catalog 契约测试，保证所有内置节点和插件节点的 UI schema 可序列化、可校验、可被前端安全渲染。
 - 默认工作流、样例工作流和新 flow 模板使用后端 catalog 创建节点实例，不再复制端口、尺寸和默认 config。
 - `npm run test:engine:fast`、`npm run test:engine:full`、前端相关 Vitest、一次本地浏览器 smoke test 通过。
@@ -766,7 +766,7 @@ Expected: PASS。这里触及默认项目、样例和模板 bootstrap，必须�
 ## Task 8: 前端删除静态节点 schema，改为纯脚手架
 
 **Files:**
-- Delete: `apps/desktop/src/generatedBuiltinWorkflowNodeSchema.ts`
+- Delete: 旧的生成式节点 schema 文件
 - Modify: `apps/desktop/src/workflowNodeCatalog.ts`
 - Modify: `apps/desktop/src/workflow.ts`
 - Modify: `apps/desktop/src/screens.tsx`
@@ -776,7 +776,7 @@ Expected: PASS。这里触及默认项目、样例和模板 bootstrap，必须�
 
 - [ ] **Step 1: 删除生成静态 schema 文件**
 
-删除 `generatedBuiltinWorkflowNodeSchema.ts`。任何 import 失败都必须改为动态 catalog adapter。
+删除旧的生成式节点 schema 文件。任何 import 失败都必须改为动态 catalog adapter。
 
 - [ ] **Step 2: 删除前端节点清单和位置清单**
 
@@ -982,7 +982,7 @@ Expected: PASS。
 Run:
 
 ```powershell
-rg -n "generatedBuiltinWorkflowNodeSchema|静态 TS|workflowNodeCatalog.ts.*节点声明" docs apps services
+rg -n "legacyGeneratedNodeSchema|historical TS schema|workflowNodeCatalog.ts.*内置节点定义" docs apps services
 ```
 
 Expected: 不再出现把前端静态 schema 描述为真相源的文档。
@@ -1034,12 +1034,12 @@ npm run dev --workspace apps/desktop -- --host 127.0.0.1 --port 5174 --strictPor
 Run:
 
 ```powershell
-rg -n "generatedBuiltinWorkflowNodeSchema|workflowNodeInlineRenderers|defaultNodePositions|builtinWorkflowNodeSchema|save_xlsx:" apps packages services
+rg -n "legacyGeneratedNodeSchema|workflowNodeInlineRenderers|defaultNodePositions|builtinWorkflowNodeSchema|save_xlsx:" apps packages services
 ```
 
 Expected:
 
-- `generatedBuiltinWorkflowNodeSchema` 无结果。
+- 旧生成式节点 schema 标识无结果。
 - `workflowNodeInlineRenderers` 无结果。
 - `defaultNodePositions` 无结果。
 - `builtinWorkflowNodeSchema` 无结果。
@@ -1069,7 +1069,7 @@ Expected:
 ## 自检清单
 
 - [ ] 每个任务都有明确文件范围和测试命令。
-- [ ] 最终状态删除静态 TS 节点 schema。
+- [ ] 最终状态删除前端生成式节点 schema。
 - [ ] 插件节点被作为一等目标测试。
 - [ ] 默认工作流、模板图、端口兼容、sink 判断都从后端 catalog 派生。
 - [ ] 前端只剩脚手架、通用控件、slot 宿主和画布交互。

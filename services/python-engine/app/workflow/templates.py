@@ -1,59 +1,17 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
 from ..domain.workflow import default_workflow_definition
-from .registry import builtin_node_definitions
-
-
-NODE_DEFINITION_BY_TYPE: dict[str, dict[str, Any]] | None = None
-
-
-def _get_node_defs() -> dict[str, dict[str, Any]]:
-    global NODE_DEFINITION_BY_TYPE
-    if NODE_DEFINITION_BY_TYPE is None:
-        NODE_DEFINITION_BY_TYPE = {
-            definition["type"]: definition
-            for definition in builtin_node_definitions()
-        }
-    return NODE_DEFINITION_BY_TYPE
-
-
-def _default_node_config(node_type: str) -> dict[str, Any]:
-    definition = _get_node_defs()[node_type]
-    return {
-        str(param.get("param_id")): deepcopy(param.get("default_value"))
-        for param in definition.get("params", [])
-        if isinstance(param, dict) and str(param.get("param_id") or "").strip()
-    }
+from .catalog import new_workflow_node
 
 
 def _new_node(
     node_type: str,
     node_id: str,
     config: dict[str, Any] | None = None,
-    *,
-    x: int = 0,
-    y: int = 0,
 ) -> dict[str, Any]:
-    definition = _get_node_defs()[node_type]
-    runtime = definition.get("runtime") if isinstance(definition.get("runtime"), dict) else {}
-    return {
-        "node_id": node_id,
-        "node_type": node_type,
-        "label": str(definition.get("title") or node_type),
-        "position": {"x": x, "y": y},
-        "size": {"w": 230, "h": 190},
-        "inputs": deepcopy(definition.get("inputs") or []),
-        "outputs": deepcopy(definition.get("outputs") or []),
-        "config": {**_default_node_config(node_type), **deepcopy(config or {})},
-        "ui_state": {"collapsed": False, "bypassed": False},
-        "runtime_meta": {
-            "step_id": str(runtime.get("step_id") or definition.get("category") or "manual"),
-            "node_impl_version": "2.0.0",
-        },
-    }
+    return new_workflow_node(node_type, node_id, config=config)
 
 
 def _edge(edge_id: str, from_node: str, from_port: str, to_node: str, to_port: str) -> dict[str, Any]:
@@ -64,44 +22,6 @@ def _edge(edge_id: str, from_node: str, from_port: str, to_node: str, to_port: s
         "to_node": to_node,
         "to_port": to_port,
     }
-
-
-NEW_FLOW_NODE_POSITIONS: dict[str, tuple[int, int]] = {
-    "dictionary_input": (120, 40),
-    "corpus_input": (120, 480),
-    "normalize_metadata": (640, 480),
-    "deduplicate_documents": (1080, 480),
-    "sample_corpus": (1500, 820),
-    "clean_text": (1500, 480),
-    "normalize_text": (1920, 480),
-    "tokenize": (2340, 480),
-    "apply_dictionary_rules": (2760, 480),
-    "filter_terms": (3180, 480),
-    "frequency_statistics": (3660, 40),
-    "term_document_analysis": (3660, 360),
-    "term_year_analysis": (3660, 680),
-    "cooccurrence_analysis": (3660, 1000),
-    "feature_term_selection": (3660, 1320),
-    "similarity_analysis": (4080, 40),
-    "keyword_extraction": (4080, 360),
-    "keyword_clustering": (4080, 680),
-    "topic_modeling": (4080, 1000),
-    "institution_keyword_analysis": (4080, 1320),
-    "focus_terms": (4080, 1640),
-    "institution_topic_analysis": (4500, 40),
-    "document_clustering": (4500, 360),
-    "build_network": (4500, 680),
-    "graph_metrics": (4500, 1000),
-    "community_detection": (4500, 1320),
-    "main_path_analysis": (4920, 40),
-    "link_prediction": (4920, 360),
-    "technology_indicators": (4920, 680),
-    "technology_classification": (4920, 1000),
-    "save_csv": (5340, 40),
-    "save_xlsx": (5340, 360),
-    "save_png": (5340, 680),
-    "save_html_report": (5340, 1000),
-}
 
 
 def build_new_flow_workflow(
@@ -160,9 +80,8 @@ def build_new_flow_workflow(
     ]
 
     nodes = []
-    for index, node_type in enumerate(node_types):
-        x, y = NEW_FLOW_NODE_POSITIONS.get(node_type, (2860 + (index % 4) * 380, 80 + (index // 4) * 260))
-        nodes.append(_new_node(node_type, f"node-{node_type.replace('_', '-')}", x=x, y=y))
+    for node_type in node_types:
+        nodes.append(_new_node(node_type, f"node-{node_type.replace('_', '-')}"))
 
     edges = []
 

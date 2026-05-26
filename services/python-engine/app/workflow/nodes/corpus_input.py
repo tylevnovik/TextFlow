@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import enum_param, number_param, port, runtime, node_definition_from_base, scope_compiler
+from ._common import enum_param, number_param, port, runtime, node_definition_from_base, scope_compiler, field, graph, slot, ui
 from ._support import _runtime_support, _report_node_progress
 
 
@@ -47,6 +47,12 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=False,
             previewable=True,
             output_node=False,
+        ),
+        "graph": graph((420, 340), (120, 480), toolbox_order=110),
+        "ui": ui(
+            [
+                slot("corpus_scope_selector"),
+            ],
         ),
     }
     return node_definition_from_base(base, runtime_profile, _RUNTIME_PARAM_DEFAULTS)

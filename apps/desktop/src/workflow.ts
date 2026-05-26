@@ -13,20 +13,16 @@ import type {
 } from "@textflow/shared-types";
 import { compileActiveWorkflowNodesIntoRuntimeProfile } from "./workflowNodeCompilers";
 import {
-  analysisResultTypes,
-  builtinWorkflowNodeDefinition,
-  builtinWorkflowNodeDescription,
-  builtinWorkflowNodeFrameForType,
-  builtinWorkflowOptionalToolboxNodes,
-  corpusPortOrder,
   defaultExport,
-  defaultNodePositions,
   defaultRunScope,
   executionOrder,
-  legacyNodeTypes,
-  renderableSourceTypes,
+  portCompatibilityRules,
   sinkNodeTypes,
-  tableSourceTypes,
+  workflowNodeDefaultConfig,
+  workflowNodeDefaultPosition,
+  workflowNodeDefinitionForRuntime,
+  workflowNodeFrameForType as catalogWorkflowNodeFrameForType,
+  workflowToolboxDefinitions,
   type WorkflowNodeDefinition
 } from "./workflowNodeCatalog";
 
@@ -220,7 +216,7 @@ function workflowEdgeId(): string {
 }
 
 function workflowNodeFrameForType(nodeType: WorkflowNodeType) {
-  return builtinWorkflowNodeFrameForType(nodeType);
+  return catalogWorkflowNodeFrameForType(nodeType);
 }
 
 function fallbackWorkflowNodeDefinition(nodeType: WorkflowNodeType): WorkflowNodeDefinition {
@@ -237,22 +233,13 @@ function fallbackWorkflowNodeDefinition(nodeType: WorkflowNodeType): WorkflowNod
 }
 
 function defaultConfigFromRegisteredDefinition(definition: RegisteredWorkflowNodeDefinition): Record<string, unknown> {
-  return definition.params.reduce<Record<string, unknown>>((config, param) => {
-    if (param.default_value !== undefined) {
-      config[param.param_id] = param.default_value;
-    }
-    return config;
-  }, {});
+  return workflowNodeDefaultConfig(definition);
 }
 
 function definitionForNode(
   nodeType: WorkflowNodeType,
   registeredDefinition?: RegisteredWorkflowNodeDefinition
 ): WorkflowNodeDefinition {
-  const builtinDefinition = builtinWorkflowNodeDefinition(nodeType);
-  if (builtinDefinition) {
-    return builtinDefinition;
-  }
   if (registeredDefinition) {
     return {
       label: registeredDefinition.title,
@@ -263,9 +250,15 @@ function definitionForNode(
       inputs: registeredDefinition.inputs.map((port) => ({ ...port })),
       outputs: registeredDefinition.outputs.map((port) => ({ ...port })),
       stepId: registeredDefinition.runtime.step_id,
-      size: { w: 320, h: 220 },
-      defaultConfig: () => defaultConfigFromRegisteredDefinition(registeredDefinition)
+      size: registeredDefinition.graph?.size ? { ...registeredDefinition.graph.size } : { w: 320, h: 220 },
+      defaultPosition: registeredDefinition.graph?.default_position ? { ...registeredDefinition.graph.default_position } : undefined,
+      defaultConfig: () => defaultConfigFromRegisteredDefinition(registeredDefinition),
+      registeredDefinition
     };
+  }
+  const catalogDefinition = workflowNodeDefinitionForRuntime(nodeType);
+  if (catalogDefinition) {
+    return catalogDefinition;
   }
   return fallbackWorkflowNodeDefinition(nodeType);
 }
@@ -280,7 +273,7 @@ function createWorkflowNode(
     node_id: workflowNodeId(nodeType),
     node_type: nodeType,
     label: definition.label,
-    position: { ...(defaultNodePositions[nodeType] ?? { x: 120, y: 220 }) },
+    position: { ...(definition.defaultPosition ?? workflowNodeDefaultPosition(nodeType)) },
     size: definition.size ? { ...definition.size } : { w: 230, h: 190 },
     inputs: definition.inputs.map((port) => ({ ...port })),
     outputs: definition.outputs.map((port) => ({ ...port })),
@@ -323,19 +316,16 @@ function outputPortForSingleInputNode(node: WorkflowNodeInstance | undefined): s
 }
 
 function nodeDescription(nodeType: WorkflowNodeType): string {
-  return builtinWorkflowNodeDescription(nodeType) || definitionForNode(nodeType).description;
+  return definitionForNode(nodeType).description;
 }
 
 function isSourceNode(node: WorkflowNodeInstance): boolean {
-  return node.inputs.length === 0 && !sinkNodeTypes.has(node.node_type);
+  return node.inputs.length === 0 && !isSinkNode(node);
 }
 
 function isSinkNode(node: WorkflowNodeInstance): boolean {
-  return sinkNodeTypes.has(node.node_type);
-}
-
-function isLegacyGraph(workflow: WorkflowDefinition): boolean {
-  return workflow.nodes.some((node) => legacyNodeTypes.has(node.node_type));
+  return Boolean(definitionForNode(node.node_type).registeredDefinition?.runtime.output_node)
+    || sinkNodeTypes().has(node.node_type);
 }
 
 function normalizeConfigNode(
@@ -343,8 +333,7 @@ function normalizeConfigNode(
   config: Record<string, unknown>,
   runtimeProfile: WorkflowRuntimeProfile
 ): Record<string, unknown> {
-  const builtinDefinition = builtinWorkflowNodeDefinition(nodeType);
-  const base = builtinDefinition ? builtinDefinition.defaultConfig(runtimeProfile) : {};
+  const base = definitionForNode(nodeType).defaultConfig(runtimeProfile);
   return {
     ...base,
     ...config
@@ -551,28 +540,23 @@ function buildStarterWorkflow(
 }
 
 export function workflowPortCompatible(sourceType: WorkflowPortType, targetType: WorkflowPortType): boolean {
+  const compatibility = portCompatibilityRules();
   if (sourceType === targetType) {
     return true;
   }
-  if (targetType === "AnyTable" && tableSourceTypes.has(sourceType)) {
+  if (targetType === "AnyTable" && compatibility.table_sources.includes(sourceType)) {
     return true;
   }
-  if (targetType === "AnyRenderable" && renderableSourceTypes.has(sourceType)) {
+  if (targetType === "AnyRenderable" && compatibility.renderable_sources.includes(sourceType)) {
     return true;
   }
-  if (targetType === "AnyAnalysisResult" && analysisResultTypes.has(sourceType)) {
+  if (targetType === "AnyAnalysisResult" && compatibility.analysis_result_sources.includes(sourceType)) {
     return true;
   }
-  const sourceIndex = corpusPortOrder.indexOf(sourceType);
-  const targetIndex = corpusPortOrder.indexOf(targetType);
+  const sourceIndex = compatibility.corpus_order.indexOf(sourceType);
+  const targetIndex = compatibility.corpus_order.indexOf(targetType);
   if (sourceIndex >= 0 && targetIndex >= 0) {
     return sourceIndex <= targetIndex;
-  }
-  if ((sourceType === "ProjectCorpus" || sourceType === "ScopedCorpus") && targetType === "CorpusTable") {
-    return true;
-  }
-  if (sourceType === "CorpusTable" && (targetType === "ProjectCorpus" || targetType === "ScopedCorpus")) {
-    return true;
   }
   return false;
 }
@@ -758,19 +742,6 @@ function activeNodeIdsFromSinks(nodes: WorkflowNodeInstance[], edges: WorkflowEd
   return { active, sinks };
 }
 
-function upgradeLegacyWorkflow(workflow: WorkflowDefinition, runtimeProfile: WorkflowRuntimeProfile): WorkflowDefinition {
-  if (!isLegacyGraph(workflow)) {
-    return workflow;
-  }
-  return buildStarterWorkflow(
-    {
-      ...workflow,
-      source: workflow.source === "manual" ? "manual" : "system_default"
-    },
-    runtimeProfile
-  );
-}
-
 function resetExportFlags(exportConfig: ExportParameters): ExportParameters {
   return {
     ...exportConfig,
@@ -882,7 +853,7 @@ export function resolveWorkflowRuntimeProfile(
 }
 
 export function workflowOptionalToolboxNodes(): WorkflowNodeType[] {
-  return builtinWorkflowOptionalToolboxNodes();
+  return workflowToolboxDefinitions().map((definition) => definition.type);
 }
 
 export function workflowNodeCanRemove(): boolean {
@@ -890,8 +861,7 @@ export function workflowNodeCanRemove(): boolean {
 }
 
 export function normalizeWorkflowGraph(workflow: WorkflowDefinition, runtimeProfile: WorkflowRuntimeProfile): WorkflowDefinition {
-  const upgraded = upgradeLegacyWorkflow(workflow, runtimeProfile);
-  const nodes = upgraded.nodes.map((node) => {
+  const nodes = workflow.nodes.map((node) => {
     const definition = definitionForNode(node.node_type);
     return {
       ...cloneNode(node),
@@ -908,16 +878,16 @@ export function normalizeWorkflowGraph(workflow: WorkflowDefinition, runtimeProf
   });
 
   return {
-    ...upgraded,
+    ...workflow,
     graph_mode: "dag",
-    source: upgraded.source ?? "manual",
+    source: workflow.source ?? "manual",
     updated_at: new Date().toISOString(),
     nodes,
-    edges: normalizeEdgesWithNodes({ ...upgraded, nodes }, nodes),
+    edges: normalizeEdgesWithNodes({ ...workflow, nodes }, nodes),
     viewport: {
-      x: upgraded.viewport?.x ?? 0,
-      y: upgraded.viewport?.y ?? 0,
-      zoom: upgraded.viewport?.zoom ?? 0.82
+      x: workflow.viewport?.x ?? 0,
+      y: workflow.viewport?.y ?? 0,
+      zoom: workflow.viewport?.zoom ?? 0.82
     }
   };
 }
@@ -1026,7 +996,7 @@ export function workflowNodeStepId(node: WorkflowNodeInstance): WorkflowStepId |
 }
 
 export function defaultPositionForWorkflowNode(node: WorkflowNodeInstance): { x: number; y: number } {
-  return { ...(defaultNodePositions[node.node_type] ?? { x: 120, y: 220 }) };
+  return { ...(definitionForNode(node.node_type).defaultPosition ?? workflowNodeDefaultPosition(node.node_type)) };
 }
 
 export function updateWorkflowNodePosition(

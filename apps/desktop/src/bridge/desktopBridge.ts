@@ -7,6 +7,7 @@ import type {
   ExperimentSpec,
   ExportFormat,
   IngestionSpec,
+  NodeCatalogResponse,
   WorkflowNodeRuntimeState,
   WorkflowRunProgressDetail,
   ProjectManifest,
@@ -207,6 +208,7 @@ export interface EngineProgressEvent {
 
 interface DesktopBridge {
   loadWorkspace(): Promise<WorkspaceSnapshot>;
+  getNodeCatalog(): Promise<NodeCatalogResponse>;
   createProject(input: CreateProjectInput): Promise<ProjectSummary>;
   openProject(projectId: string): Promise<ProjectSummary>;
   duplicateProject(input: DuplicateProjectInput): Promise<ProjectSummary>;
@@ -325,6 +327,7 @@ async function runDevEngineTask<T>(action: string, payload: Record<string, unkno
 
 const devEngineCommandMap: Record<string, { action: string; mapPayload: DevEnginePayloadMapper }> = {
   load_workspace: { action: "load-workspace", mapPayload: () => ({}) },
+  get_node_catalog: { action: "get-node-catalog", mapPayload: () => ({}) },
   create_project: {
     action: "create-project",
     mapPayload: (payload) => {
@@ -541,6 +544,19 @@ export const desktopBridge: DesktopBridge = {
     await delay(180);
     // Browser-only fallback: normal desktop builds use the Tauri/Python sidecar.
     return demoWorkspace;
+  },
+
+  async getNodeCatalog() {
+    const result = await tryInvoke<NodeCatalogResponse>("get_node_catalog");
+    if (result !== null) {
+      return result;
+    }
+    await delay(120);
+    return {
+      schema_version: "1.0",
+      node_definitions: demoWorkspace.node_definitions ?? [],
+      plugin_errors: []
+    };
   },
 
   async createProject(input) {

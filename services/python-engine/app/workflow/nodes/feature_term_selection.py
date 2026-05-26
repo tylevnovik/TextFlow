@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from ._support import _feature_term_payload, _report_node_progress, _scoped_corpus_from_inputs
-from ._common import enum_param, port, runtime
+from ._common import enum_param, port, runtime, field, graph, slot, ui
 
 
 def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -37,6 +37,12 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=True,
             previewable=True,
             parallel_safe=True,
+        ),
+        "graph": graph((320, 220), (3660, 1320), toolbox_order=330),
+        "ui": ui(
+            [
+                field("select", "feature_term_count", "特征词规模"),
+            ],
         ),
     }
 

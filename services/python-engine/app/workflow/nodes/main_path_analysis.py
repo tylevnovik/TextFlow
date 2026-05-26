@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import analysis_passthrough_compiler, enum_param, port, runtime
+from ._common import analysis_passthrough_compiler, enum_param, port, runtime, field, graph, slot, ui
 from ._support import _report_node_progress, _table_rows_from_inputs_or_results
 
 
@@ -36,6 +36,12 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=True,
             previewable=True,
             parallel_safe=True,
+        ),
+        "graph": graph((360, 230), (4920, 40), toolbox_order=470),
+        "ui": ui(
+            [
+                field("select", "main_path_mode", "主路径模式"),
+            ],
         ),
     }
 

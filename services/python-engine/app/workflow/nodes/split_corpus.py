@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from ._common import enum_param, number_param, string_param, port, runtime, node_definition_from_base, analysis_passthrough_compiler
+from ._common import enum_param, number_param, string_param, port, runtime, node_definition_from_base, analysis_passthrough_compiler, field, graph, slot, ui
 from ._support import (
     _clone_corpus_rows,
     _scoped_corpus_from_inputs,
@@ -46,6 +46,12 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             previewable=True,
             output_node=False,
             parallel_safe=True,
+        ),
+        "graph": graph((320, 240), (1500, 1320), toolbox_order=270),
+        "ui": ui(
+            [
+                slot("named_split_editor"),
+            ],
         ),
     }
     return node_definition_from_base(base, runtime_profile, None)

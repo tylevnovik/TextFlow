@@ -301,7 +301,6 @@ main.py
 - **`export.py`**：数据与报告导出（如 `execute_save_csv`、`execute_save_xlsx` 等）。
 - **`technology.py`**：技术识别分析。
 - **`support.py`**：辅助性节点执行器。
-- **`legacy.py`**：保留的旧版线性流水线执行器（如 `execute_legacy_analyze_corpus` 等）。
 
 ### 5.6 节点定义 (`app/workflow/definitions/` 子包)
 
@@ -311,7 +310,7 @@ main.py
 
 每个节点定义均包含：
 - `type`: 节点类型标识 (28 种内置类型)
-- `title` / `category`: UI 显示 (input/process/analysis/output/utility/legacy)
+- `title` / `category`: UI 显示 (input/process/analysis/output/utility)
 - `inputs` / `outputs`: 类型化端口 (25 种端口类型)
 - `params`: 参数定义 (boolean/number/string/enum)
 - `runtime`: step_id, executor, cacheable, previewable

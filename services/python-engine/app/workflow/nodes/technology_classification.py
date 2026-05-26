@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import analysis_passthrough_compiler, number_param, port, runtime
+from ._common import analysis_passthrough_compiler, number_param, port, runtime, field, graph, slot, ui
 from ._support import _report_node_progress, _table_rows_from_inputs_or_results
 
 
@@ -37,6 +37,17 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=True,
             previewable=True,
             parallel_safe=True,
+        ),
+        "graph": graph((380, 280), (4920, 1000), toolbox_order=500),
+        "ui": ui(
+            [
+                field("number", "threshold_emerging_novelty", "新兴-新颖度阈值", step=1),
+                field("number", "threshold_emerging_growth", "新兴-增长率阈值", step=1),
+                field("number", "threshold_disruptive", "颠覆-颠覆度阈值", step=1),
+                field("number", "threshold_core", "核心-成熟度阈值", step=1),
+                field("number", "threshold_declining_growth", "衰退-增长率阈值", step=1),
+                field("number", "threshold_declining_maturity", "衰退-成熟度阈值", step=1),
+            ],
         ),
     }
 

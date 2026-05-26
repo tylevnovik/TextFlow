@@ -91,6 +91,11 @@ def load_node_plugins(builder: NodeRegistryBuilder) -> None:
                 if entrypoint is None:
                     builder.add_plugin_error(f"{path.name}: 未找到 register_nodes / register")
                     continue
-                _invoke_entrypoint(entrypoint, builder)
+                builder.begin_plugin(path.name)
+                try:
+                    _invoke_entrypoint(entrypoint, builder)
+                finally:
+                    builder.end_plugin()
             except Exception as exc:  # pragma: no cover - defensive plugin boundary
+                builder.end_plugin()
                 builder.add_plugin_error(f"{path.name}: {exc}")

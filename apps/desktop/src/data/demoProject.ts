@@ -383,24 +383,14 @@ const workflowDefinitions: WorkflowDefinition[] = [
     },
     nodes: [
       {
-        node_id: "node-load-project-corpus",
-        node_type: "load_project_corpus",
-        label: "读取项目语料",
+        node_id: "node-corpus-input",
+        node_type: "corpus_input",
+        label: "语料输入",
         position: { x: 120, y: 220 },
         inputs: [],
-        outputs: [{ port_id: "project_corpus", port_type: "ProjectCorpus" }],
-        config: {},
-        ui_state: { collapsed: false, bypassed: false },
-        runtime_meta: { step_id: "resource", node_impl_version: "1.0.0" }
-      },
-      {
-        node_id: "node-filter-corpus",
-        node_type: "filter_corpus",
-        label: "筛选处理对象",
-        position: { x: 360, y: 220 },
-        inputs: [{ port_id: "project_corpus_in", port_type: "ProjectCorpus" }],
-        outputs: [{ port_id: "scoped_corpus", port_type: "ScopedCorpus" }],
+        outputs: [{ port_id: "corpus", port_type: "CorpusTable" }],
         config: {
+          resource_mode: "project_corpus",
           mode: "filtered_subset",
           source_values: ["Journal of Digital Humanities", "IncoPat"],
           institution_values: [],
@@ -413,13 +403,24 @@ const workflowDefinitions: WorkflowDefinition[] = [
         runtime_meta: { step_id: "scope", node_impl_version: "1.0.0" }
       },
       {
-        node_id: "node-project-dictionary-set",
-        node_type: "project_dictionary_set",
-        label: "项目词表",
-        position: { x: 600, y: 60 },
+        node_id: "node-dictionary-input",
+        node_type: "dictionary_input",
+        label: "词表输入",
+        position: { x: 520, y: 60 },
         inputs: [],
         outputs: [{ port_id: "dictionary_set", port_type: "DictionarySet" }],
-        config: {},
+        config: {
+          resource_mode: "project_dictionary",
+          resource_id: "project:dictionary_set",
+          use_custom_lexicon: true,
+          use_phrase_lexicon: true,
+          apply_regex_rules: true,
+          apply_standard_terms: true,
+          apply_synonym_map: true,
+          apply_near_synonym_map: true,
+          apply_stopwords: true,
+          apply_exclusion_terms: true
+        },
         ui_state: { collapsed: true, bypassed: false },
         runtime_meta: { step_id: "resource", node_impl_version: "1.0.0" }
       },
@@ -441,7 +442,7 @@ const workflowDefinitions: WorkflowDefinition[] = [
         node_type: "clean_text",
         label: "基础清洗",
         position: { x: 600, y: 220 },
-        inputs: [{ port_id: "corpus_in", port_type: "ScopedCorpus" }],
+        inputs: [{ port_id: "corpus_in", port_type: "CorpusTable" }],
         outputs: [{ port_id: "clean_corpus", port_type: "CleanCorpus" }],
         config: {
           strip_html: true,
@@ -514,55 +515,79 @@ const workflowDefinitions: WorkflowDefinition[] = [
         runtime_meta: { step_id: "filtering", node_impl_version: "1.0.0" }
       },
       {
-        node_id: "node-analyze-corpus",
-        node_type: "analyze_corpus",
-        label: "生成分析",
+        node_id: "node-frequency-statistics",
+        node_type: "frequency_statistics",
+        label: "词频统计",
         position: { x: 1800, y: 220 },
         inputs: [{ port_id: "token_corpus_in", port_type: "FilteredTokenCorpus" }],
-        outputs: [
-          { port_id: "analysis_bundle", port_type: "AnalysisBundle" },
-          { port_id: "audit_table", port_type: "AuditTable" }
-        ],
+        outputs: [{ port_id: "frequency_table", port_type: "FrequencyTable", result_bundle_key: "frequency_table", png_chart_ids: ["frequency_top_terms"] }],
         config: {
-          feature_term_count: 1000,
-          top_k_project: 100,
-          topic_model_k: 3
+          top_n: 200
         },
         ui_state: { collapsed: false, bypassed: false },
         runtime_meta: { step_id: "analysis", node_impl_version: "1.0.0" }
       },
       {
-        node_id: "node-export-results",
-        node_type: "export_results",
-        label: "导出结果",
+        node_id: "node-keyword-extraction",
+        node_type: "keyword_extraction",
+        label: "关键词提取",
         position: { x: 2040, y: 220 },
-        inputs: [
-          { port_id: "analysis_bundle_in", port_type: "AnalysisBundle" },
-          { port_id: "audit_table_in", port_type: "AuditTable" }
-        ],
-        outputs: [{ port_id: "export_bundle", port_type: "ExportBundle" }],
+        inputs: [{ port_id: "token_corpus_in", port_type: "FilteredTokenCorpus" }],
+        outputs: [{ port_id: "keyword_table", port_type: "KeywordTable", result_bundle_key: "keyword_result", png_chart_ids: ["project_keywords", "keyword_wordcloud"] }],
         config: {
-          export_csv: true,
-          export_xlsx: true,
-          export_png: true,
-          export_html_report: true
+          top_k_per_doc: 10,
+          top_k_project: 100
+        },
+        ui_state: { collapsed: false, bypassed: false },
+        runtime_meta: { step_id: "analysis", node_impl_version: "1.0.0" }
+      },
+      {
+        node_id: "node-save-xlsx",
+        node_type: "save_xlsx",
+        label: "保存 XLSX",
+        position: { x: 2280, y: 160 },
+        inputs: [{ port_id: "table_in", port_type: "AnyTable", allow_multiple: true }],
+        outputs: [{ port_id: "artifact", port_type: "ExportArtifact", artifact_kind: "export" }],
+        config: {
+          file_prefix: "tables",
+          export_xlsx: true
+        },
+        ui_state: { collapsed: false, bypassed: false },
+        runtime_meta: { step_id: "export", node_impl_version: "1.0.0" }
+      },
+      {
+        node_id: "node-save-html-report",
+        node_type: "save_html_report",
+        label: "保存 HTML 报告",
+        position: { x: 2280, y: 360 },
+        inputs: [
+          { port_id: "report_in", port_type: "AnyAnalysisResult", allow_multiple: true }
+        ],
+        outputs: [{ port_id: "artifact", port_type: "ExportArtifact", artifact_kind: "export" }],
+        config: {
+          file_prefix: "report",
+          export_html_report: true,
+          include_audit: true
         },
         ui_state: { collapsed: false, bypassed: false },
         runtime_meta: { step_id: "export", node_impl_version: "1.0.0" }
       }
     ],
     edges: [
-      { edge_id: "edge-1", from_node: "node-load-project-corpus", from_port: "project_corpus", to_node: "node-filter-corpus", to_port: "project_corpus_in" },
-      { edge_id: "edge-2", from_node: "node-filter-corpus", from_port: "scoped_corpus", to_node: "node-clean-text", to_port: "corpus_in" },
+      { edge_id: "edge-1", from_node: "node-corpus-input", from_port: "corpus", to_node: "node-clean-text", to_port: "corpus_in" },
       { edge_id: "edge-3", from_node: "node-clean-text", from_port: "clean_corpus", to_node: "node-normalize-text", to_port: "corpus_in" },
       { edge_id: "edge-4", from_node: "node-normalize-text", from_port: "normalized_corpus", to_node: "node-tokenize", to_port: "corpus_in" },
       { edge_id: "edge-5", from_node: "node-tokenize", from_port: "token_corpus", to_node: "node-apply-dictionary-rules", to_port: "token_corpus_in" },
-      { edge_id: "edge-6", from_node: "node-project-dictionary-set", from_port: "dictionary_set", to_node: "node-runtime-dictionary-overlay", to_port: "dictionary_set_in" },
+      { edge_id: "edge-6", from_node: "node-dictionary-input", from_port: "dictionary_set", to_node: "node-runtime-dictionary-overlay", to_port: "dictionary_set_in" },
       { edge_id: "edge-6-overlay", from_node: "node-runtime-dictionary-overlay", from_port: "dictionary_set", to_node: "node-apply-dictionary-rules", to_port: "dictionary_set_in" },
       { edge_id: "edge-7", from_node: "node-apply-dictionary-rules", from_port: "token_corpus", to_node: "node-filter-terms", to_port: "token_corpus_in" },
-      { edge_id: "edge-8", from_node: "node-filter-terms", from_port: "filtered_token_corpus", to_node: "node-analyze-corpus", to_port: "token_corpus_in" },
-      { edge_id: "edge-9", from_node: "node-analyze-corpus", from_port: "analysis_bundle", to_node: "node-export-results", to_port: "analysis_bundle_in" },
-      { edge_id: "edge-10", from_node: "node-analyze-corpus", from_port: "audit_table", to_node: "node-export-results", to_port: "audit_table_in" }
+      { edge_id: "edge-8", from_node: "node-filter-terms", from_port: "filtered_token_corpus", to_node: "node-frequency-statistics", to_port: "token_corpus_in" },
+      { edge_id: "edge-9", from_node: "node-filter-terms", from_port: "filtered_token_corpus", to_node: "node-keyword-extraction", to_port: "token_corpus_in" },
+      { edge_id: "edge-10", from_node: "node-frequency-statistics", from_port: "frequency_table", to_node: "node-save-xlsx", to_port: "table_in" },
+      { edge_id: "edge-11", from_node: "node-keyword-extraction", from_port: "keyword_table", to_node: "node-save-xlsx", to_port: "table_in" },
+      { edge_id: "edge-12", from_node: "node-frequency-statistics", from_port: "frequency_table", to_node: "node-save-html-report", to_port: "report_in" },
+      { edge_id: "edge-13", from_node: "node-keyword-extraction", from_port: "keyword_table", to_node: "node-save-html-report", to_port: "report_in" },
+      { edge_id: "edge-14", from_node: "node-apply-dictionary-rules", from_port: "audit_table", to_node: "node-save-html-report", to_port: "report_in" }
     ],
     groups: [],
     viewport: { x: 0, y: 0, zoom: 0.8 },
@@ -619,7 +644,7 @@ const manifest: ProjectManifest = {
     {
       artifact_id: "artifact-demo-frequency",
       run_id: "run-20260416-1810",
-      node_id: "node-analyze-corpus",
+      node_id: "node-frequency-statistics",
       kind: "table",
       path: "runs/run-20260416-1810/artifacts/artifact-demo-frequency.json",
       preview_path: "runs/run-20260416-1810/artifacts/artifact-demo-frequency.preview.json",
@@ -628,7 +653,7 @@ const manifest: ProjectManifest = {
     {
       artifact_id: "artifact-demo-report",
       run_id: "run-20260416-1810",
-      node_id: "node-export-results",
+      node_id: "node-save-html-report",
       kind: "object",
       path: "runs/run-20260416-1810/artifacts/artifact-demo-report.json",
       preview_path: "runs/run-20260416-1810/artifacts/artifact-demo-report.preview.json",
@@ -654,8 +679,8 @@ const manifest: ProjectManifest = {
       name: "Keyword depth variants",
       workflow_id: "wf-default",
       variant_matrix: [
-        { label: "baseline", node_overrides: { "node-analyze-corpus": { top_k_project: 100 } } },
-        { label: "expanded-keywords", node_overrides: { "node-analyze-corpus": { top_k_project: 160 } } }
+        { label: "baseline", node_overrides: { "node-keyword-extraction": { top_k_project: 100 } } },
+        { label: "expanded-keywords", node_overrides: { "node-keyword-extraction": { top_k_project: 160 } } }
       ]
     }
   ],

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ._common import bool_param, enum_param, filtering_passthrough_compiler, number_param, port, runtime, string_param
+from ._common import bool_param, enum_param, filtering_passthrough_compiler, number_param, port, runtime, string_param, field, graph, slot, ui
 from ._support import (
     _clone_corpus_rows,
     _is_table_rows,
@@ -50,6 +50,17 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             "workflow.focus_terms",
             cacheable=True,
             previewable=True,
+        ),
+        "graph": graph((360, 280), (4080, 1640), toolbox_order=250),
+        "ui": ui(
+            [
+                field("select", "term_source", "词项来源"),
+                field("text", "term_field", "词项字段"),
+                field("number", "max_terms", "最大词项数", step=1),
+                field("switch", "selected_only", "仅保留已选特征词"),
+                field("switch", "project_keywords_only", "仅项目级关键词"),
+                field("select", "on_empty", "无候选词时"),
+            ],
         ),
     }
 

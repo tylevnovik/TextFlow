@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import bool_param, port, runtime, runtime_section_compiler
+from ._common import bool_param, port, runtime, runtime_section_compiler, field, graph, slot, ui
 from ._support import _clone_corpus_rows, _report_corpus_progress, _scoped_corpus_from_inputs
 
 
@@ -41,6 +41,21 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             "workflow.clean_text",
             cacheable=True,
             previewable=True,
+        ),
+        "graph": graph((320, 230), (1500, 480), toolbox_order=190),
+        "ui": ui(
+            [
+                field("switch", "strip_html", "去 HTML"),
+                field("switch", "strip_urls", "去 URL"),
+                field("switch", "strip_email", "去邮箱"),
+                field("switch", "strip_phone", "去手机号"),
+                field("switch", "normalize_whitespace", "统一空白"),
+                field("switch", "normalize_punctuation", "统一标点"),
+                field("switch", "full_half_width_normalize", "全半角归一"),
+                field("switch", "lowercase_english", "英文小写"),
+                field("switch", "remove_emoji", "去表情"),
+                field("switch", "remove_special_chars", "去特殊字符"),
+            ],
         ),
     }
 

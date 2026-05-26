@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import analysis_passthrough_compiler, number_param, port, runtime
+from ._common import analysis_passthrough_compiler, number_param, port, runtime, field, graph, slot, ui
 from ._support import _report_node_progress, _table_rows_from_inputs_or_results
 
 
@@ -33,6 +33,12 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=True,
             previewable=True,
             parallel_safe=True,
+        ),
+        "graph": graph((340, 230), (4920, 360), toolbox_order=480),
+        "ui": ui(
+            [
+                field("number", "link_prediction_top_n", "Top N 预测", step=1),
+            ],
         ),
     }
 

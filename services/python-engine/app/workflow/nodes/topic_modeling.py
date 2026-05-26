@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import analysis_passthrough_compiler, enum_param, number_param, port, runtime
+from ._common import analysis_passthrough_compiler, enum_param, number_param, port, runtime, field, graph, slot, ui
 from ._support import (
     _analysis_ops,
     _analysis_params,
@@ -41,6 +41,14 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=True,
             previewable=True,
             parallel_safe=True,
+        ),
+        "graph": graph((360, 260), (4080, 1000), toolbox_order=380),
+        "ui": ui(
+            [
+                field("select", "topic_algorithm", "主题算法"),
+                field("number", "topic_model_k", "主题数量", step=1),
+                field("number", "top_terms_per_topic", "每主题词项数", step=1),
+            ],
         ),
     }
 

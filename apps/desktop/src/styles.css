@@ -216,11 +216,208 @@ button:disabled {
   color: var(--gold-deep);
 }
 
+.workflow-node-card-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.workflow-node-card-facts span {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 0.28rem;
+  padding: 0.24rem 0.45rem;
+  border: 1px solid rgba(36, 38, 42, 0.08);
+  border-radius: 999px;
+  background: rgba(36, 38, 42, 0.04);
+}
+
+.workflow-node-card-facts span.is-success {
+  border-color: color-mix(in srgb, var(--tf-color-success), transparent 76%);
+  background: color-mix(in srgb, var(--tf-color-success-bg), transparent 30%);
+}
+
+.workflow-node-card-facts span.is-warning {
+  border-color: color-mix(in srgb, var(--tf-color-warning), transparent 72%);
+  background: color-mix(in srgb, var(--tf-color-warning-bg), transparent 24%);
+}
+
+.workflow-node-card-facts span.is-muted {
+  opacity: 0.72;
+}
+
+.workflow-inspector-config-facts span {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+  padding: 0.42rem 0.5rem;
+  border: 1px solid rgba(36, 38, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(36, 38, 42, 0.04);
+}
+
+.workflow-node-card-facts b,
+.workflow-node-card-facts em {
+  min-width: 0;
+  overflow: hidden;
+  font-style: normal;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-inspector-config-facts b,
+.workflow-inspector-config-facts em {
+  min-width: 0;
+  overflow: hidden;
+  font-style: normal;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-node-card-facts b {
+  color: #63727e;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.workflow-node-card-facts b::after {
+  content: ":";
+}
+
+.workflow-inspector-config-facts b {
+  color: #63727e;
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.workflow-node-card-facts em {
+  color: #1f252c;
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.workflow-inspector-config-facts em {
+  color: #1f252c;
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
 .workflow-node-card-body {
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: 0.7rem;
+}
+
+.workflow-node-inline-config {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.38rem;
+  padding: 0.45rem;
+  border: 1px solid rgba(36, 38, 42, 0.08);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(36, 38, 42, 0.035), rgba(36, 38, 42, 0.018));
+}
+
+.workflow-node-inline-config-row {
+  display: grid;
+  grid-template-columns: minmax(3.8rem, 0.78fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.workflow-node-inline-config-row:not(.is-boolean) {
+  grid-column: 1 / -1;
+}
+
+.workflow-node-inline-config-row.is-boolean {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.workflow-node-inline-config-row > span:first-child {
+  overflow: hidden;
+  color: #63727e;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-node-inline-config-row input,
+.workflow-node-inline-config-row select {
+  width: 100%;
+  min-width: 0;
+  height: 1.45rem;
+  padding: 0 0.35rem;
+  border: 1px solid rgba(36, 38, 42, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #1f252c;
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.workflow-node-inline-config-row select {
+  padding-right: 0.12rem;
+}
+
+.workflow-node-inline-config-row input:focus-visible,
+.workflow-node-inline-config-row select:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--tf-color-brand), transparent 38%);
+  outline-offset: 1px;
+}
+
+.workflow-node-inline-switch {
+  display: inline-flex;
+  justify-self: end;
+  position: relative;
+  width: 2.25rem;
+  height: 1.24rem;
+}
+
+.workflow-node-inline-switch input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+}
+
+.workflow-node-inline-switch i {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(36, 38, 42, 0.13);
+  border-radius: 999px;
+  background: rgba(36, 38, 42, 0.12);
+}
+
+.workflow-node-inline-switch i::after {
+  content: "";
+  position: absolute;
+  top: 0.18rem;
+  left: 0.2rem;
+  width: 0.78rem;
+  height: 0.78rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(31, 37, 44, 0.2);
+  transition: transform 120ms ease;
+}
+
+.workflow-node-inline-switch input:checked + i {
+  border-color: color-mix(in srgb, var(--tf-color-brand), transparent 42%);
+  background: var(--tf-color-brand);
+}
+
+.workflow-node-inline-switch input:checked + i::after {
+  transform: translateX(0.95rem);
 }
 
 .workflow-node-inline-editor {
@@ -800,6 +997,59 @@ button:disabled {
   margin-top: 0.2rem;
   padding-top: 0.65rem;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.workflow-editor-shell .workflow-node-card-facts span {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.workflow-editor-shell .workflow-node-card-facts span.is-success {
+  border-color: rgba(104, 194, 138, 0.18);
+  background: rgba(104, 194, 138, 0.08);
+}
+
+.workflow-editor-shell .workflow-node-card-facts span.is-warning {
+  border-color: rgba(220, 131, 110, 0.2);
+  background: rgba(220, 131, 110, 0.1);
+}
+
+.workflow-editor-shell .workflow-node-card-facts span.is-muted {
+  opacity: 0.74;
+}
+
+.workflow-editor-shell .workflow-node-card-facts b {
+  color: rgba(222, 229, 236, 0.62);
+}
+
+.workflow-editor-shell .workflow-node-card-facts em {
+  color: #f6f7fb;
+}
+
+.workflow-editor-shell .workflow-node-inline-config {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.052), rgba(255, 255, 255, 0.028));
+}
+
+.workflow-editor-shell .workflow-node-inline-config-row > span:first-child {
+  color: rgba(222, 229, 236, 0.66);
+}
+
+.workflow-editor-shell .workflow-node-inline-config-row input,
+.workflow-editor-shell .workflow-node-inline-config-row select {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(10, 14, 21, 0.72);
+  color: #f6f7fb;
+}
+
+.workflow-editor-shell .workflow-node-inline-switch i {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.workflow-editor-shell .workflow-node-inline-switch input:checked + i {
+  border-color: rgba(96, 192, 178, 0.66);
+  background: #2a8177;
 }
 
 .workflow-node-inline-panel-stack {
@@ -1693,11 +1943,15 @@ button:disabled {
 }
 
 .home-overview-grid {
+  display: grid;
+  gap: 1rem;
   align-items: start;
+  min-height: 0;
 }
 
 .project-library-panel {
   display: grid;
+  min-height: 0;
 }
 
 .project-library-panel .panel-head {
@@ -1708,9 +1962,8 @@ button:disabled {
   display: grid;
   gap: 0.8rem;
   margin-top: 0.85rem;
-  max-height: 48rem;
-  overflow-y: auto;
-  padding-right: 0.2rem;
+  overflow: visible;
+  padding-right: 0;
 }
 
 .project-library-card {
@@ -3632,6 +3885,70 @@ th {
   font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workflow-inspector-config-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.workflow-inspector-config-facts span {
+  border-color: #d7e3e0;
+  background: #f7fbfa;
+}
+
+.workflow-inspector-config-facts span.is-success {
+  border-color: #bddbcc;
+  background: #f0fbf5;
+}
+
+.workflow-inspector-config-facts span.is-warning {
+  border-color: #e6c8be;
+  background: #fff7f2;
+}
+
+.workflow-inspector-config-facts span.is-muted {
+  opacity: 0.78;
+}
+
+.workflow-inspector-editor {
+  display: grid;
+  gap: 0.65rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--tf-color-border);
+}
+
+.workflow-inspector-editor > strong {
+  color: #1f252c;
+  font-size: 0.82rem;
+}
+
+.workflow-inspector-editor .workflow-node-inline-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.55rem;
+}
+
+.workflow-inspector-editor .workflow-node-inline-pill-block {
+  gap: 0.45rem;
+}
+
+.workflow-inspector-editor .workflow-node-inline-pill-block strong,
+.workflow-inspector-editor .field span,
+.workflow-inspector-editor .switch-row span {
+  color: #3d4954;
+}
+
+.workflow-inspector-editor .field.compact {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.workflow-inspector-editor .switch-row.compact {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .workflow-inspector-artifacts {

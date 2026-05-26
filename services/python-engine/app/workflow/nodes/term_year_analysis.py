@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ._support import _analysis_ops, _report_node_progress, _scoped_corpus_from_inputs, _token_frame
-from ._common import port, runtime
+from ._common import port, runtime, field, graph, slot, ui
 
 
 def node_definition(_runtime_profile: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -29,6 +29,8 @@ def node_definition(_runtime_profile: dict[str, Any] | None = None) -> dict[str,
             previewable=True,
             parallel_safe=True,
         ),
+        "graph": graph((280, 210), (3660, 680), toolbox_order=310),
+        "ui": ui([]),
     }
 
 

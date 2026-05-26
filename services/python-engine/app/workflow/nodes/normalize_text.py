@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import bool_param, enum_param, port, runtime, runtime_section_compiler
+from ._common import bool_param, enum_param, port, runtime, runtime_section_compiler, field, graph, slot, ui
 from ._support import _clone_corpus_rows, _report_corpus_progress, _scoped_corpus_from_inputs
 
 
@@ -39,6 +39,16 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             "workflow.normalize_text",
             cacheable=True,
             previewable=True,
+        ),
+        "graph": graph((330, 240), (1920, 480), toolbox_order=200),
+        "ui": ui(
+            [
+                field("switch", "convert_traditional_to_simplified", "繁转简"),
+                field("switch", "normalize_numbers", "数字归一"),
+                field("switch", "normalize_time_expr", "时间表达归一"),
+                field("switch", "apply_regex_rules", "应用 Regex 规则"),
+                field("select", "regex_rule_priority", "Regex 优先策略"),
+            ],
         ),
     }
 

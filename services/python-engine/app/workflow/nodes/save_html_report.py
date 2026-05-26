@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from ._support import _report_node_progress
-from ._common import bool_param, port, runtime, string_param
+from ._common import bool_param, field, graph, port, runtime, string_param, ui
 
 
 def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -18,6 +18,7 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
         "outputs": [{**port("artifact", "ExportArtifact", "导出产物"), "artifact_kind": "export"}],
         "params": [
             string_param("file_prefix", "文件名前缀", "report"),
+            bool_param("export_html_report", "启用 HTML 报告", True),
             bool_param("include_audit", "附带审计摘要", bool(export.get("include_audit", True))),
         ],
         "runtime": runtime(
@@ -28,13 +29,25 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             output_node=True,
             parallel_safe=True,
         ),
+        "graph": graph((320, 230), (5340, 1000), toolbox_order=440, starter_roles=["report_export_sink"]),
+        "ui": ui(
+            [
+                field("text", "file_prefix", "文件名前缀"),
+                field("switch", "export_html_report", "启用 HTML 报告"),
+                field("switch", "include_audit", "附带审计摘要"),
+            ],
+            summary_template="HTML · {file_prefix}",
+        ),
     }
 
 
 def compile_node(context: Any, node: dict[str, Any]) -> None:
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
     include_audit = bool(config.get("include_audit", context.export_config.get("include_audit", True)))
-    context.enable_export(export_html_report=True, include_audit=include_audit)
+    context.enable_export(
+        export_html_report=bool(config.get("export_html_report", True)),
+        include_audit=include_audit,
+    )
 
 
 def execute_node(context: Any, node: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:

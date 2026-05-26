@@ -11,7 +11,7 @@ from ._support import (
     _report_node_progress,
     _scoped_corpus_from_inputs,
 )
-from ._common import number_param, port, runtime
+from ._common import number_param, port, runtime, field, graph, slot, ui
 
 
 def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -40,6 +40,12 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=True,
             previewable=True,
             parallel_safe=True,
+        ),
+        "graph": graph((300, 210), (4500, 40), toolbox_order=410),
+        "ui": ui(
+            [
+                field("number", "topic_model_k", "主题数量", step=1),
+            ],
         ),
     }
 

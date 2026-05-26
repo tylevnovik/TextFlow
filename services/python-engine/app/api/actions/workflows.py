@@ -11,6 +11,7 @@ from .support import ProgressCallback, notify, ensure_bootstrap_project, load_pr
 from ...domain.project import deep_copy_manifest
 from ...ingestion import import_files, ensure_sample_files
 from ...workflow.runner import run_project_workflow
+from ...workflow.registry import node_catalog_response
 from ...storage.projects import (
     save_project,
     remember_project,
@@ -91,6 +92,16 @@ def workflow_progress_detail_from_run_record(
         "node_state_delta": node_states,
         "full_node_state_sync": True,
     }
+
+
+def action_get_node_catalog(
+    _payload: dict[str, Any] | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    notify(progress_callback, 0.1, "正在读取节点目录")
+    catalog = node_catalog_response()
+    notify(progress_callback, 1.0, "节点目录已加载")
+    return catalog
 
 
 def action_run_workflow(payload: dict[str, Any], progress_callback: ProgressCallback | None = None) -> dict[str, Any]:

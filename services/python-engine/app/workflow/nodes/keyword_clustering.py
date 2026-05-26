@@ -9,7 +9,7 @@ from ._support import (
     _report_node_progress,
     _scoped_corpus_from_inputs,
 )
-from ._common import number_param, port, runtime
+from ._common import number_param, port, runtime, field, graph, slot, ui
 
 
 def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -38,6 +38,13 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=True,
             previewable=True,
             parallel_safe=True,
+        ),
+        "graph": graph((320, 220), (4080, 680), toolbox_order=370),
+        "ui": ui(
+            [
+                field("number", "keyword_cluster_k", "关键词聚类数", step=1),
+                field("number", "topic_model_k", "主题数量", step=1),
+            ],
         ),
     }
 

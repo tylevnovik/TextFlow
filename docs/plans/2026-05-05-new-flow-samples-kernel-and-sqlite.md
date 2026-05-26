@@ -534,7 +534,7 @@ git commit -m "feat: add source profiles for wos scopus and incopat flows"
 - Modify: `services/python-engine/tests/test_workflow_runner.py`
 - Modify: `services/python-engine/tests/test_node_catalog_parity.py`
 - Modify: `packages/shared-types/src/index.ts`
-- Modify: `apps/desktop/src/generatedBuiltinWorkflowNodeSchema.ts`
+- Modify: `apps/desktop/src/<legacy-generated-node-schema>.ts`
 - Modify: `apps/desktop/src/workflowNodeCatalog.ts`
 - Modify: `apps/desktop/src/workflowNodeRegistry.tsx`
 
@@ -624,7 +624,7 @@ Expected: pass.
 **Step 6: Commit**
 
 ```powershell
-git add services/python-engine/app/analysis_ops.py services/python-engine/app/node_definitions.py services/python-engine/app/node_executors.py services/python-engine/tests/test_workflow_runner.py services/python-engine/tests/test_node_catalog_parity.py packages/shared-types/src/index.ts apps/desktop/src/generatedBuiltinWorkflowNodeSchema.ts apps/desktop/src/workflowNodeCatalog.ts apps/desktop/src/workflowNodeRegistry.tsx
+git add services/python-engine/app/analysis_ops.py services/python-engine/app/node_definitions.py services/python-engine/app/node_executors.py services/python-engine/tests/test_workflow_runner.py services/python-engine/tests/test_node_catalog_parity.py packages/shared-types/src/index.ts apps/desktop/src/<legacy-generated-node-schema>.ts apps/desktop/src/workflowNodeCatalog.ts apps/desktop/src/workflowNodeRegistry.tsx
 git commit -m "feat: add metadata normalization node"
 ```
 
@@ -642,7 +642,7 @@ git commit -m "feat: add metadata normalization node"
 - Modify: `services/python-engine/app/defaults.py`
 - Modify: `services/python-engine/tests/test_workflow_runner.py`
 - Modify: `packages/shared-types/src/index.ts`
-- Modify: `apps/desktop/src/generatedBuiltinWorkflowNodeSchema.ts`
+- Modify: `apps/desktop/src/<legacy-generated-node-schema>.ts`
 - Modify: `apps/desktop/src/workflowNodeCatalog.ts`
 - Modify: `apps/desktop/src/workflowNodeRegistry.tsx`
 
@@ -783,7 +783,7 @@ def test_graph_nodes_run_from_cooccurrence_to_link_prediction(isolated_workspace
 Update:
 
 - `packages/shared-types/src/index.ts`
-- `apps/desktop/src/generatedBuiltinWorkflowNodeSchema.ts`
+- `apps/desktop/src/<legacy-generated-node-schema>.ts`
 - `apps/desktop/src/workflowNodeCatalog.ts`
 - `apps/desktop/src/workflowNodeRegistry.tsx`
 
@@ -809,7 +809,7 @@ Expected: pass.
 **Step 8: Commit**
 
 ```powershell
-git add services/python-engine/pyproject.toml services/python-engine/app/graph_ops.py services/python-engine/app/node_definitions.py services/python-engine/app/node_executors.py services/python-engine/app/defaults.py services/python-engine/tests/test_graph_ops.py services/python-engine/tests/test_workflow_runner.py packages/shared-types/src/index.ts apps/desktop/src/generatedBuiltinWorkflowNodeSchema.ts apps/desktop/src/workflowNodeCatalog.ts apps/desktop/src/workflowNodeRegistry.tsx
+git add services/python-engine/pyproject.toml services/python-engine/app/graph_ops.py services/python-engine/app/node_definitions.py services/python-engine/app/node_executors.py services/python-engine/app/defaults.py services/python-engine/tests/test_graph_ops.py services/python-engine/tests/test_workflow_runner.py packages/shared-types/src/index.ts apps/desktop/src/<legacy-generated-node-schema>.ts apps/desktop/src/workflowNodeCatalog.ts apps/desktop/src/workflowNodeRegistry.tsx
 git commit -m "feat: add runnable graph analysis nodes"
 ```
 
@@ -826,7 +826,7 @@ git commit -m "feat: add runnable graph analysis nodes"
 - Modify: `services/python-engine/app/defaults.py`
 - Modify: `services/python-engine/tests/test_workflow_runner.py`
 - Modify: `packages/shared-types/src/index.ts`
-- Modify: `apps/desktop/src/generatedBuiltinWorkflowNodeSchema.ts`
+- Modify: `apps/desktop/src/<legacy-generated-node-schema>.ts`
 - Modify: `apps/desktop/src/workflowNodeCatalog.ts`
 - Modify: `apps/desktop/src/workflowNodeRegistry.tsx`
 
@@ -952,7 +952,7 @@ Expected: pass.
 **Step 7: Commit**
 
 ```powershell
-git add services/python-engine/app/technology_ops.py services/python-engine/app/node_definitions.py services/python-engine/app/node_executors.py services/python-engine/app/defaults.py services/python-engine/tests/test_technology_ops.py services/python-engine/tests/test_workflow_runner.py packages/shared-types/src/index.ts apps/desktop/src/generatedBuiltinWorkflowNodeSchema.ts apps/desktop/src/workflowNodeCatalog.ts apps/desktop/src/workflowNodeRegistry.tsx
+git add services/python-engine/app/technology_ops.py services/python-engine/app/node_definitions.py services/python-engine/app/node_executors.py services/python-engine/app/defaults.py services/python-engine/tests/test_technology_ops.py services/python-engine/tests/test_workflow_runner.py packages/shared-types/src/index.ts apps/desktop/src/<legacy-generated-node-schema>.ts apps/desktop/src/workflowNodeCatalog.ts apps/desktop/src/workflowNodeRegistry.tsx
 git commit -m "feat: add technology identification nodes"
 ```
 

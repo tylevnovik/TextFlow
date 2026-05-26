@@ -11,7 +11,7 @@ import {
   type LexiconExplorerNode
 } from "../features/lexicon/LexiconExplorer";
 import type { WorkflowWorkbenchCanvasAction } from "../features/workflow/workflowWorkbenchActions";
-import { builtinWorkflowToolboxDefinitions } from "../workflowNodeCatalog";
+import { workflowToolboxDefinitions } from "../workflowNodeCatalog";
 import type { WorkbenchSelection } from "./workbenchSelection";
 
 export interface WorkbenchNavigationItem {
@@ -45,8 +45,7 @@ const workflowNodeCategoryLabels: Record<RegisteredWorkflowNodeDefinition["categ
   process: "处理",
   analysis: "分析",
   output: "输出",
-  utility: "辅助",
-  legacy: "兼容"
+  utility: "辅助"
 };
 
 function enabledEntryCount(snapshot: WorkspaceSnapshot, kind: keyof typeof dictionaryKindLabels): number {
@@ -72,7 +71,7 @@ export function buildWorkbenchNavigation(snapshot: WorkspaceSnapshot): Workbench
     ?? project?.workflow_definitions[0];
   const latestRun = project?.run_history[0];
   const workflowId = activeWorkflow?.workflow_id ?? "active-workflow";
-  const workflowToolboxItems = workflowLibraryNavigationItems(workflowToolboxDefinitions(snapshot), projectId, workflowId);
+  const workflowToolboxItems = workflowLibraryNavigationItems(snapshotWorkflowToolboxDefinitions(snapshot), projectId, workflowId);
 
   return [
     {
@@ -164,8 +163,8 @@ export function buildWorkbenchNavigation(snapshot: WorkspaceSnapshot): Workbench
   ];
 }
 
-function workflowToolboxDefinitions(snapshot: WorkspaceSnapshot): RegisteredWorkflowNodeDefinition[] {
-  return (snapshot.node_definitions?.length ? snapshot.node_definitions : builtinWorkflowToolboxDefinitions())
+function snapshotWorkflowToolboxDefinitions(snapshot: WorkspaceSnapshot): RegisteredWorkflowNodeDefinition[] {
+  return (snapshot.node_definitions?.length ? snapshot.node_definitions : workflowToolboxDefinitions())
     .filter((definition) => !definition.hidden_from_toolbox);
 }
 

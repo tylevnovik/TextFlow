@@ -32,6 +32,7 @@ from .imports import (
     normalize_corpus_document,
 )
 from .workflows import (
+    action_get_node_catalog,
     action_run_workflow,
     action_export_project,
     action_save_project_template,
@@ -58,6 +59,7 @@ from .experiments import (
 
 ACTION_HANDLERS: dict[str, Callable[..., Any]] = {
     "load-workspace": action_load_workspace,
+    "get-node-catalog": action_get_node_catalog,
     "create-project": action_create_project,
     "create-project-from-template": action_create_project_from_template,
     "open-project": action_open_project,

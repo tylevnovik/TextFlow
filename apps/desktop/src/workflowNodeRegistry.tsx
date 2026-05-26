@@ -1,5 +1,6 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { Button } from "@fluentui/react-components";
+import { DynamicNodeEditor } from "./features/workflow/DynamicNodeEditor";
 import type {
   CorpusItem,
   WorkflowRuntimeProfile,
@@ -10,7 +11,7 @@ import type {
   WorkflowNodeInstance
 } from "@textflow/shared-types";
 
-interface WorkflowNodeEditorContext {
+export interface WorkflowNodeEditorContext {
   node: WorkflowNodeInstance;
   project: ProjectManifest;
   snapshot: { corpus: CorpusItem[] };
@@ -1321,36 +1322,8 @@ function renderManualReviewGateEditor(context: WorkflowNodeEditorContext) {
   );
 }
 
-type WorkflowNodeInlineRenderer = (context: WorkflowNodeEditorContext) => ReactNode;
-
-const workflowNodeInlineRenderers: Partial<Record<WorkflowNodeInstance["node_type"], WorkflowNodeInlineRenderer>> = {
-  corpus_input: renderCorpusInputEditor,
-  dictionary_input: renderDictionaryInputEditor,
-  select_dictionary_tables: renderSelectDictionaryTablesEditor,
-  overlay_dictionary_rules: renderOverlayDictionaryRulesEditor,
-  filter_by_metadata: renderFilterByMetadataEditor,
-  deduplicate_documents: renderDeduplicateDocumentsEditor,
-  sample_corpus: renderSampleCorpusEditor,
-  split_corpus: renderSplitCorpusEditor,
-  bucket_by_time: renderBucketByTimeEditor,
-  group_compare: renderGroupCompareEditor,
-  keyness_analysis: renderKeynessAnalysisEditor,
-  topic_modeling: renderTopicModelingEditor,
-  cluster_evaluation: renderClusterEvaluationEditor,
-  join_results: renderJoinResultsEditor,
-  conditional_router: renderConditionalRouterEditor,
-  result_gate: renderResultGateEditor,
-  manual_review_gate: renderManualReviewGateEditor
-};
-
 export function renderWorkflowNodeInlineEditor(context: WorkflowNodeEditorContext) {
-  const customRenderer = workflowNodeInlineRenderers[context.node.node_type];
-  const customContent = customRenderer ? customRenderer(context) : null;
-  const genericContent = customRenderer ? null : renderGenericNodeParams(context);
-
-  if (!customContent && !genericContent) {
-    return null;
-  }
+  const definition = context.nodeDefinitionsByType.get(context.node.node_type);
 
   return (
     <div
@@ -1358,13 +1331,24 @@ export function renderWorkflowNodeInlineEditor(context: WorkflowNodeEditorContex
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
     >
-      {customContent}
-      {genericContent}
+      <DynamicNodeEditor context={context} definition={definition} />
     </div>
   );
 }
 
+function renderSummaryTemplate(template: string, config: Record<string, unknown>): string {
+  return template.replace(/\{([^}]+)\}/g, (_match, key: string) => {
+    const value = config[key.trim()];
+    return value === null || value === undefined ? "" : String(value);
+  });
+}
+
 export function renderWorkflowNodePreview(context: WorkflowNodeEditorContext) {
+  const definition = context.nodeDefinitionsByType.get(context.node.node_type);
+  const summaryTemplate = definition?.ui?.summary_template;
+  if (summaryTemplate) {
+    return <small>{renderSummaryTemplate(summaryTemplate, context.node.config)}</small>;
+  }
   const latestRun = context.latestRun;
   const results = context.project.results;
   const dynamicResults = results as unknown as Record<string, Array<Record<string, unknown>>>;

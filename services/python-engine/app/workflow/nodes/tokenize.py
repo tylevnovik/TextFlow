@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import bool_param, enum_param, number_param, port, runtime, runtime_section_compiler
+from ._common import bool_param, enum_param, number_param, port, runtime, runtime_section_compiler, field, graph, slot, ui
 from ._support import _clone_corpus_rows, _report_corpus_progress, _scoped_corpus_from_inputs
 
 
@@ -51,6 +51,24 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             "workflow.tokenize",
             cacheable=True,
             previewable=True,
+        ),
+        "graph": graph((320, 230), (2340, 480), toolbox_order=210),
+        "ui": ui(
+            [
+                field("select", "language_mode", "语言模式"),
+                field("select", "tokenizer_backend", "切词引擎"),
+                field("switch", "use_custom_lexicon", "使用自定义词典"),
+                field("switch", "use_phrase_lexicon", "使用短语词典"),
+                field("switch", "preserve_domain_phrases", "保留领域短语"),
+                field("switch", "split_hyphenated_terms", "拆分连字符"),
+                field("switch", "split_slash_terms", "拆分斜杠词"),
+                field("switch", "normalize_camel_case", "拆分 CamelCase"),
+                field("switch", "keep_original_order", "保留原始顺序"),
+                field("number", "min_token_length_before_filter", "切词前最短长度", step=1),
+                field("switch", "enable_ngrams", "生成 n-gram"),
+                field("number", "ngram_min", "最小 n-gram", step=1),
+                field("number", "ngram_max", "最大 n-gram", step=1),
+            ],
         ),
     }
 

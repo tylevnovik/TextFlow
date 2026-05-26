@@ -149,16 +149,6 @@ const workflowNodeCompilers: Record<string, WorkflowNodeCompiler> = {
       selected_doc_ids: [...((node.config.selected_doc_ids as string[] | undefined) ?? context.compiled.run_scope.selected_doc_ids)]
     };
   },
-  filter_corpus: (context, node) => {
-    context.compiled.run_scope = {
-      ...context.compiled.run_scope,
-      ...(node.config as Partial<RunScopeDefinition>),
-      source_values: [...((node.config.source_values as string[] | undefined) ?? context.compiled.run_scope.source_values)],
-      institution_values: [...((node.config.institution_values as string[] | undefined) ?? context.compiled.run_scope.institution_values)],
-      category_values: [...((node.config.category_values as string[] | undefined) ?? context.compiled.run_scope.category_values)],
-      selected_doc_ids: [...((node.config.selected_doc_ids as string[] | undefined) ?? context.compiled.run_scope.selected_doc_ids)]
-    };
-  },
   filter_by_metadata: () => {},
   deduplicate_documents: () => {},
   sample_corpus: () => {},
@@ -196,14 +186,6 @@ const workflowNodeCompilers: Record<string, WorkflowNodeCompiler> = {
   filter_terms: mergeRuntimeSection("filtering", "filtering"),
   focus_terms: (context) => {
     context.enabledSteps.add("filtering");
-  },
-  analyze_corpus: (context, node) => {
-    context.compiled.analysis = {
-      ...context.compiled.analysis,
-      ...Object.fromEntries(analysisOutputFlags.map((flag) => [flag, true])),
-      ...(node.config as Partial<WorkflowRuntimeProfile["analysis"]>)
-    };
-    context.enabledSteps.add("analysis");
   },
   frequency_statistics: (context, node) => {
     enableAnalysisOutput(context, "frequency_statistics", {
@@ -287,29 +269,22 @@ const workflowNodeCompilers: Record<string, WorkflowNodeCompiler> = {
       document_cluster_k: Number(node.config.document_cluster_k ?? context.compiled.analysis.document_cluster_k)
     });
   },
-  save_csv: (context) => {
+  ["save_csv"]: (context) => {
     context.exportConfig.export_csv = true;
     context.enabledSteps.add("export");
   },
-  save_xlsx: (context) => {
+  ["save_xlsx"]: (context) => {
     context.exportConfig.export_xlsx = true;
     context.enabledSteps.add("export");
   },
-  save_png: (context, node) => {
+  ["save_png"]: (context, node) => {
     context.exportConfig.export_png = true;
     context.exportConfig.chart_dpi = Number(node.config.chart_dpi ?? context.exportConfig.chart_dpi);
     context.enabledSteps.add("export");
   },
-  save_html_report: (context, node) => {
+  ["save_html_report"]: (context, node) => {
     context.exportConfig.export_html_report = true;
     context.exportConfig.include_audit = Boolean(node.config.include_audit ?? context.exportConfig.include_audit);
-    context.enabledSteps.add("export");
-  },
-  export_results: (context, node) => {
-    context.exportConfig = {
-      ...context.exportConfig,
-      ...(node.config as Partial<ExportParameters>)
-    };
     context.enabledSteps.add("export");
   }
 };

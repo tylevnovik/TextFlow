@@ -37,6 +37,8 @@ TextFlow 现在采用的是：
 
 ## 节点体系
 
+节点 catalog 由 Python registry 生成，来源是 `services/python-engine/app/workflow/nodes/*.py` 和插件目录。每个节点 definition 同时声明运行时元数据、端口、参数、默认配置、画布信息和动态 UI schema；前端不维护内置节点 schema，只解释后端 catalog。
+
 当前内置节点分为五类：
 
 - 输入节点：`corpus_input`、`dictionary_input`
@@ -45,7 +47,7 @@ TextFlow 现在采用的是：
 - 输出节点：`save_csv`、`save_xlsx`、`save_png`、`save_html_report`
 - 辅助节点：`note`、`group`
 
-旧的聚合节点 `analyze_corpus`、`export_results` 仍可被读取并在 native DAG 中执行，但它们只是 legacy workflow 兼容节点，不再是默认 starter graph 的一部分。
+节点 catalog 还会下发 `port_compatibility`。桌面端连线校验使用后端派生的 `table_sources`、`renderable_sources`、`analysis_result_sources` 和 `corpus_order`；缺少 catalog 时只允许完全相同的端口类型，避免空态误连。
 
 ## 执行方式
 
@@ -67,7 +69,6 @@ TextFlow 现在采用的是：
 - 节点状态增量同步与完成时全量状态对齐
 - result bundle 与显式 `artifact_kind` 输出口写入 run artifact store
 - `artifact_records` 索引和 preview/payload 懒加载
-- legacy 聚合节点在图运行时内兜底
 
 当前 revised-flow 主图额外覆盖：
 
@@ -100,7 +101,7 @@ TextFlow 现在采用的是：
 
 - 没连到输出节点的分支不会进入本次执行
 - 缺少必需输入的多输入节点不会进入活跃子图
-- 输出节点决定了本次真正写出哪些结果
+- 输出节点由 catalog 中的 `runtime.output_node` 标记，决定本次真正写出哪些结果
 
 ## runtime_profile
 
@@ -112,6 +113,8 @@ TextFlow 现在采用的是：
 - 写入 `params_snapshot.json`
 
 它的作用只是运行时视图，不是项目真相，也不会写回项目持久化结构。
+
+默认工作流和模板图创建节点时也使用后端 catalog 工厂，节点 label、ports、默认 config、尺寸和默认位置都来自同一份 definition。
 
 ## 运行快照与输出
 
@@ -163,13 +166,13 @@ cache/nodes/<node_id>/<cache_key>.pkl
 
 其中 `workflow_hash` 只覆盖执行相关 payload；画布 viewport、节点位置、分组、折叠等 UI 状态不会触发缓存失效。
 
-## 兼容策略
+## 当前阶段策略
 
 当前已经没有“历史流程快照读取迁移”这一层：
 
 - 项目真相只认 `workflow_definitions` 与 `active_workflow_id`
 - 残留的旧运行快照字段不再参与恢复、迁移或回填
-- legacy workflow 聚合节点是否执行，属于图节点兼容问题，不再属于项目模型兼容问题
+- 当前未发布阶段不保留旧聚合节点兼容层；内部 demo、测试和样例都应迁移到当前节点 catalog。
 
 ## 当前限制
 

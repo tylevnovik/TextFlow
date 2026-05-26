@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import enum_param, string_param, port, runtime, node_definition_from_base, passthrough_compiler
+from ._common import enum_param, string_param, port, runtime, node_definition_from_base, passthrough_compiler, field, graph, slot, ui
 from ._support import (
     _clone_corpus_rows,
     _scoped_corpus_from_inputs,
@@ -47,6 +47,12 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             previewable=True,
             output_node=False,
             parallel_safe=True,
+        ),
+        "graph": graph((340, 240), (1080, 40), toolbox_order=150),
+        "ui": ui(
+            [
+                slot("metadata_condition_builder"),
+            ],
         ),
     }
     return node_definition_from_base(base, runtime_profile, None)

@@ -4,7 +4,7 @@ from collections import defaultdict
 from copy import deepcopy
 from typing import Any
 
-from ._common import string_param, port, runtime, node_definition_from_base, passthrough_compiler
+from ._common import string_param, port, runtime, node_definition_from_base, passthrough_compiler, field, graph, slot, ui
 from ._support import (
     _active_dictionary_set,
     _set_active_dictionary_set,
@@ -35,6 +35,12 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             previewable=True,
             output_node=False,
             parallel_safe=True,
+        ),
+        "graph": graph((380, 320), (1080, 40), toolbox_order=160),
+        "ui": ui(
+            [
+                slot("overlay_rule_grid"),
+            ],
         ),
     }
     return node_definition_from_base(base, runtime_profile, None)

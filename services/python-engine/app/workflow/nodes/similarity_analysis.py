@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import analysis_passthrough_compiler, enum_param, number_param, port, runtime, string_param
+from ._common import analysis_passthrough_compiler, enum_param, number_param, port, runtime, string_param, field, graph, slot, ui
 from ._support import (
     _analysis_ops,
     _analysis_params,
@@ -39,6 +39,15 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=True,
             previewable=True,
             parallel_safe=True,
+        ),
+        "graph": graph((340, 230), (4080, 40), toolbox_order=350),
+        "ui": ui(
+            [
+                field("select", "similarity_method", "相似度算法"),
+                field("number", "min_similarity", "最小相似度", step=1),
+                field("number", "similarity_top_k", "最多文档对", step=1),
+                field("text", "feature_term_count", "特征词数量"),
+            ],
         ),
     }
 

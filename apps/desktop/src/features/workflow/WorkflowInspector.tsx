@@ -1,8 +1,11 @@
-import type { ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Button, Divider } from "@fluentui/react-components";
 import type {
   ArtifactRecord,
+  CorpusItem,
   ProjectManifest,
+  RunScopeDefinition,
+  WorkspaceSnapshot,
   WorkflowDefinition,
   WorkflowEdge,
   WorkflowNodeInstance,
@@ -10,7 +13,17 @@ import type {
 } from "@textflow/shared-types";
 import type { WorkbenchSelection } from "../../app/workbenchSelection";
 import { buildRunCommands } from "../runs/runCommands";
-import { workflowNodeDefinition } from "../../workflow";
+import { resolveWorkflowRuntimeProfile, workflowNodeDefinition } from "../../workflow";
+import { DynamicNodeEditor } from "./DynamicNodeEditor";
+import {
+  workflowNodeConfigFacts,
+  type WorkflowNodeConfigFact
+} from "./workflowNodeConfigFacts";
+import {
+  WORKFLOW_NODE_EDITOR_ACTION_EVENT,
+  type WorkflowNodeEditorAction
+} from "./workflowWorkbenchActions";
+import type { WorkflowNodeEditorContext } from "../../workflowNodeRegistry";
 
 type WorkflowInspectorSelection = Extract<
   WorkbenchSelection,
@@ -21,12 +34,18 @@ export function WorkflowInspector({
   selection,
   project,
   workflow,
-  runtimeStates
+  runtimeStates,
+  snapshot,
+  loading = false,
+  onSetActivePage
 }: {
   selection: WorkflowInspectorSelection;
   project: ProjectManifest;
   workflow: WorkflowDefinition | null | undefined;
   runtimeStates?: Record<string, WorkflowNodeRuntimeState>;
+  snapshot?: WorkspaceSnapshot;
+  loading?: boolean;
+  onSetActivePage?: (page: "dictionaries") => void;
 }) {
   if (!workflow) {
     return (
@@ -42,9 +61,13 @@ export function WorkflowInspector({
     const node = workflow.nodes.find((item) => item.node_id === selection.nodeId) ?? null;
     return (
       <WorkflowNodeInspector
-        node={node}
+        node={selection.node ?? node}
         project={project}
+        workflow={workflow}
         runtime={node ? runtimeStates?.[node.node_id] : undefined}
+        snapshot={snapshot}
+        loading={loading}
+        onSetActivePage={onSetActivePage}
       />
     );
   }
@@ -73,12 +96,43 @@ export function WorkflowInspector({
 function WorkflowNodeInspector({
   node,
   project,
-  runtime
+  workflow,
+  runtime,
+  snapshot,
+  loading,
+  onSetActivePage
 }: {
   node: WorkflowNodeInstance | null;
   project: ProjectManifest;
+  workflow: WorkflowDefinition;
   runtime?: WorkflowNodeRuntimeState;
+  snapshot?: WorkspaceSnapshot;
+  loading: boolean;
+  onSetActivePage?: (page: "dictionaries") => void;
 }) {
+  const [documentPickerQuery, setDocumentPickerQuery] = useState("");
+  const nodeDefinitionsByType = useMemo(
+    () => new Map((snapshot?.node_definitions ?? []).map((item) => [item.type, item])),
+    [snapshot?.node_definitions]
+  );
+  const draftRuntimeProfile = useMemo(
+    () => resolveWorkflowRuntimeProfile(project, workflow),
+    [project, workflow]
+  );
+  const corpus = snapshot?.corpus ?? [];
+  const availableSources = useMemo(
+    () => uniqueSorted(corpus.map((item) => item.source)),
+    [corpus]
+  );
+  const availableInstitutions = useMemo(
+    () => uniqueSorted(corpus.map((item) => item.institution)),
+    [corpus]
+  );
+  const availableCategories = useMemo(
+    () => uniqueSorted(corpus.map((item) => item.category_or_tag)),
+    [corpus]
+  );
+
   if (!node) {
     return (
       <InspectorCard
@@ -93,6 +147,96 @@ function WorkflowNodeInspector({
   const artifacts = project.artifact_records.filter((artifact) => artifact.node_id === node.node_id);
   const configKeys = Object.keys(node.config ?? {});
   const exportCommands = buildRunCommands({ loading: false, artifact: artifacts[0] }).filter((command) => command.formats);
+
+  const dispatchEditorAction = (action: WorkflowNodeEditorAction) => {
+    window.dispatchEvent(new CustomEvent<WorkflowNodeEditorAction>(WORKFLOW_NODE_EDITOR_ACTION_EVENT, {
+      detail: action
+    }));
+  };
+
+  const runScopeForNode = (item: WorkflowNodeInstance | null | undefined): RunScopeDefinition => {
+    const baseScope = normalizeRunScope(draftRuntimeProfile.run_scope);
+    if (!item || item.node_type !== "corpus_input") {
+      return baseScope;
+    }
+    return normalizeRunScope({
+      ...baseScope,
+      ...(item.config as Partial<RunScopeDefinition>)
+    });
+  };
+
+  const editorContext: WorkflowNodeEditorContext | null = snapshot ? {
+    node,
+    project,
+    snapshot: { corpus },
+    draftRuntimeProfile,
+    loading,
+    nodeDefinitionsByType,
+    availableSources,
+    availableInstitutions,
+    availableCategories,
+    documentPickerQuery,
+    setDocumentPickerQuery,
+    setActivePage: (page) => onSetActivePage?.(page),
+    bindDictionaryTableToWorkflow: (tableId) => dispatchEditorAction({
+      type: "bind_dictionary_table",
+      workflowId: workflow.workflow_id,
+      tableId
+    }),
+    runScopeForNode,
+    runScopeSummary,
+    corpusMatchesRunScope,
+    updateNodeConfig: (nodeId, patch) => dispatchEditorAction({
+      type: "update_config",
+      workflowId: workflow.workflow_id,
+      nodeId,
+      patch
+    }),
+    updateRunScope: (nodeId, patch) => dispatchEditorAction({
+      type: "update_config",
+      workflowId: workflow.workflow_id,
+      nodeId,
+      patch
+    }),
+    toggleScopeArrayValue: (nodeId, field, value) => {
+      const scope = runScopeForNode(node);
+      const values = scope[field];
+      dispatchEditorAction({
+        type: "update_config",
+        workflowId: workflow.workflow_id,
+        nodeId,
+        patch: {
+          [field]: values.includes(value)
+            ? values.filter((item) => item !== value)
+            : [...values, value]
+        }
+      });
+    },
+    toggleSelectedDocument: (nodeId, docId) => {
+      const scope = runScopeForNode(node);
+      dispatchEditorAction({
+        type: "update_config",
+        workflowId: workflow.workflow_id,
+        nodeId,
+        patch: {
+          selected_doc_ids: scope.selected_doc_ids.includes(docId)
+            ? scope.selected_doc_ids.filter((item) => item !== docId)
+            : [...scope.selected_doc_ids, docId]
+        }
+      });
+    },
+    enabledDictionaryEntryCount
+  } : null;
+  const dynamicDefinition = nodeDefinitionsByType.get(node.node_type);
+  const configFacts = workflowNodeConfigFacts({
+    node,
+    definition: dynamicDefinition,
+    runtimeProfile: draftRuntimeProfile,
+    project,
+    corpus,
+    runScope: runScopeForNode(node),
+    corpusMatchesRunScope
+  });
 
   return (
     <InspectorCard
@@ -111,11 +255,13 @@ function WorkflowNodeInspector({
         <strong>说明</strong>
         <p>{definition.description || "该节点使用当前默认执行器。"}</p>
       </div>
-      <div className="workflow-inspector-token-strip" aria-label="节点配置键">
-        {(configKeys.length ? configKeys : ["default"]).slice(0, 12).map((key) => (
-          <span key={key}>{key}</span>
-        ))}
-      </div>
+      <WorkflowNodeFactGrid facts={configFacts} />
+      {editorContext && (
+        <div className="workflow-inspector-editor">
+          <strong>配置</strong>
+          <DynamicNodeEditor context={editorContext} definition={dynamicDefinition} />
+        </div>
+      )}
       <ArtifactList artifacts={artifacts} />
       {artifacts.length > 0 && (
         <div className="run-inspector-actions" aria-label="节点产物导出动作">
@@ -139,6 +285,22 @@ function WorkflowNodeInspector({
         </div>
       )}
     </InspectorCard>
+  );
+}
+
+function WorkflowNodeFactGrid({ facts }: { facts: WorkflowNodeConfigFact[] }) {
+  if (!facts.length) {
+    return null;
+  }
+  return (
+    <div className="workflow-inspector-config-facts" aria-label="节点当前配置摘要">
+      {facts.map((fact) => (
+        <span key={`${fact.label}-${fact.value}`} className={fact.tone ? `is-${fact.tone}` : undefined}>
+          <b>{fact.label}</b>
+          <em>{fact.value}</em>
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -241,4 +403,82 @@ function runtimeStatusLabel(status: WorkflowNodeRuntimeState["status"]): string 
     default:
       return "待执行";
   }
+}
+
+function normalizeRunScope(scope: Partial<RunScopeDefinition> | undefined): RunScopeDefinition {
+  return {
+    mode: scope?.mode ?? "all_documents",
+    source_values: [...(scope?.source_values ?? [])],
+    institution_values: [...(scope?.institution_values ?? [])],
+    category_values: [...(scope?.category_values ?? [])],
+    year_from: scope?.year_from ?? null,
+    year_to: scope?.year_to ?? null,
+    selected_doc_ids: [...(scope?.selected_doc_ids ?? [])]
+  };
+}
+
+function runScopeSummary(scope: RunScopeDefinition, totalCount: number, matchedCount: number): string {
+  if (scope.mode === "selected_documents") {
+    return `已手动选择 ${scope.selected_doc_ids.length} 篇文档，当前能命中 ${matchedCount}/${totalCount} 篇。`;
+  }
+  if (scope.mode === "filtered_subset") {
+    const parts: string[] = [];
+    if (scope.source_values.length) {
+      parts.push(`来源=${scope.source_values.join("、")}`);
+    }
+    if (scope.institution_values.length) {
+      parts.push(`机构=${scope.institution_values.join("、")}`);
+    }
+    if (scope.category_values.length) {
+      parts.push(`标签=${scope.category_values.join("、")}`);
+    }
+    if (scope.year_from || scope.year_to) {
+      if (scope.year_from && scope.year_to) {
+        parts.push(`年份=${scope.year_from}-${scope.year_to}`);
+      } else if (scope.year_from) {
+        parts.push(`年份>=${scope.year_from}`);
+      } else if (scope.year_to) {
+        parts.push(`年份<=${scope.year_to}`);
+      }
+    }
+    return `按条件处理：${parts.join("；") || "尚未设置具体条件"}，当前能命中 ${matchedCount}/${totalCount} 篇。`;
+  }
+  return `处理项目里的全部资料，共 ${matchedCount}/${totalCount} 篇文档。`;
+}
+
+function corpusMatchesRunScope(item: CorpusItem, scope: RunScopeDefinition): boolean {
+  if (scope.mode === "selected_documents") {
+    return scope.selected_doc_ids.includes(item.doc_id);
+  }
+  if (scope.mode !== "filtered_subset") {
+    return true;
+  }
+  if (scope.source_values.length && !scope.source_values.includes(item.source ?? "")) {
+    return false;
+  }
+  if (scope.institution_values.length && !scope.institution_values.includes(item.institution ?? "")) {
+    return false;
+  }
+  if (scope.category_values.length && !scope.category_values.includes(item.category_or_tag ?? "")) {
+    return false;
+  }
+  if (scope.year_from && (!item.year || item.year < scope.year_from)) {
+    return false;
+  }
+  if (scope.year_to && (!item.year || item.year > scope.year_to)) {
+    return false;
+  }
+  return true;
+}
+
+function enabledDictionaryEntryCount(dictionarySet: ProjectManifest["dictionary_set"]): number {
+  return Object.values(dictionarySet.sheets).reduce(
+    (count, sheet) => count + sheet.entries.filter((entry) => entry.enabled).length,
+    0
+  );
+}
+
+function uniqueSorted(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value))))
+    .sort((left, right) => left.localeCompare(right, "zh-CN"));
 }

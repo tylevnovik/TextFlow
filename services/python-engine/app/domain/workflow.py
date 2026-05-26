@@ -87,78 +87,76 @@ def default_workflow_definition(
     name: str = "默认工作流",
     source: str = "system_default",
 ) -> dict[str, Any]:
+    from ..workflow.catalog import new_workflow_node
+
     runtime_profile_definition = deepcopy(runtime_profile if isinstance(runtime_profile, dict) else default_runtime_profile())
     enabled_steps = set(runtime_profile_definition.get("enabled_steps") or [])
     timestamp = utc_now_iso()
-    node_positions = {
-        "dictionary_input": {"x": 120, "y": 80},
-        "corpus_input": {"x": 120, "y": 330},
-        "merge_corpora": {"x": 520, "y": 330},
-        "clean_text": {"x": 900, "y": 330},
-        "normalize_text": {"x": 1280, "y": 330},
-        "tokenize": {"x": 1680, "y": 330},
-        "apply_dictionary_rules": {"x": 2060, "y": 330},
-        "filter_terms": {"x": 2460, "y": 330},
-        "frequency_statistics": {"x": 2860, "y": 80},
-        "term_document_analysis": {"x": 2860, "y": 340},
-        "term_year_analysis": {"x": 2860, "y": 600},
-        "cooccurrence_analysis": {"x": 2860, "y": 860},
-        "feature_term_selection": {"x": 2860, "y": 1120},
-        "keyword_extraction": {"x": 3240, "y": 80},
-        "keyword_clustering": {"x": 3240, "y": 340},
-        "institution_keyword_analysis": {"x": 3240, "y": 600},
-        "institution_topic_analysis": {"x": 3240, "y": 860},
-        "document_clustering": {"x": 3240, "y": 1120},
-        "save_csv": {"x": 3620, "y": 80},
-        "save_xlsx": {"x": 3620, "y": 340},
-        "save_png": {"x": 3620, "y": 600},
-        "save_html_report": {"x": 3620, "y": 860},
-    }
-    default_node_size = {"w": 230, "h": 190}
+    export_definition = deepcopy(runtime_profile_definition.get("export") or {})
+    run_scope_definition = deepcopy(runtime_profile_definition.get("run_scope") or {})
 
-    def workflow_port(
-        port_id: str,
-        port_type: str,
-        label: str,
-        *,
-        allow_multiple: bool = False,
-    ) -> dict[str, Any]:
-        payload = {
-            "port_id": port_id,
-            "port_type": port_type,
-            "label": label,
-        }
-        if allow_multiple:
-            payload["allow_multiple"] = True
-        return payload
+    def node_id_for_type(node_type: str) -> str:
+        return f"node-{node_type.replace('_', '-')}"
 
-    def workflow_node(
-        node_id: str,
-        node_type: str,
-        label: str,
-        inputs: list[dict[str, Any]],
-        outputs: list[dict[str, Any]],
-        config: dict[str, Any],
-        step_id: str,
-    ) -> dict[str, Any]:
-        return {
-            "node_id": node_id,
-            "node_type": node_type,
-            "label": label,
-            "position": deepcopy(node_positions[node_type]),
-            "size": deepcopy(default_node_size),
-            "inputs": deepcopy(inputs),
-            "outputs": deepcopy(outputs),
-            "config": deepcopy(config),
-            "ui_state": {
-                "collapsed": False,
-                "bypassed": False,
+    def make_node(node_type: str, config: dict[str, Any] | None = None) -> dict[str, Any]:
+        return new_workflow_node(
+            node_type,
+            node_id_for_type(node_type),
+            runtime_profile=runtime_profile_definition,
+            config=config,
+        )
+
+    filtered_sequence: list[str] = ["corpus_input"]
+    if "cleaning" in enabled_steps:
+        filtered_sequence.append("clean_text")
+    if "normalization" in enabled_steps:
+        filtered_sequence.append("normalize_text")
+    filtered_sequence.append("tokenize")
+    if "dictionary_application" in enabled_steps:
+        filtered_sequence.append("apply_dictionary_rules")
+    if "filtering" in enabled_steps:
+        filtered_sequence.append("filter_terms")
+
+    starter_nodes: list[dict[str, Any]] = [
+        make_node(
+            "corpus_input",
+            {
+                "resource_id": "project:corpus",
+                **run_scope_definition,
             },
-            "runtime_meta": {
-                "step_id": step_id,
-                "node_impl_version": "2.0.0",
-            },
-        }
+        ),
+        make_node("dictionary_input"),
+    ]
+
+    for node_type in filtered_sequence[1:]:
+        starter_nodes.append(make_node(node_type))
+
+    for node_type in [
+        "frequency_statistics",
+        "term_document_analysis",
+        "term_year_analysis",
+        "cooccurrence_analysis",
+        "feature_term_selection",
+        "keyword_extraction",
+        "keyword_clustering",
+        "institution_keyword_analysis",
+        "institution_topic_analysis",
+        "document_clustering",
+    ]:
+        starter_nodes.append(make_node(node_type))
+
+    if bool(export_definition.get("export_csv", True)):
+        starter_nodes.append(make_node("save_csv"))
+    if bool(export_definition.get("export_xlsx", True)):
+        starter_nodes.append(make_node("save_xlsx"))
+    if bool(export_definition.get("export_png", True)):
+        starter_nodes.append(make_node("save_png"))
+    if bool(export_definition.get("export_html_report", True)):
+        starter_nodes.append(make_node("save_html_report"))
+
+    node_by_type = {str(node["node_type"]): node for node in starter_nodes}
+    edges: list[dict[str, Any]] = []
+    edge_counter = 1
 
     def make_edge(
         edge_id: str,
@@ -175,338 +173,50 @@ def default_workflow_definition(
             "to_port": to_port,
         }
 
-    export_definition = deepcopy(runtime_profile_definition.get("export") or {})
-    run_scope_definition = deepcopy(runtime_profile_definition.get("run_scope") or {})
-
-    filtered_sequence: list[str] = ["corpus_input"]
-    if "cleaning" in enabled_steps:
-        filtered_sequence.append("clean_text")
-    if "normalization" in enabled_steps:
-        filtered_sequence.append("normalize_text")
-    filtered_sequence.append("tokenize")
-    if "dictionary_application" in enabled_steps:
-        filtered_sequence.append("apply_dictionary_rules")
-    if "filtering" in enabled_steps:
-        filtered_sequence.append("filter_terms")
-
-    starter_nodes: list[dict[str, Any]] = []
-
-    starter_nodes.append(
-        workflow_node(
-            "node-corpus-input",
-            "corpus_input",
-            "语料输入",
-            [],
-            [workflow_port("corpus", "CorpusTable", "语料")],
-            {
-                "resource_mode": "project_corpus",
-                "resource_id": "project:corpus",
-                **run_scope_definition,
-            },
-            "scope",
-        )
-    )
-    starter_nodes.append(
-        workflow_node(
-            "node-dictionary-input",
-            "dictionary_input",
-            "词表输入",
-            [],
-            [workflow_port("dictionary_set", "DictionarySet", "词表")],
-            {
-                "resource_mode": "project_dictionary",
-                "resource_id": "project:dictionary_set",
-                "use_custom_lexicon": True,
-                "use_phrase_lexicon": True,
-                "apply_regex_rules": True,
-                "apply_standard_terms": True,
-                "apply_synonym_map": True,
-                "apply_near_synonym_map": True,
-                "apply_stopwords": True,
-                "apply_exclusion_terms": True,
-            },
-            "resource",
-        )
-    )
-
-    if "clean_text" in filtered_sequence:
-        starter_nodes.append(
-            workflow_node(
-                "node-clean-text",
-                "clean_text",
-                "基础清洗",
-                [workflow_port("corpus_in", "CorpusTable", "语料输入")],
-                [workflow_port("clean_corpus", "CleanCorpus", "清洗后语料")],
-                deepcopy(runtime_profile_definition.get("cleaning") or {}),
-                "cleaning",
-            )
-        )
-    if "normalize_text" in filtered_sequence:
-        starter_nodes.append(
-            workflow_node(
-                "node-normalize-text",
-                "normalize_text",
-                "统一写法",
-                [workflow_port("corpus_in", "CleanCorpus", "清洗后语料")],
-                [workflow_port("normalized_corpus", "NormalizedCorpus", "标准化语料")],
-                deepcopy(runtime_profile_definition.get("normalization") or {}),
-                "normalization",
-            )
-        )
-    starter_nodes.append(
-        workflow_node(
-            "node-tokenize",
-            "tokenize",
-            "切词",
-            [workflow_port("corpus_in", "NormalizedCorpus", "标准化语料")],
-            [workflow_port("token_corpus", "TokenCorpus", "Token 语料")],
-            deepcopy(runtime_profile_definition.get("tokenization") or {}),
-            "tokenization",
-        )
-    )
-    if "apply_dictionary_rules" in filtered_sequence:
-        starter_nodes.append(
-            workflow_node(
-                "node-apply-dictionary-rules",
-                "apply_dictionary_rules",
-                "套用词表",
-                [
-                    workflow_port("token_corpus_in", "TokenCorpus", "Token 输入"),
-                    workflow_port("dictionary_set_in", "DictionarySet", "词表输入"),
-                ],
-                [
-                    workflow_port("token_corpus", "TokenCorpus", "规则处理后 Token"),
-                    workflow_port("audit_table", "AuditTable", "审计表"),
-                ],
-                deepcopy(runtime_profile_definition.get("dictionary") or {}),
-                "dictionary_application",
-            )
-        )
-    if "filter_terms" in filtered_sequence:
-        starter_nodes.append(
-            workflow_node(
-                "node-filter-terms",
-                "filter_terms",
-                "过滤词项",
-                [workflow_port("token_corpus_in", "TokenCorpus", "Token 输入")],
-                [workflow_port("filtered_token_corpus", "FilteredTokenCorpus", "分析词项")],
-                deepcopy(runtime_profile_definition.get("filtering") or {}),
-                "filtering",
-            )
-        )
-
-    starter_nodes.extend(
-        [
-            workflow_node(
-                "node-frequency-statistics",
-                "frequency_statistics",
-                "词频统计",
-                [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
-                [workflow_port("frequency_table", "FrequencyTable", "词频表")],
-                {"top_n": int((runtime_profile_definition.get("analysis") or {}).get("top_n", 200))},
-                "analysis",
-            ),
-            workflow_node(
-                "node-term-document-analysis",
-                "term_document_analysis",
-                "词项文档分析",
-                [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
-                [workflow_port("term_document_table", "TermDocumentTable", "词项文档表")],
-                {},
-                "analysis",
-            ),
-            workflow_node(
-                "node-term-year-analysis",
-                "term_year_analysis",
-                "词项年份分析",
-                [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
-                [workflow_port("term_year_table", "TermYearTable", "词项年份表")],
-                {},
-                "analysis",
-            ),
-            workflow_node(
-                "node-cooccurrence-analysis",
-                "cooccurrence_analysis",
-                "共现分析",
-                [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
-                [workflow_port("cooccurrence_table", "CooccurrenceTable", "共现表")],
-                {
-                    "cooccurrence_window": int((runtime_profile_definition.get("analysis") or {}).get("cooccurrence_window", 5)),
-                    "min_cooccurrence": int((runtime_profile_definition.get("analysis") or {}).get("min_cooccurrence", 2)),
-                },
-                "analysis",
-            ),
-            workflow_node(
-                "node-feature-term-selection",
-                "feature_term_selection",
-                "特征词筛选",
-                [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
-                [workflow_port("feature_term_table", "FeatureTermTable", "特征词表")],
-                {
-                    "feature_term_count": (runtime_profile_definition.get("analysis") or {}).get("feature_term_count", 1000),
-                },
-                "analysis",
-            ),
-            workflow_node(
-                "node-keyword-extraction",
-                "keyword_extraction",
-                "关键词提取",
-                [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
-                [workflow_port("keyword_table", "KeywordTable", "关键词表")],
-                {
-                    "top_k_per_doc": int((runtime_profile_definition.get("analysis") or {}).get("top_k_per_doc", 10)),
-                    "top_k_project": int((runtime_profile_definition.get("analysis") or {}).get("top_k_project", 100)),
-                },
-                "analysis",
-            ),
-            workflow_node(
-                "node-keyword-clustering",
-                "keyword_clustering",
-                "关键词聚类",
-                [workflow_port("feature_term_table_in", "FeatureTermTable", "特征词输入")],
-                [workflow_port("keyword_cluster_table", "KeywordClusterTable", "关键词聚类表")],
-                {
-                    "keyword_cluster_k": int((runtime_profile_definition.get("analysis") or {}).get("keyword_cluster_k", 4)),
-                    "topic_model_k": int((runtime_profile_definition.get("analysis") or {}).get("topic_model_k", 4)),
-                },
-                "analysis",
-            ),
-            workflow_node(
-                "node-institution-keyword-analysis",
-                "institution_keyword_analysis",
-                "机构关键词分析",
-                [workflow_port("keyword_table_in", "KeywordTable", "关键词输入")],
-                [workflow_port("institution_keyword_table", "InstitutionKeywordTable", "机构关键词表")],
-                {},
-                "analysis",
-            ),
-            workflow_node(
-                "node-institution-topic-analysis",
-                "institution_topic_analysis",
-                "机构主题分析",
-                [workflow_port("keyword_cluster_table_in", "KeywordClusterTable", "主题输入")],
-                [workflow_port("institution_topic_table", "InstitutionTopicTable", "机构主题表")],
-                {
-                    "topic_model_k": int((runtime_profile_definition.get("analysis") or {}).get("topic_model_k", 4)),
-                },
-                "analysis",
-            ),
-            workflow_node(
-                "node-document-clustering",
-                "document_clustering",
-                "文档聚类",
-                [workflow_port("token_corpus_in", "FilteredTokenCorpus", "分析词项")],
-                [workflow_port("document_cluster_table", "DocumentClusterTable", "文档聚类表")],
-                {
-                    "document_cluster_k": int((runtime_profile_definition.get("analysis") or {}).get("document_cluster_k", 4)),
-                },
-                "analysis",
-            ),
-        ]
-    )
-
-    if bool(export_definition.get("export_csv", True)):
-        starter_nodes.append(
-            workflow_node(
-                "node-save-csv",
-                "save_csv",
-                "保存 CSV",
-                [workflow_port("table_in", "AnyTable", "表格输入", allow_multiple=True)],
-                [workflow_port("artifact", "ExportArtifact", "导出产物")],
-                {"file_prefix": "tables", "export_csv": True},
-                "export",
-            )
-        )
-    if bool(export_definition.get("export_xlsx", True)):
-        starter_nodes.append(
-            workflow_node(
-                "node-save-xlsx",
-                "save_xlsx",
-                "保存 XLSX",
-                [workflow_port("table_in", "AnyTable", "表格输入", allow_multiple=True)],
-                [workflow_port("artifact", "ExportArtifact", "导出产物")],
-                {"file_prefix": "tables", "export_xlsx": True},
-                "export",
-            )
-        )
-    if bool(export_definition.get("export_png", True)):
-        starter_nodes.append(
-            workflow_node(
-                "node-save-png",
-                "save_png",
-                "保存 PNG",
-                [workflow_port("render_in", "AnyRenderable", "图像输入", allow_multiple=True)],
-                [workflow_port("artifact", "ExportArtifact", "导出产物")],
-                {
-                    "file_prefix": "charts",
-                    "chart_dpi": int(export_definition.get("chart_dpi", 320)),
-                },
-                "export",
-            )
-        )
-    if bool(export_definition.get("export_html_report", True)):
-        starter_nodes.append(
-            workflow_node(
-                "node-save-html-report",
-                "save_html_report",
-                "保存 HTML 报告",
-                [workflow_port("report_in", "AnyAnalysisResult", "报告输入", allow_multiple=True)],
-                [workflow_port("artifact", "ExportArtifact", "导出产物")],
-                {
-                    "file_prefix": "report",
-                    "include_audit": bool(export_definition.get("include_audit", True)),
-                },
-                "export",
-            )
-        )
-
-    node_by_type = {
-        str(node["node_type"]): node
-        for node in starter_nodes
-    }
-
     def single_output_port(node_type: str) -> str | None:
         node = node_by_type.get(node_type)
-        if not isinstance(node, dict):
-            return None
-        outputs = node.get("outputs")
+        outputs = node.get("outputs") if isinstance(node, dict) else []
         if not isinstance(outputs, list) or not outputs:
             return None
         first_port = outputs[0]
         return str(first_port.get("port_id") or "") if isinstance(first_port, dict) else None
 
-    edges: list[dict[str, Any]] = []
-    edge_counter = 1
-
-    for from_type, to_type in zip(filtered_sequence, filtered_sequence[1:]):
+    def add_edge(from_type: str, from_port: str, to_type: str, to_port: str) -> None:
+        nonlocal edge_counter
         from_node = node_by_type.get(from_type)
         to_node = node_by_type.get(to_type)
-        from_port = single_output_port(from_type)
-        to_port = str((to_node.get("inputs") or [{}])[0].get("port_id") or "") if isinstance(to_node, dict) else ""
-        if from_node and to_node and from_port and to_port:
-            edges.append(make_edge(f"edge-{edge_counter}", str(from_node["node_id"]), from_port, str(to_node["node_id"]), to_port))
-            edge_counter += 1
-
-    dictionary_node = node_by_type.get("dictionary_input")
-    dictionary_apply_node = node_by_type.get("apply_dictionary_rules")
-    if dictionary_node and dictionary_apply_node:
+        if not from_node or not to_node:
+            return
+        if workflow_find_port(from_node, from_port, "outputs") is None:
+            raise ValueError(f"Default workflow edge references missing output port: {from_type}.{from_port}")
+        if workflow_find_port(to_node, to_port, "inputs") is None:
+            raise ValueError(f"Default workflow edge references missing input port: {to_type}.{to_port}")
         edges.append(
             make_edge(
                 f"edge-{edge_counter}",
-                str(dictionary_node["node_id"]),
-                "dictionary_set",
-                str(dictionary_apply_node["node_id"]),
-                "dictionary_set_in",
+                str(from_node["node_id"]),
+                from_port,
+                str(to_node["node_id"]),
+                to_port,
             )
         )
         edge_counter += 1
 
-    last_process_node = None
-    for node_type in ["filter_terms", "apply_dictionary_rules", "tokenize", "normalize_text", "clean_text", "corpus_input"]:
-        candidate = node_by_type.get(node_type)
-        if candidate:
-            last_process_node = candidate
-            break
+    for from_type, to_type in zip(filtered_sequence, filtered_sequence[1:]):
+        from_port = single_output_port(from_type)
+        to_node = node_by_type.get(to_type)
+        inputs = to_node.get("inputs") if isinstance(to_node, dict) else []
+        to_port = str(inputs[0].get("port_id") or "") if isinstance(inputs, list) and inputs and isinstance(inputs[0], dict) else ""
+        if from_port and to_port:
+            add_edge(from_type, from_port, to_type, to_port)
+
+    if "dictionary_input" in node_by_type and "apply_dictionary_rules" in node_by_type:
+        add_edge("dictionary_input", "dictionary_set", "apply_dictionary_rules", "dictionary_set_in")
+
+    last_process_type = next(
+        (node_type for node_type in ["filter_terms", "apply_dictionary_rules", "tokenize", "normalize_text", "clean_text", "corpus_input"] if node_type in node_by_type),
+        None,
+    )
 
     for analysis_type in [
         "frequency_statistics",
@@ -520,65 +230,24 @@ def default_workflow_definition(
         "institution_topic_analysis",
         "document_clustering",
     ]:
-        analysis_node = node_by_type.get(analysis_type)
-        if not analysis_node:
+        if analysis_type not in node_by_type:
             continue
         if analysis_type == "keyword_clustering":
-            feature_term_node = node_by_type.get("feature_term_selection")
-            if feature_term_node:
-                edges.append(
-                    make_edge(
-                        f"edge-{edge_counter}",
-                        str(feature_term_node["node_id"]),
-                        "feature_term_table",
-                        str(analysis_node["node_id"]),
-                        "feature_term_table_in",
-                    )
-                )
-                edge_counter += 1
+            add_edge("feature_term_selection", "feature_term_table", analysis_type, "feature_term_table_in")
             continue
         if analysis_type == "institution_keyword_analysis":
-            keyword_node = node_by_type.get("keyword_extraction")
-            if keyword_node:
-                edges.append(
-                    make_edge(
-                        f"edge-{edge_counter}",
-                        str(keyword_node["node_id"]),
-                        "keyword_table",
-                        str(analysis_node["node_id"]),
-                        "keyword_table_in",
-                    )
-                )
-                edge_counter += 1
+            add_edge("keyword_extraction", "keyword_table", analysis_type, "keyword_table_in")
             continue
         if analysis_type == "institution_topic_analysis":
-            cluster_node = node_by_type.get("keyword_clustering")
-            if cluster_node:
-                edges.append(
-                    make_edge(
-                        f"edge-{edge_counter}",
-                        str(cluster_node["node_id"]),
-                        "keyword_cluster_table",
-                        str(analysis_node["node_id"]),
-                        "keyword_cluster_table_in",
-                    )
-                )
-                edge_counter += 1
+            add_edge("keyword_clustering", "keyword_cluster_table", analysis_type, "keyword_cluster_table_in")
             continue
-        if last_process_node:
-            from_port = str(((last_process_node.get("outputs") or [{}])[0]).get("port_id") or "")
-            to_port = str(((analysis_node.get("inputs") or [{}])[0]).get("port_id") or "")
+        if last_process_type:
+            from_port = single_output_port(last_process_type)
+            to_node = node_by_type[analysis_type]
+            inputs = to_node.get("inputs") if isinstance(to_node, dict) else []
+            to_port = str(inputs[0].get("port_id") or "") if isinstance(inputs, list) and inputs and isinstance(inputs[0], dict) else ""
             if from_port and to_port:
-                edges.append(
-                    make_edge(
-                        f"edge-{edge_counter}",
-                        str(last_process_node["node_id"]),
-                        from_port,
-                        str(analysis_node["node_id"]),
-                        to_port,
-                    )
-                )
-                edge_counter += 1
+                add_edge(last_process_type, from_port, analysis_type, to_port)
 
     sink_mappings = {
         "save_csv": [
@@ -628,37 +297,16 @@ def default_workflow_definition(
 
     for sink_type, source_types in sink_mappings.items():
         sink_node = node_by_type.get(sink_type)
-        if not sink_node:
-            continue
-        sink_port = str(((sink_node.get("inputs") or [{}])[0]).get("port_id") or "")
+        inputs = sink_node.get("inputs") if isinstance(sink_node, dict) else []
+        sink_port = str(inputs[0].get("port_id") or "") if isinstance(inputs, list) and inputs and isinstance(inputs[0], dict) else ""
         if not sink_port:
             continue
         for source_type in source_types:
-            source_node = node_by_type.get(source_type)
             from_port = single_output_port(source_type)
-            if not source_node or not from_port:
-                continue
-            edges.append(
-                make_edge(
-                    f"edge-{edge_counter}",
-                    str(source_node["node_id"]),
-                    from_port,
-                    str(sink_node["node_id"]),
-                    sink_port,
-                )
-            )
-            edge_counter += 1
-        if sink_type == "save_html_report" and dictionary_apply_node:
-            edges.append(
-                make_edge(
-                    f"edge-{edge_counter}",
-                    str(dictionary_apply_node["node_id"]),
-                    "audit_table",
-                    str(sink_node["node_id"]),
-                    sink_port,
-                )
-            )
-            edge_counter += 1
+            if source_type in node_by_type and from_port:
+                add_edge(source_type, from_port, sink_type, sink_port)
+        if sink_type == "save_html_report" and "apply_dictionary_rules" in node_by_type:
+            add_edge("apply_dictionary_rules", "audit_table", sink_type, sink_port)
 
     return {
         "workflow_id": workflow_id,
@@ -681,7 +329,6 @@ def default_workflow_definition(
         "created_at": timestamp,
         "updated_at": timestamp,
     }
-
 
 def workflow_port_compatible(source_type: str, target_type: str) -> bool:
     if source_type == target_type:
@@ -716,10 +363,9 @@ def workflow_port_compatible(source_type: str, target_type: str) -> bool:
         "DocumentClusterTable",
         "KeywordClusterTable",
         "InstitutionTopicTable",
-        "AnalysisBundle",
         "AnyTable",
     }
-    analysis_result_types = set(table_source_types) | {"AnalysisBundle", "AnyTable"}
+    analysis_result_types = set(table_source_types) | {"AnyTable"}
     if target_type == "AnyTable" and source_type in table_source_types:
         return True
     if target_type == "AnyRenderable" and source_type in renderable_source_types:
@@ -863,7 +509,7 @@ def workflow_active_node_ids_from_sinks(
     edges: list[dict[str, Any]],
     reachable_node_ids: set[str],
 ) -> set[str]:
-    sink_node_types = {"save_csv", "save_xlsx", "save_png", "save_html_report", "export_results"}
+    sink_node_types = {"save_csv", "save_xlsx", "save_png", "save_html_report"}
     incoming_by_key: dict[str, list[dict[str, Any]]] = {}
     node_lookup = {str(node.get("node_id") or ""): node for node in nodes if isinstance(node, dict)}
     for edge in edges:

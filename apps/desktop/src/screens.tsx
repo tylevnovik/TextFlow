@@ -45,8 +45,12 @@ import type {
   RegisteredWorkflowNodeDefinition,
   ResultBundle,
   RunScopeDefinition,
+  WorkflowNodeLayoutWidget,
+  WorkflowNodeParamDefinition,
+  WorkflowNodeParamOption,
   WorkflowDefinition,
   WorkflowNodeInstance,
+  WorkflowNodeType,
   WorkflowNodeRuntimeState,
   WorkflowRunProgressDetail,
   WorkflowPortType
@@ -58,8 +62,16 @@ import { CorpusWorkspace } from "./features/corpus/CorpusWorkspace";
 import { LexiconWorkspace } from "./features/lexicon/LexiconWorkspace";
 import { WorkflowWorkspace } from "./features/workflow/WorkflowWorkspace";
 import {
+  workflowNodeConfigFacts,
+  type WorkflowNodeConfigFact
+} from "./features/workflow/workflowNodeConfigFacts";
+import { workflowConditionVisible } from "./features/workflow/workflowLayoutConditions";
+import { workflowSlotHandledConfigKeys } from "./features/workflow/workflowSlots";
+import {
+  WORKFLOW_NODE_EDITOR_ACTION_EVENT,
   WORKFLOW_NODE_TYPE_MIME,
   WORKFLOW_WORKBENCH_ACTION_EVENT,
+  type WorkflowNodeEditorAction,
   type WorkflowWorkbenchAction
 } from "./features/workflow/workflowWorkbenchActions";
 import { ReportPreviewPage } from "./features/runs/ReportPreviewPage";
@@ -106,8 +118,7 @@ import {
   Table,
 } from "./ui";
 import type { DocumentPreviewMode } from "./ui";
-import { renderWorkflowNodeInlineEditor, renderWorkflowNodePreview } from "./workflowNodeRegistry";
-import { builtinWorkflowToolboxDefinitions } from "./workflowNodeCatalog";
+import { workflowToolboxDefinitions } from "./workflowNodeCatalog";
 
 const mappingTargetOptions: FieldMappingRule["target_field"][] = [
   "doc_id",
@@ -156,16 +167,6 @@ const normalizationToggleItems = [
   ["normalize_time_expr", "时间表达归一"],
   ["apply_regex_rules", "应用 Regex 规则"]
 ] as const;
-const tokenizationToggleItems = [
-  ["use_custom_lexicon", "使用自定义词典"],
-  ["use_phrase_lexicon", "使用短语词典"],
-  ["preserve_domain_phrases", "保留领域短语"],
-  ["split_hyphenated_terms", "拆分连字符"],
-  ["split_slash_terms", "拆分斜杠词"],
-  ["normalize_camel_case", "拆分 camelCase"],
-  ["keep_original_order", "保留原始顺序"],
-  ["enable_ngrams", "生成 n-gram"]
-] as const;
 const dictionaryToggleItems = [
   ["apply_standard_terms", "应用标准词"],
   ["apply_synonym_map", "应用同义词"],
@@ -173,49 +174,6 @@ const dictionaryToggleItems = [
   ["apply_stopwords", "应用停用词"],
   ["apply_exclusion_terms", "应用排除词"]
 ] as const;
-const filteringToggleItems = [
-  ["filter_numeric_tokens", "过滤纯数字词"],
-  ["keep_single_char_important_terms", "保留重要单字词"],
-  ["filter_by_pos", "尝试按词性过滤"]
-] as const;
-const exportToggleItems = [
-  ["export_csv", "导出 CSV"],
-  ["export_xlsx", "导出 XLSX"],
-  ["export_png", "导出 PNG"],
-  ["export_html_report", "导出 HTML 报告"],
-  ["include_audit", "导出审计表"]
-] as const;
-const analysisMethodCards = [
-  {
-    title: "TF-IDF 特征词",
-    output: "影响：特征词、关键词聚类、后续主题建模底稿",
-    description: "先用 TF-IDF 找出更值得关注的词，避免常见虚词把后续结果冲淡。",
-    params: ["特征词数量"]
-  },
-  {
-    title: "YAKE 关键词",
-    output: "影响：每篇文档关键词、项目级关键词",
-    description: "再从每篇文档提炼更像“人会拿来做标签”的关键词，而不只是高频词。",
-    params: ["每篇文档关键词数", "项目级关键词数"]
-  },
-  {
-    title: "NMF / LDA 主题",
-    output: "影响：机构 × 主题、主题标签摘要",
-    description: "把一组经常共同出现的词归成主题，用来概括机构、年份或来源的关注方向。",
-    params: ["主题算法", "主题数量"]
-  },
-  {
-    title: "共现、相似度与聚类",
-    output: "影响：共现表、相似度表、关键词聚类、文档聚类图",
-    description: "用窗口共现、文档相似度和聚类把词与文档的关联结构展示出来，方便找热点和分组。",
-    params: ["共现窗口", "最小共现次数", "最小相似度", "关键词聚类数", "文档聚类数"]
-  }
-] as const;
-const runScopeModeOptions: Array<{ id: RunScopeDefinition["mode"]; title: string; description: string }> = [
-  { id: "all_documents", title: "全部资料", description: "直接处理项目里的全部文档，适合第一次跑通全流程。" },
-  { id: "filtered_subset", title: "按条件筛选", description: "只处理符合来源、年份、机构或标签条件的一部分资料。" },
-  { id: "selected_documents", title: "手动点选文档", description: "从项目语料里勾选少量文档做试跑或抽样检查。" }
-];
 const recipeCards: Array<{
   id: WorkflowRecipeId;
   title: string;
@@ -468,6 +426,49 @@ function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function dataTransferTypes(dataTransfer: DataTransfer): string[] {
+  return Array.from(dataTransfer.types ?? []);
+}
+
+function dataTransferHasType(dataTransfer: DataTransfer, type: string): boolean {
+  return dataTransferTypes(dataTransfer).includes(type);
+}
+
+function dataTransferText(dataTransfer: DataTransfer, type: string): string {
+  try {
+    return dataTransfer.getData(type);
+  } catch {
+    return "";
+  }
+}
+
+function droppedWorkbenchSelection(dataTransfer: DataTransfer): WorkbenchSelection | null {
+  const payload = dataTransferText(dataTransfer, WORKBENCH_SELECTION_MIME);
+  return payload ? parseWorkbenchSelectionPayload(payload) : null;
+}
+
+function droppedWorkflowNodeType(
+  dataTransfer: DataTransfer,
+  toolboxDefinitions: RegisteredWorkflowNodeDefinition[],
+  toolNodeTypes: Set<WorkflowNodeInstance["node_type"]>
+): WorkflowNodeInstance["node_type"] | "" {
+  const explicitNodeType = dataTransferText(dataTransfer, WORKFLOW_NODE_TYPE_MIME).trim() as WorkflowNodeInstance["node_type"] | "";
+  if (explicitNodeType && toolNodeTypes.has(explicitNodeType)) {
+    return explicitNodeType;
+  }
+
+  const selection = droppedWorkbenchSelection(dataTransfer);
+  if (selection?.kind === "workflow_library" && toolNodeTypes.has(selection.nodeType)) {
+    return selection.nodeType;
+  }
+
+  const plainText = dataTransferText(dataTransfer, "text/plain").trim();
+  if (plainText && toolNodeTypes.has(plainText as WorkflowNodeInstance["node_type"])) {
+    return plainText as WorkflowNodeInstance["node_type"];
+  }
+  return toolboxDefinitions.find((definition) => definition.title === plainText)?.type ?? "";
+}
+
 function projectRuntimeProfile(
   project: ProjectManifest | null | undefined,
   workflow?: WorkflowDefinition | null
@@ -543,25 +544,25 @@ function cloneDictionaryCollectionsForDraft(dictionarySet: DictionarySet): Recor
       return;
     }
 
-    const legacySheet = dictionarySet.sheets?.[kind];
+    const sheetSnapshot = dictionarySet.sheets?.[kind];
     collections[kind] = {
       kind,
-      name: legacySheet?.name || dictionaryCollectionMeta[kind].name,
+      name: sheetSnapshot?.name || dictionaryCollectionMeta[kind].name,
       description: dictionaryCollectionMeta[kind].description,
       tables: [
         {
           id: `${kind}-project-custom`,
           kind,
           name: "项目自定义",
-          version: legacySheet?.version || "2.0.0",
-          description: "从旧版单表结构自动迁移的项目内词表资源。",
+          version: sheetSnapshot?.version || "2.0.0",
+          description: "从单表结构整理而来的项目内词表资源。",
           source_url: undefined,
           built_in: false,
           editable: true,
           enabled: true,
           tags: [],
-          entries: (legacySheet?.entries ?? []).map((entry, entryIndex) =>
-            cloneDictionaryEntry(entry, `${kind}-legacy-${entryIndex}`)
+          entries: (sheetSnapshot?.entries ?? []).map((entry, entryIndex) =>
+            cloneDictionaryEntry(entry, `${kind}-sheet-${entryIndex}`)
           )
         }
       ]
@@ -789,23 +790,6 @@ function applyOutputBundlePreset(runtimeProfile: WorkflowRuntimeProfile, bundleI
   return normalizeRuntimeProfileDraft(next);
 }
 
-function outputBundleSummary(exportParams: WorkflowRuntimeProfile["export"]): string {
-  const labels: string[] = [];
-  if (exportParams.export_csv || exportParams.export_xlsx) {
-    labels.push("表格包");
-  }
-  if (exportParams.export_png) {
-    labels.push("图表包");
-  }
-  if (exportParams.export_html_report) {
-    labels.push("HTML 报告");
-  }
-  if (exportParams.include_audit) {
-    labels.push("审计表");
-  }
-  return labels.join("、") || "仅运行快照";
-}
-
 function workflowNodeDescription(node: WorkflowNodeInstance): string {
   return workflowNodeDescriptionForType(node.node_type);
 }
@@ -814,8 +798,26 @@ function countEnabledFlags(values: Record<string, unknown>, keys: readonly (read
   return keys.reduce((count, [key]) => count + (values[key] ? 1 : 0), 0);
 }
 
-function workflowNodeSummary(node: WorkflowNodeInstance, runtimeProfile: WorkflowRuntimeProfile, runSummary: string): string {
+function renderSummaryTemplate(template: string, config: Record<string, unknown>): string {
+  return template.replace(/\{([^}]+)\}/g, (_match, key: string) => {
+    const value = config[key.trim()];
+    return value === null || value === undefined ? "" : String(value);
+  });
+}
+
+function workflowNodeSummary(
+  node: WorkflowNodeInstance,
+  runtimeProfile: WorkflowRuntimeProfile,
+  runSummary: string,
+  definition?: RegisteredWorkflowNodeDefinition
+): string {
   const config = node.config ?? {};
+  if (definition?.ui?.summary_template) {
+    const summary = renderSummaryTemplate(definition.ui.summary_template, config).trim();
+    if (summary) {
+      return summary;
+    }
+  }
   switch (node.node_type) {
     case "corpus_input":
       if (config.mode === "selected_documents") {
@@ -867,18 +869,14 @@ function workflowNodeSummary(node: WorkflowNodeInstance, runtimeProfile: Workflo
       return String(config.text ?? "画布备注");
     case "group":
       return String(config.title ?? "分组容器");
-    case "load_project_corpus":
-      return "旧版项目语料入口";
-    case "filter_corpus":
-      return runSummary;
-    case "project_dictionary_set":
-      return "旧版项目词表入口";
-    case "analyze_corpus":
-      return `Top ${runtimeProfile.analysis.top_n} · 主题 ${runtimeProfile.analysis.topic_model_k} · 聚类 ${runtimeProfile.analysis.keyword_cluster_k}`;
-    case "export_results":
-      return outputBundleSummary(runtimeProfile.export);
     default:
-      return "等待配置";
+      if (definition?.params.length === 0) {
+        return "无需配置，运行后产出结果";
+      }
+      if (definition?.params.length) {
+        return `${definition.params.length} 个可调参数`;
+      }
+      return "使用默认配置";
   }
 }
 
@@ -892,20 +890,451 @@ function workflowNodeBadge(node: WorkflowNodeInstance, validation?: WorkflowVali
   if (node.ui_state.bypassed) {
     return "已跳过";
   }
-  if (node.node_type === "corpus_input" || node.node_type === "dictionary_input" || node.node_type === "load_project_corpus" || node.node_type === "project_dictionary_set") {
+  if (node.node_type === "corpus_input" || node.node_type === "dictionary_input") {
     return "输入";
   }
   if (node.node_type === "merge_corpora") {
     return "合并";
   }
-  if (node.node_type === "save_csv" || node.node_type === "save_xlsx" || node.node_type === "save_png" || node.node_type === "save_html_report" || node.node_type === "export_results") {
+  if (node.node_type === "save_csv" || node.node_type === "save_xlsx" || node.node_type === "save_png" || node.node_type === "save_html_report") {
     return "输出";
   }
   const stepId = workflowNodeStepId(node);
   if (!stepId) {
-    return node.node_type === "filter_corpus" ? "范围" : "辅助";
+    return "辅助";
   }
   return stepId === "analysis" ? "分析" : "处理";
+}
+
+function WorkflowNodeFactStrip({ facts }: { facts: WorkflowNodeConfigFact[] }) {
+  if (!facts.length) {
+    return null;
+  }
+  return (
+    <div className="workflow-node-card-facts" aria-label="当前节点配置">
+      {facts.slice(0, 3).map((fact) => (
+        <span key={`${fact.label}-${fact.value}`} className={fact.tone ? `is-${fact.tone}` : undefined}>
+          <b>{fact.label}</b>
+          <em>{fact.value}</em>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+type WorkflowInlineConfigKind = "boolean" | "number" | "string" | "enum";
+
+interface WorkflowInlineConfigField {
+  configKey: string;
+  label: string;
+  kind: WorkflowInlineConfigKind;
+  value: unknown;
+  options?: WorkflowNodeParamOption[];
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
+const workflowNodeInlineFallbackConfigKeys: Partial<Record<WorkflowNodeType, readonly string[]>> = {
+  tokenize: ["language_mode", "min_token_length_before_filter", "enable_ngrams"],
+  filter_terms: ["min_token_length", "min_term_frequency", "filter_numeric_tokens"],
+  frequency_statistics: ["top_n"],
+  feature_term_selection: ["feature_term_count"],
+  cooccurrence_analysis: ["cooccurrence_window", "min_cooccurrence"],
+  keyword_extraction: ["top_k_per_doc", "top_k_project"],
+  keyword_clustering: ["keyword_cluster_k", "topic_model_k"],
+  topic_modeling: ["topic_algorithm", "topic_model_k"],
+  similarity_analysis: ["min_similarity", "similarity_top_k"],
+  save_csv: ["table_key", "file_prefix"],
+  save_xlsx: ["table_key", "file_prefix"],
+  save_png: ["chart_key", "chart_dpi"],
+  save_html_report: ["file_prefix", "include_audit"]
+};
+
+const workflowNodeDynamicGrowthSlotIds = new Set([
+  "corpus_scope_selector",
+  "dictionary_table_selector",
+  "metadata_condition_builder",
+  "review_task_selector"
+]);
+
+const workflowInlineConfigFallbacks: Record<string, {
+  label: string;
+  kind: WorkflowInlineConfigKind;
+  options?: WorkflowNodeParamOption[];
+  min?: number;
+  max?: number;
+  step?: number;
+}> = {
+  language_mode: {
+    label: "语言",
+    kind: "enum",
+    options: [
+      { value: "mixed", label: "中英混合" },
+      { value: "zh", label: "中文" },
+      { value: "en", label: "英文" }
+    ]
+  },
+  min_token_length_before_filter: { label: "词长", kind: "number", min: 1, step: 1 },
+  enable_ngrams: { label: "n-gram", kind: "boolean" },
+  min_token_length: { label: "词长", kind: "number", min: 1, step: 1 },
+  min_term_frequency: { label: "词频", kind: "number", min: 1, step: 1 },
+  filter_numeric_tokens: { label: "数字词", kind: "boolean" },
+  top_n: { label: "Top N", kind: "number", min: 1, step: 10 },
+  feature_term_count: { label: "特征数", kind: "number", min: 1, step: 50 },
+  cooccurrence_window: { label: "窗口", kind: "number", min: 1, step: 1 },
+  min_cooccurrence: { label: "最小共现", kind: "number", min: 1, step: 1 },
+  top_k_per_doc: { label: "文档 Top", kind: "number", min: 1, step: 1 },
+  top_k_project: { label: "项目 Top", kind: "number", min: 1, step: 10 },
+  keyword_cluster_k: { label: "聚类", kind: "number", min: 1, step: 1 },
+  topic_algorithm: {
+    label: "算法",
+    kind: "enum",
+    options: [
+      { value: "nmf", label: "NMF" },
+      { value: "lda", label: "LDA" }
+    ]
+  },
+  topic_model_k: { label: "主题", kind: "number", min: 1, step: 1 },
+  min_similarity: { label: "阈值", kind: "number", min: 0, max: 1, step: 0.05 },
+  similarity_top_k: { label: "Top K", kind: "number", min: 1, step: 10 },
+  table_key: { label: "表", kind: "enum" },
+  chart_key: { label: "图表", kind: "enum" },
+  chart_dpi: { label: "DPI", kind: "number", min: 72, step: 40 },
+  file_prefix: { label: "前缀", kind: "string" },
+  include_audit: { label: "审计", kind: "boolean" }
+};
+
+function workflowInlineEffectiveConfig(
+  node: WorkflowNodeInstance,
+  definition: RegisteredWorkflowNodeDefinition | undefined,
+  runtimeProfile: WorkflowRuntimeProfile
+): Record<string, unknown> {
+  const effectiveConfig: Record<string, unknown> = {};
+  for (const [configKey] of Object.entries(workflowInlineConfigFallbacks)) {
+    effectiveConfig[configKey] = workflowInlineFallbackValue(node, configKey, runtimeProfile);
+  }
+  for (const param of definition?.params ?? []) {
+    if (param.default_value !== undefined) {
+      effectiveConfig[param.param_id] = param.default_value;
+    }
+  }
+  return { ...effectiveConfig, ...(node.config ?? {}) };
+}
+
+function workflowInlineParam(
+  definition: RegisteredWorkflowNodeDefinition | undefined,
+  configKey: string
+): WorkflowNodeParamDefinition | undefined {
+  return definition?.params.find((param) => param.param_id === configKey);
+}
+
+function workflowInlineFallbackValue(
+  node: WorkflowNodeInstance,
+  configKey: string,
+  runtimeProfile: WorkflowRuntimeProfile
+): unknown {
+  switch (configKey) {
+    case "language_mode":
+      return runtimeProfile.tokenization.language_mode;
+    case "min_token_length_before_filter":
+      return runtimeProfile.tokenization.min_token_length_before_filter;
+    case "enable_ngrams":
+      return runtimeProfile.tokenization.enable_ngrams;
+    case "min_token_length":
+      return runtimeProfile.filtering.min_token_length;
+    case "min_term_frequency":
+      return runtimeProfile.filtering.min_term_frequency;
+    case "filter_numeric_tokens":
+      return runtimeProfile.filtering.filter_numeric_tokens;
+    case "top_n":
+      return runtimeProfile.analysis.top_n;
+    case "feature_term_count":
+      return runtimeProfile.analysis.feature_term_count;
+    case "cooccurrence_window":
+      return runtimeProfile.analysis.cooccurrence_window;
+    case "min_cooccurrence":
+      return runtimeProfile.analysis.min_cooccurrence;
+    case "top_k_per_doc":
+      return runtimeProfile.analysis.top_k_per_doc;
+    case "top_k_project":
+      return runtimeProfile.analysis.top_k_project;
+    case "keyword_cluster_k":
+      return runtimeProfile.analysis.keyword_cluster_k;
+    case "topic_algorithm":
+      return runtimeProfile.analysis.topic_algorithm;
+    case "topic_model_k":
+      return runtimeProfile.analysis.topic_model_k;
+    case "min_similarity":
+      return runtimeProfile.analysis.min_similarity;
+    case "similarity_top_k":
+      return runtimeProfile.analysis.similarity_top_k;
+    case "table_key":
+      return "frequency_table";
+    case "chart_key":
+      return "frequency_top_terms";
+    case "chart_dpi":
+      return runtimeProfile.export.chart_dpi;
+    case "file_prefix":
+      return node.node_type === "save_html_report" ? "report" : node.node_type === "save_xlsx" ? "workbook" : "tables";
+    case "include_audit":
+      return runtimeProfile.export.include_audit;
+    default:
+      return "";
+  }
+}
+
+function workflowInlineHandledConfigKeys(widgets: WorkflowNodeLayoutWidget[] | undefined): Set<string> {
+  const keys = new Set<string>();
+  for (const widget of widgets ?? []) {
+    if (widget.config_key) {
+      keys.add(widget.config_key);
+    }
+    if (widget.widget === "slot" && widget.component_id) {
+      for (const key of workflowSlotHandledConfigKeys[widget.component_id] ?? []) {
+        keys.add(key);
+      }
+    }
+    for (const key of workflowInlineHandledConfigKeys(widget.children)) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function workflowInlineParamKeysForSlot(
+  definition: RegisteredWorkflowNodeDefinition | undefined,
+  componentId: string
+): string[] {
+  const handledKeys = new Set(workflowSlotHandledConfigKeys[componentId] ?? []);
+  const paramKeys = (definition?.params ?? [])
+    .filter((param) => handledKeys.has(param.param_id))
+    .map((param) => param.param_id);
+  return paramKeys.length ? paramKeys : [...handledKeys];
+}
+
+function workflowInlineLayoutHasDynamicGrowth(
+  widgets: WorkflowNodeLayoutWidget[] | undefined,
+  effectiveConfig: Record<string, unknown>
+): boolean {
+  for (const widget of widgets ?? []) {
+    if (!workflowConditionVisible(widget.condition, effectiveConfig)) {
+      continue;
+    }
+    if (widget.widget === "slot" && widget.component_id && workflowNodeDynamicGrowthSlotIds.has(widget.component_id)) {
+      return true;
+    }
+    if (workflowInlineLayoutHasDynamicGrowth(widget.children, effectiveConfig)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function workflowInlineCollectLayoutConfigKeys({
+  widgets,
+  definition,
+  effectiveConfig,
+  keys
+}: {
+  widgets: WorkflowNodeLayoutWidget[] | undefined;
+  definition: RegisteredWorkflowNodeDefinition | undefined;
+  effectiveConfig: Record<string, unknown>;
+  keys: string[];
+}) {
+  const addKey = (key: string | undefined) => {
+    if (key && !keys.includes(key)) {
+      keys.push(key);
+    }
+  };
+
+  for (const widget of widgets ?? []) {
+    if (!workflowConditionVisible(widget.condition, effectiveConfig)) {
+      continue;
+    }
+    if (widget.widget === "slot" && widget.component_id) {
+      workflowInlineParamKeysForSlot(definition, widget.component_id).forEach(addKey);
+      continue;
+    }
+    addKey(widget.config_key);
+    workflowInlineCollectLayoutConfigKeys({
+      widgets: widget.children,
+      definition,
+      effectiveConfig,
+      keys
+    });
+  }
+}
+
+function workflowInlineConfigKeysForNode({
+  node,
+  definition,
+  effectiveConfig
+}: {
+  node: WorkflowNodeInstance;
+  definition?: RegisteredWorkflowNodeDefinition;
+  effectiveConfig: Record<string, unknown>;
+}): string[] {
+  if (!definition) {
+    return [...(workflowNodeInlineFallbackConfigKeys[node.node_type] ?? [])];
+  }
+
+  if (workflowInlineLayoutHasDynamicGrowth(definition.ui?.layout, effectiveConfig)) {
+    return [];
+  }
+
+  const keys: string[] = [];
+  workflowInlineCollectLayoutConfigKeys({
+    widgets: definition.ui?.layout,
+    definition,
+    effectiveConfig,
+    keys
+  });
+
+  const handledConfigKeys = workflowInlineHandledConfigKeys(definition.ui?.layout);
+  for (const param of definition.params) {
+    if (!handledConfigKeys.has(param.param_id) && !keys.includes(param.param_id)) {
+      keys.push(param.param_id);
+    }
+  }
+  return keys;
+}
+
+function workflowInlineKindForValue(value: unknown): WorkflowInlineConfigKind {
+  if (typeof value === "boolean") {
+    return "boolean";
+  }
+  if (typeof value === "number") {
+    return "number";
+  }
+  return "string";
+}
+
+function workflowInlineConfigFields({
+  node,
+  definition,
+  runtimeProfile
+}: {
+  node: WorkflowNodeInstance;
+  definition?: RegisteredWorkflowNodeDefinition;
+  runtimeProfile: WorkflowRuntimeProfile;
+}): WorkflowInlineConfigField[] {
+  const effectiveConfig = workflowInlineEffectiveConfig(node, definition, runtimeProfile);
+  const keys = workflowInlineConfigKeysForNode({
+    node,
+    definition,
+    effectiveConfig
+  });
+  return keys.map((configKey) => {
+    const fallback = workflowInlineConfigFallbacks[configKey];
+    const param = workflowInlineParam(definition, configKey);
+    const value = effectiveConfig[configKey] ?? "";
+    return {
+      configKey,
+      label: param?.label ?? fallback?.label ?? configKey,
+      kind: (param?.kind ?? fallback?.kind ?? workflowInlineKindForValue(value)) as WorkflowInlineConfigKind,
+      value,
+      options: param?.options ?? fallback?.options,
+      min: fallback?.min,
+      max: fallback?.max,
+      step: fallback?.step
+    };
+  });
+}
+
+function WorkflowNodeInlineConfigPanel({
+  fields,
+  loading,
+  onChange
+}: {
+  fields: WorkflowInlineConfigField[];
+  loading: boolean;
+  onChange: (configKey: string, value: unknown) => void;
+}) {
+  if (!fields.length) {
+    return null;
+  }
+
+  return (
+    <div className="workflow-node-inline-config" aria-label="节点内联配置">
+      {fields.map((field) => (
+        <label
+          className={`workflow-node-inline-config-row is-${field.kind}`}
+          key={field.configKey}
+          title={field.label}
+        >
+          <span>{field.label}</span>
+          <WorkflowNodeInlineControl
+            field={field}
+            loading={loading}
+            onChange={(value) => onChange(field.configKey, value)}
+          />
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function WorkflowNodeInlineControl({
+  field,
+  loading,
+  onChange
+}: {
+  field: WorkflowInlineConfigField;
+  loading: boolean;
+  onChange: (value: unknown) => void;
+}) {
+  if (field.kind === "boolean") {
+    return (
+      <span className="workflow-node-inline-switch">
+        <input
+          type="checkbox"
+          checked={Boolean(field.value)}
+          onChange={(event) => onChange(event.target.checked)}
+          disabled={loading}
+        />
+        <i aria-hidden="true" />
+      </span>
+    );
+  }
+
+  if (field.kind === "enum") {
+    const value = String(field.value ?? "");
+    const options = field.options?.length ? field.options : [{ value, label: value || "默认" }];
+    return (
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={loading}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
+    );
+  }
+
+  if (field.kind === "number") {
+    return (
+      <input
+        type="number"
+        min={field.min}
+        max={field.max}
+        step={field.step}
+        value={field.value === null || field.value === undefined ? "" : String(field.value)}
+        onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))}
+        disabled={loading}
+      />
+    );
+  }
+
+  return (
+    <input
+      value={String(field.value ?? "")}
+      onChange={(event) => onChange(event.target.value)}
+      disabled={loading}
+    />
+  );
 }
 
 const workflowCanvasNodeWidth = 220;
@@ -942,7 +1371,6 @@ function loadPersistedWorkflowEditorState(
 ): {
   selectedNodeId?: string;
   selectedEdgeId?: string;
-  documentPickerQuery?: string;
 } | null {
   if (typeof window === "undefined") {
     return null;
@@ -952,7 +1380,6 @@ function loadPersistedWorkflowEditorState(
     return raw ? JSON.parse(raw) as {
       selectedNodeId?: string;
       selectedEdgeId?: string;
-      documentPickerQuery?: string;
     } : null;
   } catch {
     return null;
@@ -2525,7 +2952,6 @@ function WorkflowEditorPageContent({
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [selectedEdgeId, setSelectedEdgeId] = useState("");
   const [pendingConnection, setPendingConnection] = useState<{ fromNodeId: string; fromPortId: string } | null>(null);
-  const [documentPickerQuery, setDocumentPickerQuery] = useState("");
   const [isCanvasDropActive, setIsCanvasDropActive] = useState(false);
   const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
   const canvasScrollRef = useRef<HTMLDivElement | null>(null);
@@ -2662,11 +3088,10 @@ function WorkflowEditorPageContent({
     setSelectedNodeId(
       persistedEditorState?.selectedNodeId && sortedNodeIds.includes(persistedEditorState.selectedNodeId)
         ? persistedEditorState.selectedNodeId
-        : (sortedNodeIds[0] ?? "")
+        : ""
     );
     setSelectedEdgeId(persistedEditorState?.selectedEdgeId ?? "");
     setPendingConnection(null);
-    setDocumentPickerQuery(persistedEditorState?.documentPickerQuery ?? "");
   }, [activeWorkflow, project]);
 
   useEffect(() => {
@@ -2703,15 +3128,13 @@ function WorkflowEditorPageContent({
         workflowEditorStateStorageKey(project.id, draftWorkflowId),
         JSON.stringify({
           selectedNodeId,
-          selectedEdgeId,
-          documentPickerQuery
+          selectedEdgeId
         })
       );
     } catch {
       // Ignore editor-state persistence failures and keep the in-memory editor usable.
     }
   }, [
-    documentPickerQuery,
     draftWorkflowId,
     project?.id,
     selectedEdgeId,
@@ -2924,12 +3347,8 @@ function WorkflowEditorPageContent({
   const lastCompletedRuntimeNode = liveWorkflowRun?.last_completed_node_id
     ? runtimeNodeStates[liveWorkflowRun.last_completed_node_id]
     : undefined;
-  const dictionaryInputNode = sortedNodes.find((node) => node.node_type === "dictionary_input")
-    ?? sortedNodes.find((node) => node.node_type === "project_dictionary_set")
-    ?? null;
-  const corpusInputNode = sortedNodes.find((node) => node.node_type === "corpus_input")
-    ?? sortedNodes.find((node) => node.node_type === "filter_corpus")
-    ?? null;
+  const dictionaryInputNode = sortedNodes.find((node) => node.node_type === "dictionary_input") ?? null;
+  const corpusInputNode = sortedNodes.find((node) => node.node_type === "corpus_input") ?? null;
   const dictionaryTableIds = project.dictionary_set.collections
     ? Object.values(project.dictionary_set.collections)
         .flatMap((collection) => collection.tables.map((table) => table.id))
@@ -2940,19 +3359,16 @@ function WorkflowEditorPageContent({
       : []
   );
   const useAllDictionaryTables = selectedDictionaryTableIds.size === 0;
-  const availableSources = Array.from(new Set(snapshot.corpus.map((item) => item.source).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
-  const availableInstitutions = Array.from(new Set(snapshot.corpus.map((item) => item.institution).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
-  const availableCategories = Array.from(new Set(snapshot.corpus.map((item) => item.category_or_tag).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "zh-CN"));
   const availableWorkflowNodeDefinitions = useMemo(
-    () => snapshot.node_definitions?.length ? snapshot.node_definitions : builtinWorkflowToolboxDefinitions(),
+    () => snapshot.node_definitions?.length ? snapshot.node_definitions : workflowToolboxDefinitions(),
     [snapshot.node_definitions]
   );
-  const nodeDefinitionsByType = useMemo(
+  const workflowNodeDefinitionsByType = useMemo(
     () => new Map(availableWorkflowNodeDefinitions.map((definition) => [definition.type, definition])),
     [availableWorkflowNodeDefinitions]
   );
   const runScopeForNode = (node: WorkflowNodeInstance | null | undefined): RunScopeDefinition => {
-    if (!node || (node.node_type !== "corpus_input" && node.node_type !== "filter_corpus")) {
+    if (!node || node.node_type !== "corpus_input") {
       return draftRuntimeProfile.run_scope;
     }
     return {
@@ -2966,19 +3382,9 @@ function WorkflowEditorPageContent({
   };
   const workflowScopeNode = sortedNodes.find((node) => activeNodeIds.has(node.node_id) && node.node_type === "corpus_input")
     ?? sortedNodes.find((node) => node.node_type === "corpus_input")
-    ?? sortedNodes.find((node) => node.node_type === "filter_corpus")
     ?? null;
   const workflowRunScope = runScopeForNode(workflowScopeNode);
   const matchedDocuments = snapshot.corpus.filter((item) => corpusMatchesRunScope(item, workflowRunScope));
-  const pickerQuery = documentPickerQuery.trim().toLowerCase();
-  const pickerScope = selectedNode?.node_type === "corpus_input" || selectedNode?.node_type === "filter_corpus"
-    ? runScopeForNode(selectedNode)
-    : workflowRunScope;
-  const documentPickerRows = pickerScope.mode === "selected_documents"
-    ? snapshot.corpus.filter((item) =>
-      !pickerQuery || [item.doc_id, item.title, item.source, item.institution].filter(Boolean).join(" ").toLowerCase().includes(pickerQuery)
-    )
-    : [];
   const canRun = !loading && matchedDocuments.length > 0 && workflowValidation.valid;
   const runSummary = runScopeSummary(workflowRunScope, snapshot.corpus.length, matchedDocuments.length);
   const toolboxDefinitions = useMemo(
@@ -2996,18 +3402,31 @@ function WorkflowEditorPageContent({
     [toolboxDefinitions]
   );
 
+  const publishWorkflowNodeSelection = (node: WorkflowNodeInstance) => {
+    onWorkbenchSelect?.({
+      kind: "workflow_node",
+      projectId: project.id,
+      workflowId: draftWorkflow.workflow_id,
+      nodeId: node.node_id,
+      nodeType: node.node_type,
+      node
+    });
+  };
+
   const selectNode = (nodeId: string) => {
     const node = nodeLookup.get(nodeId);
     setSelectedNodeId(nodeId);
     setSelectedEdgeId("");
     setPendingConnection(null);
+    if (node) {
+      publishWorkflowNodeSelection(node);
+      return;
+    }
     onWorkbenchSelect?.({
       kind: "workflow_node",
       projectId: project.id,
       workflowId: draftWorkflow.workflow_id,
-      nodeId,
-      nodeType: node?.node_type,
-      node
+      nodeId
     });
   };
 
@@ -3283,6 +3702,10 @@ function WorkflowEditorPageContent({
   };
 
   const bindWorkbenchResourceToWorkflow = (selection: WorkbenchSelection) => {
+    if (selection.kind === "workflow_library") {
+      addWorkflowNode(selection.nodeType, toolboxDefinitionByType.get(selection.nodeType));
+      return;
+    }
     if (selection.kind === "corpus_collection") {
       bindCorpusSelectionToWorkflow(selection);
       return;
@@ -3297,27 +3720,24 @@ function WorkflowEditorPageContent({
     registeredDefinition?: RegisteredWorkflowNodeDefinition,
     position?: { x: number; y: number }
   ) => {
-    let nextSelectedNodeId = "";
-    updateWorkflow((current) => {
-      let next = addWorkflowNodeByType(current, nodeType, draftRuntimeProfile, registeredDefinition);
-      const previousNodeIds = new Set(current.nodes.map((node) => node.node_id));
-      nextSelectedNodeId = next.nodes.find((node) => !previousNodeIds.has(node.node_id))?.node_id ?? "";
-      if (position && nextSelectedNodeId) {
-        next = updateWorkflowNodePosition(next, nextSelectedNodeId, position);
-      }
-      return next;
-    });
+    let next = addWorkflowNodeByType(draftWorkflow, nodeType, draftRuntimeProfile, registeredDefinition);
+    const previousNodeIds = new Set(draftWorkflow.nodes.map((node) => node.node_id));
+    const createdNodeId = next.nodes.find((node) => !previousNodeIds.has(node.node_id))?.node_id ?? "";
+    if (position && createdNodeId) {
+      next = updateWorkflowNodePosition(next, createdNodeId, position);
+    }
+    const nextSelectedNode = next.nodes.find((node) => node.node_id === createdNodeId) ?? null;
+    setDraftWorkflow(next);
     setSelectedEdgeId("");
-    setSelectedNodeId(nextSelectedNodeId);
-    if (nextSelectedNodeId) {
-      const nextSelectedNode = draftWorkflow.nodes.find((node) => node.node_id === nextSelectedNodeId);
+    setSelectedNodeId(nextSelectedNode?.node_id ?? "");
+    if (nextSelectedNode) {
       onWorkbenchSelect?.({
         kind: "workflow_node",
-      projectId: project.id,
-      workflowId: draftWorkflow.workflow_id,
-      nodeId: nextSelectedNodeId,
-      nodeType: nextSelectedNode?.node_type ?? nodeType,
-      node: nextSelectedNode
+        projectId: project.id,
+        workflowId: draftWorkflow.workflow_id,
+        nodeId: nextSelectedNode.node_id,
+        nodeType: nextSelectedNode.node_type,
+        node: nextSelectedNode
       });
     }
     setPendingConnection(null);
@@ -3346,10 +3766,21 @@ function WorkflowEditorPageContent({
   const insertRecommendedStarter = () => {
     const blankWorkflow = buildBlankWorkflowFromRuntimeProfile(draftWorkflow.workflow_id, draftWorkflow.name, draftRuntimeProfile);
     const nextWorkflow = syncWorkflowFromRuntimeProfile(blankWorkflow, draftRuntimeProfile, "manual");
+    const firstNode = nextWorkflow.nodes[0] ?? null;
     setDraftWorkflow(nextWorkflow);
-    setSelectedNodeId(nextWorkflow.nodes[0]?.node_id ?? "");
+    setSelectedNodeId(firstNode?.node_id ?? "");
     setSelectedEdgeId("");
     setPendingConnection(null);
+    if (firstNode) {
+      onWorkbenchSelect?.({
+        kind: "workflow_node",
+        projectId: project.id,
+        workflowId: nextWorkflow.workflow_id,
+        nodeId: firstNode.node_id,
+        nodeType: firstNode.node_type,
+        node: firstNode
+      });
+    }
   };
 
   const restoreRecommendedEdges = () => {
@@ -3458,7 +3889,11 @@ function WorkflowEditorPageContent({
   };
 
   const handleCanvasDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (event.dataTransfer.types.includes(WORKBENCH_SELECTION_MIME) || event.dataTransfer.types.includes(WORKFLOW_NODE_TYPE_MIME)) {
+    if (
+      dataTransferHasType(event.dataTransfer, WORKBENCH_SELECTION_MIME)
+      || dataTransferHasType(event.dataTransfer, WORKFLOW_NODE_TYPE_MIME)
+      || dataTransferHasType(event.dataTransfer, "text/plain")
+    ) {
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";
       setIsCanvasDropActive(true);
@@ -3472,7 +3907,7 @@ function WorkflowEditorPageContent({
   };
 
   const handleCanvasDrop = (event: ReactDragEvent<HTMLDivElement>) => {
-    const nodeType = event.dataTransfer.getData(WORKFLOW_NODE_TYPE_MIME) as WorkflowNodeInstance["node_type"] | "";
+    const nodeType = droppedWorkflowNodeType(event.dataTransfer, toolboxDefinitions, toolNodeTypes);
     if (nodeType) {
       if (!toolNodeTypes.has(nodeType)) {
         return;
@@ -3488,8 +3923,7 @@ function WorkflowEditorPageContent({
       return;
     }
 
-    const payload = event.dataTransfer.getData(WORKBENCH_SELECTION_MIME);
-    const droppedSelection = payload ? parseWorkbenchSelectionPayload(payload) : null;
+    const droppedSelection = droppedWorkbenchSelection(event.dataTransfer);
     if (!droppedSelection) {
       return;
     }
@@ -3608,6 +4042,16 @@ function WorkflowEditorPageContent({
   };
 
   const updateNodeConfig = (nodeId: string, patch: Record<string, unknown>) => {
+    const currentNode = nodeLookup.get(nodeId);
+    const nextSelectedNode = currentNode
+      ? {
+          ...currentNode,
+          config: {
+            ...currentNode.config,
+            ...patch
+          }
+        }
+      : null;
     updateWorkflow((current) => updateWorkflowNode(current, nodeId, (node) => ({
       ...node,
       config: {
@@ -3615,31 +4059,9 @@ function WorkflowEditorPageContent({
         ...patch
       }
     })));
-  };
-
-  const updateRunScope = (nodeId: string, patch: Partial<RunScopeDefinition>) => {
-    updateNodeConfig(nodeId, patch as Record<string, unknown>);
-  };
-
-  const toggleScopeArrayValue = (
-    nodeId: string,
-    field: "source_values" | "institution_values" | "category_values",
-    value: string
-  ) => {
-    const currentScope = runScopeForNode(nodeLookup.get(nodeId));
-    const values = currentScope[field];
-    updateRunScope(nodeId, {
-      [field]: values.includes(value) ? values.filter((item) => item !== value) : [...values, value]
-    } as Partial<RunScopeDefinition>);
-  };
-
-  const toggleSelectedDocument = (nodeId: string, docId: string) => {
-    const currentScope = runScopeForNode(nodeLookup.get(nodeId));
-    updateRunScope(nodeId, {
-      selected_doc_ids: currentScope.selected_doc_ids.includes(docId)
-        ? currentScope.selected_doc_ids.filter((item) => item !== docId)
-        : [...currentScope.selected_doc_ids, docId]
-    });
+    if (nextSelectedNode && selectedNodeId === nodeId) {
+      publishWorkflowNodeSelection(nextSelectedNode);
+    }
   };
 
   const setNodeBypassed = (nodeId: string, bypassed: boolean) => {
@@ -3652,25 +4074,26 @@ function WorkflowEditorPageContent({
     })));
   };
 
-  const renderBooleanToggles = (
-    nodeId: string,
-    values: Record<string, unknown>,
-    items: readonly (readonly [string, string])[]
-  ) => (
-    <div className="toggle-grid">
-      {items.map(([key, label]) => (
-        <label key={key} className="switch-row">
-          <input
-            type="checkbox"
-            checked={Boolean(values[key])}
-            onChange={(event) => updateNodeConfig(nodeId, { [key]: event.target.checked })}
-            disabled={loading}
-          />
-          <span>{label}</span>
-        </label>
-      ))}
-    </div>
-  );
+  useEffect(() => {
+    const handleNodeEditorAction = (event: Event) => {
+      const action = (event as CustomEvent<WorkflowNodeEditorAction>).detail;
+      if (!action || action.workflowId !== draftWorkflow.workflow_id || loading) {
+        return;
+      }
+
+      if (action.type === "update_config") {
+        updateNodeConfig(action.nodeId, action.patch);
+        return;
+      }
+
+      if (action.type === "bind_dictionary_table") {
+        bindDictionaryTableToWorkflow(action.tableId);
+      }
+    };
+
+    window.addEventListener(WORKFLOW_NODE_EDITOR_ACTION_EVENT, handleNodeEditorAction);
+    return () => window.removeEventListener(WORKFLOW_NODE_EDITOR_ACTION_EVENT, handleNodeEditorAction);
+  });
 
   const saveWorkflow = async () => {
     const normalizedWorkflow = normalizeWorkflowGraph(draftWorkflow, projectRuntimeProfile(project, draftWorkflow));
@@ -3713,349 +4136,8 @@ function WorkflowEditorPageContent({
   };
   runWorkflowRef.current = runCurrentWorkflow;
 
-  const renderRunScopeEditor = (node: WorkflowNodeInstance) => {
-    const nodeScope = runScopeForNode(node);
-    const scopeMatchedDocuments = snapshot.corpus.filter((item) => corpusMatchesRunScope(item, nodeScope));
-    return (
-      <Panel title="语料输入">
-        <div className="status-panel"><strong>当前范围</strong><span>{runScopeSummary(nodeScope, snapshot.corpus.length, scopeMatchedDocuments.length)}</span></div>
-        <div className="intent-option-grid">
-          {runScopeModeOptions.map((option) => (
-            <button key={option.id} type="button" className={`intent-choice ${nodeScope.mode === option.id ? "is-active" : ""}`} onClick={() => updateRunScope(node.node_id, { mode: option.id })} disabled={loading}>
-              <div>
-                <strong>{option.title}</strong>
-                <p>{option.description}</p>
-              </div>
-            </button>
-          ))}
-        </div>
-        {nodeScope.mode === "filtered_subset" && (
-          <div className="intent-filter-stack">
-            <div className="intent-filter-group">
-              <strong>来源</strong>
-              <div className="pill-cloud">
-                {availableSources.length ? availableSources.map((source) => (
-                  <button key={source} type="button" className={`intent-pill ${nodeScope.source_values.includes(source) ? "is-active" : ""}`} onClick={() => toggleScopeArrayValue(node.node_id, "source_values", source)} disabled={loading}>{source}</button>
-                )) : <span className="muted">当前语料还没有来源字段。</span>}
-              </div>
-            </div>
-            <div className="intent-filter-group">
-              <strong>机构</strong>
-              <div className="pill-cloud">
-                {availableInstitutions.length ? availableInstitutions.map((institution) => (
-                  <button key={institution} type="button" className={`intent-pill ${nodeScope.institution_values.includes(institution) ? "is-active" : ""}`} onClick={() => toggleScopeArrayValue(node.node_id, "institution_values", institution)} disabled={loading}>{institution}</button>
-                )) : <span className="muted">当前语料还没有机构字段。</span>}
-              </div>
-            </div>
-            <div className="intent-filter-group">
-              <strong>标签</strong>
-              <div className="pill-cloud">
-                {availableCategories.length ? availableCategories.map((category) => (
-                  <button key={category} type="button" className={`intent-pill ${nodeScope.category_values.includes(category) ? "is-active" : ""}`} onClick={() => toggleScopeArrayValue(node.node_id, "category_values", category)} disabled={loading}>{category}</button>
-                )) : <span className="muted">当前语料还没有标签字段。</span>}
-              </div>
-            </div>
-            <div className="settings-grid">
-              <label className="field"><span>起始年份</span><input type="number" value={nodeScope.year_from ?? ""} onChange={(event) => updateRunScope(node.node_id, { year_from: event.target.value ? Number(event.target.value) : null })} disabled={loading} placeholder="例如 2024" /></label>
-              <label className="field"><span>结束年份</span><input type="number" value={nodeScope.year_to ?? ""} onChange={(event) => updateRunScope(node.node_id, { year_to: event.target.value ? Number(event.target.value) : null })} disabled={loading} placeholder="例如 2025" /></label>
-            </div>
-          </div>
-        )}
-        {nodeScope.mode === "selected_documents" && (
-          <div className="intent-filter-stack">
-            <label className="field">
-              <span>搜索文档</span>
-              <input value={documentPickerQuery} onChange={(event) => setDocumentPickerQuery(event.target.value)} placeholder="按标题、来源或机构筛选" disabled={loading} />
-            </label>
-            <div className="document-picker-list">
-              {documentPickerRows.slice(0, 24).map((item) => (
-                <label key={item.doc_id} className="document-picker-row">
-                  <input type="checkbox" checked={nodeScope.selected_doc_ids.includes(item.doc_id)} onChange={() => toggleSelectedDocument(node.node_id, item.doc_id)} disabled={loading} />
-                  <div>
-                    <strong>{item.title}</strong>
-                    <p>{[item.doc_id, item.source, item.institution, item.year].filter(Boolean).join(" · ")}</p>
-                  </div>
-                </label>
-              ))}
-              {!documentPickerRows.length && <span className="muted">没有匹配的文档，请换个关键词试试。</span>}
-            </div>
-          </div>
-        )}
-      </Panel>
-    );
-  };
-
-  const renderSelectedNodePanel = () => {
-    if (!selectedNode) {
-      return <EmptyState title="选择一个节点" body="从左侧工具箱加入节点，或点击画布中的节点卡片后，在这里继续补完整参数。" />;
-    }
-
-    if (selectedNode.node_type === "corpus_input" || selectedNode.node_type === "filter_corpus") {
-      return renderRunScopeEditor(selectedNode);
-    }
-
-    if (selectedNode.node_type === "dictionary_input" || selectedNode.node_type === "project_dictionary_set") {
-      return (
-        <Panel title="词表输入" actions={<Button appearance="subtle" onClick={() => setActivePage("dictionaries")} disabled={loading}>打开词库中心</Button>}>
-          <p className="body-copy">这里引用的是项目当前词表资源。后续如果要支持多词表切换，会继续把资源选择器下沉到节点体内。</p>
-          <div className="status-panel"><strong>当前词表版本</strong><span>{project.dictionary_set.version}</span></div>
-          <div className="status-panel"><strong>启用条目</strong><span>{enabledDictionaryEntryCount(project.dictionary_set)} 条</span></div>
-          <div className="status-panel">
-            <strong>绑定资源</strong>
-            <span>{useAllDictionaryTables ? "全部资源表" : `${selectedDictionaryTableIds.size} 张资源表`}</span>
-          </div>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "merge_corpora") {
-      return (
-        <Panel title="合并语料">
-          <p className="body-copy">合并节点已经接入原生 DAG 执行。多条语料支路会先在这里汇总，再继续流向后续清洗、切词和分析节点。</p>
-          <label className="field">
-            <span>合并策略</span>
-            <select value={String(selectedNode.config.strategy ?? "append")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { strategy: event.target.value })} disabled={loading}>
-              <option value="append">直接追加</option>
-              <option value="dedupe">按 doc_id 去重</option>
-            </select>
-          </label>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "clean_text") {
-      return <Panel title="基础清洗">{renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, cleaningToggleItems)}</Panel>;
-    }
-
-    if (selectedNode.node_type === "normalize_text") {
-      return (
-        <Panel title="统一写法">
-          {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, normalizationToggleItems)}
-          <label className="field">
-            <span>Regex 优先策略</span>
-            <select value={String(selectedNode.config.regex_rule_priority ?? draftRuntimeProfile.normalization.regex_rule_priority)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { regex_rule_priority: event.target.value })} disabled={loading}>
-              <option value="rule_order">按规则顺序</option>
-              <option value="first_match">命中首条后停止</option>
-            </select>
-          </label>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "tokenize") {
-      return (
-        <Panel title="切词">
-          <div className="settings-grid">
-            <label className="field">
-              <span>语言模式</span>
-              <select value={String(selectedNode.config.language_mode ?? draftRuntimeProfile.tokenization.language_mode)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { language_mode: event.target.value })} disabled={loading}>
-                <option value="auto">自动判断</option>
-                <option value="zh">中文</option>
-                <option value="en">英文</option>
-                <option value="mixed">中英混合</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>切词前最短长度</span>
-              <input type="number" value={Number(selectedNode.config.min_token_length_before_filter ?? draftRuntimeProfile.tokenization.min_token_length_before_filter)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_token_length_before_filter: Number(event.target.value) })} disabled={loading} />
-            </label>
-            <label className="field">
-              <span>最小 n-gram</span>
-              <input type="number" value={Number(selectedNode.config.ngram_min ?? draftRuntimeProfile.tokenization.ngram_min)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { ngram_min: Number(event.target.value) })} disabled={loading} />
-            </label>
-            <label className="field">
-              <span>最大 n-gram</span>
-              <input type="number" value={Number(selectedNode.config.ngram_max ?? draftRuntimeProfile.tokenization.ngram_max)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { ngram_max: Number(event.target.value) })} disabled={loading} />
-            </label>
-          </div>
-          {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, tokenizationToggleItems)}
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "apply_dictionary_rules") {
-      return (
-        <Panel title="套用词表">
-          {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, dictionaryToggleItems)}
-          <label className="field">
-            <span>冲突处理</span>
-            <select value={String(selectedNode.config.conflict_resolution ?? draftRuntimeProfile.dictionary.conflict_resolution)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { conflict_resolution: event.target.value })} disabled={loading}>
-              <option value="priority">按词表优先级</option>
-              <option value="first_match">命中首条后停止</option>
-            </select>
-          </label>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "filter_terms") {
-      return (
-        <Panel title="过滤词项">
-          {renderBooleanToggles(selectedNode.node_id, selectedNode.config as Record<string, unknown>, filteringToggleItems)}
-          <div className="settings-grid">
-            <label className="field"><span>最短 token 长度</span><input type="number" value={Number(selectedNode.config.min_token_length ?? draftRuntimeProfile.filtering.min_token_length)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_token_length: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>最小词频</span><input type="number" value={Number(selectedNode.config.min_term_frequency ?? draftRuntimeProfile.filtering.min_term_frequency)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_term_frequency: Number(event.target.value) })} disabled={loading} /></label>
-          </div>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "frequency_statistics") {
-      return (
-        <Panel title="词频统计">
-          <label className="field">
-            <span>高频词 Top N</span>
-            <input type="number" value={Number(selectedNode.config.top_n ?? draftRuntimeProfile.analysis.top_n)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_n: Number(event.target.value) })} disabled={loading} />
-          </label>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "term_year_analysis") {
-      return <Panel title="词项年份分析"><p className="body-copy">这个节点会输出词项在不同年份上的变化表，适合继续连到图表和报表输出节点。</p></Panel>;
-    }
-
-    if (selectedNode.node_type === "cooccurrence_analysis") {
-      return (
-        <Panel title="共现分析">
-          <div className="settings-grid">
-            <label className="field"><span>共现窗口</span><input type="number" value={Number(selectedNode.config.cooccurrence_window ?? draftRuntimeProfile.analysis.cooccurrence_window)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { cooccurrence_window: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>最小共现次数</span><input type="number" value={Number(selectedNode.config.min_cooccurrence ?? draftRuntimeProfile.analysis.min_cooccurrence)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_cooccurrence: Number(event.target.value) })} disabled={loading} /></label>
-          </div>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "similarity_analysis") {
-      return (
-        <Panel title="相似度计算">
-          <div className="settings-grid">
-            <label className="field"><span>最小相似度</span><input type="number" step="0.01" value={Number(selectedNode.config.min_similarity ?? draftRuntimeProfile.analysis.min_similarity)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { min_similarity: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>最多文档对</span><input type="number" value={Number(selectedNode.config.similarity_top_k ?? draftRuntimeProfile.analysis.similarity_top_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { similarity_top_k: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>特征词数量</span><input value={String(selectedNode.config.feature_term_count ?? draftRuntimeProfile.analysis.feature_term_count)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { feature_term_count: event.target.value })} disabled={loading} /></label>
-          </div>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "topic_modeling") {
-      return (
-        <Panel title="主题建模">
-          <div className="settings-grid">
-            <label className="field">
-              <span>主题算法</span>
-              <select value={String(selectedNode.config.topic_algorithm ?? draftRuntimeProfile.analysis.topic_algorithm)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { topic_algorithm: event.target.value })} disabled={loading}>
-                <option value="nmf">NMF</option>
-                <option value="lda">LDA</option>
-              </select>
-            </label>
-            <label className="field"><span>主题数量</span><input type="number" value={Number(selectedNode.config.topic_model_k ?? draftRuntimeProfile.analysis.topic_model_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { topic_model_k: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>每主题词项数</span><input type="number" value={Number(selectedNode.config.top_terms_per_topic ?? 5)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_terms_per_topic: Number(event.target.value) })} disabled={loading} /></label>
-          </div>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "keyword_extraction") {
-      return (
-        <Panel title="关键词提取">
-          <div className="settings-grid">
-            <label className="field"><span>每篇文档关键词数</span><input type="number" value={Number(selectedNode.config.top_k_per_doc ?? draftRuntimeProfile.analysis.top_k_per_doc)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_k_per_doc: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>项目级关键词数</span><input type="number" value={Number(selectedNode.config.top_k_project ?? draftRuntimeProfile.analysis.top_k_project)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { top_k_project: Number(event.target.value) })} disabled={loading} /></label>
-          </div>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "keyword_clustering") {
-      return (
-        <Panel title="关键词聚类">
-          <div className="settings-grid">
-            <label className="field"><span>关键词聚类数</span><input type="number" value={Number(selectedNode.config.keyword_cluster_k ?? draftRuntimeProfile.analysis.keyword_cluster_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { keyword_cluster_k: Number(event.target.value) })} disabled={loading} /></label>
-            <label className="field"><span>主题数量</span><input type="number" value={Number(selectedNode.config.topic_model_k ?? draftRuntimeProfile.analysis.topic_model_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { topic_model_k: Number(event.target.value) })} disabled={loading} /></label>
-          </div>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "institution_topic_analysis") {
-      return (
-        <Panel title="机构主题分析">
-          <label className="field"><span>主题数量</span><input type="number" value={Number(selectedNode.config.topic_model_k ?? draftRuntimeProfile.analysis.topic_model_k)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { topic_model_k: Number(event.target.value) })} disabled={loading} /></label>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "save_csv" || selectedNode.node_type === "save_xlsx") {
-      return (
-        <Panel title={selectedNode.node_type === "save_csv" ? "保存 CSV" : "保存 XLSX"}>
-          <label className="field"><span>文件名前缀</span><input value={String(selectedNode.config.file_prefix ?? "tables")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { file_prefix: event.target.value })} disabled={loading} /></label>
-          <p className="body-copy">这个输出节点支持多输入，可以把多个表格节点一起连进来统一导出。</p>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "save_png") {
-      return (
-        <Panel title="保存 PNG">
-          <div className="settings-grid">
-            <label className="field"><span>文件名前缀</span><input value={String(selectedNode.config.file_prefix ?? "charts")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { file_prefix: event.target.value })} disabled={loading} /></label>
-            <label className="field"><span>PNG 分辨率（DPI）</span><input type="number" value={Number(selectedNode.config.chart_dpi ?? draftRuntimeProfile.export.chart_dpi)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { chart_dpi: Number(event.target.value) })} disabled={loading} /></label>
-          </div>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "save_html_report") {
-      return (
-        <Panel title="保存 HTML 报告">
-          <label className="field"><span>文件名前缀</span><input value={String(selectedNode.config.file_prefix ?? "report")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { file_prefix: event.target.value })} disabled={loading} /></label>
-          <label className="switch-row">
-            <input type="checkbox" checked={Boolean(selectedNode.config.include_audit ?? draftRuntimeProfile.export.include_audit)} onChange={(event) => updateNodeConfig(selectedNode.node_id, { include_audit: event.target.checked })} disabled={loading} />
-            <span>在报告中附带审计摘要</span>
-          </label>
-        </Panel>
-      );
-    }
-
-    if (selectedNode.node_type === "note") {
-      return <Panel title="注释"><label className="field"><span>注释文本</span><textarea value={String(selectedNode.config.text ?? "")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { text: event.target.value })} disabled={loading} rows={6} /></label></Panel>;
-    }
-
-    if (selectedNode.node_type === "group") {
-      return <Panel title="分组"><label className="field"><span>分组标题</span><input value={String(selectedNode.config.title ?? "")} onChange={(event) => updateNodeConfig(selectedNode.node_id, { title: event.target.value })} disabled={loading} /></label></Panel>;
-    }
-
-    return <Panel title="节点参数"><p className="body-copy">这个节点类型的完整配置面板还在继续补充，当前已经可以在节点体内做快捷调整。</p></Panel>;
-  };
-
-  const renderNodeInlineEditor = (node: WorkflowNodeInstance) => renderWorkflowNodeInlineEditor({
-    node,
-    project,
-    snapshot: { corpus: snapshot.corpus },
-    latestRun,
-    draftRuntimeProfile,
-    loading,
-    nodeDefinitionsByType,
-    availableSources,
-    availableInstitutions,
-    availableCategories,
-    documentPickerQuery,
-    setDocumentPickerQuery,
-    setActivePage,
-    bindDictionaryTableToWorkflow,
-    runScopeForNode,
-    runScopeSummary,
-    corpusMatchesRunScope,
-    updateNodeConfig,
-    updateRunScope,
-    toggleScopeArrayValue,
-    toggleSelectedDocument,
-    enabledDictionaryEntryCount
-  });
-
   const renderNodePreview = (node: WorkflowNodeInstance) => {
-    const nodeScope = node.node_type === "corpus_input" || node.node_type === "filter_corpus"
+    const nodeScope = node.node_type === "corpus_input"
       ? runScopeForNode(node)
       : workflowRunScope;
     const nodeMatchedDocuments = snapshot.corpus.filter((item) => corpusMatchesRunScope(item, nodeScope));
@@ -4078,7 +4160,7 @@ function WorkflowEditorPageContent({
       : [];
     const configKeys = Object.keys(node.config ?? {});
 
-    if (node.node_type === "corpus_input" || node.node_type === "load_project_corpus" || node.node_type === "filter_corpus") {
+    if (node.node_type === "corpus_input") {
       return (
         <Panel title="预览（基于当前项目快照）">
           <div className="status-panel"><strong>当前命中文档</strong><span>{nodeMatchedDocuments.length} 篇</span></div>
@@ -4090,7 +4172,7 @@ function WorkflowEditorPageContent({
       );
     }
 
-    if (node.node_type === "dictionary_input" || node.node_type === "project_dictionary_set") {
+    if (node.node_type === "dictionary_input") {
       return (
         <Panel title="预览（基于当前项目词表）">
           <div className="status-panel"><strong>启用词条</strong><span>{enabledDictionaryEntryCount(project.dictionary_set)} 条</span></div>
@@ -4153,7 +4235,7 @@ function WorkflowEditorPageContent({
       );
     }
 
-    if (node.node_type === "frequency_statistics" || node.node_type === "analyze_corpus") {
+    if (node.node_type === "frequency_statistics") {
       return (
         <Panel title="预览（基于最近一次运行结果）">
           <div className="status-panel"><strong>词频 Top 5</strong><span>{project.results.frequency_table.slice(0, 5).map((row) => `${row.term}(${row.tf})`).join(" / ") || "暂无词频结果"}</span></div>
@@ -4209,7 +4291,7 @@ function WorkflowEditorPageContent({
       );
     }
 
-    if (node.node_type === "save_csv" || node.node_type === "save_xlsx" || node.node_type === "save_png" || node.node_type === "save_html_report" || node.node_type === "export_results") {
+    if (node.node_type === "save_csv" || node.node_type === "save_xlsx" || node.node_type === "save_png" || node.node_type === "save_html_report") {
       return (
         <Panel title="预览（基于最近一次运行结果）">
           <div className="status-panel"><strong>导出文件</strong><span>{project.results.report_files.length} 个</span></div>
@@ -4348,30 +4430,21 @@ function WorkflowEditorPageContent({
                   const nodeStepId = workflowNodeStepId(node);
                   const nodeCanBypass = Boolean(nodeStepId && optionalWorkflowSteps.includes(nodeStepId));
                   const nodeFrame = workflowNodeCanvasFrame(node);
-                  const nodeInlinePreview = nodeSelected ? renderWorkflowNodePreview({
+                  const nodeDefinition = workflowNodeDefinitionsByType.get(node.node_type);
+                  const nodeInlineConfigFields = workflowInlineConfigFields({
                     node,
+                    definition: nodeDefinition,
+                    runtimeProfile: draftRuntimeProfile
+                  });
+                  const nodeFacts = workflowNodeConfigFacts({
+                    node,
+                    definition: nodeDefinition,
+                    runtimeProfile: draftRuntimeProfile,
                     project,
-                    snapshot: { corpus: snapshot.corpus },
-                    latestRun,
-                    draftRuntimeProfile,
-                    loading,
-                    nodeDefinitionsByType,
-                    availableSources,
-                    availableInstitutions,
-                    availableCategories,
-                    documentPickerQuery,
-                    setDocumentPickerQuery,
-                    setActivePage,
-                    bindDictionaryTableToWorkflow,
-                    runScopeForNode,
-                    runScopeSummary,
-                    corpusMatchesRunScope,
-                    updateNodeConfig,
-                    updateRunScope,
-                    toggleScopeArrayValue,
-                    toggleSelectedDocument,
-                    enabledDictionaryEntryCount
-                  }) : null;
+                    corpus: snapshot.corpus,
+                    runScope: runScopeForNode(node),
+                    corpusMatchesRunScope
+                  });
                   return (
                     <div
                       ref={(element) => {
@@ -4480,7 +4553,16 @@ function WorkflowEditorPageContent({
                           </button>
                         </div>
                         <strong>{node.label}</strong>
-                        <small>{workflowNodeSummary(node, draftRuntimeProfile, runSummary)}</small>
+                        <small>{workflowNodeSummary(node, draftRuntimeProfile, runSummary, nodeDefinition)}</small>
+                        {nodeInlineConfigFields.length ? (
+                          <WorkflowNodeInlineConfigPanel
+                            fields={nodeInlineConfigFields}
+                            loading={loading}
+                            onChange={(configKey, value) => updateNodeConfig(node.node_id, { [configKey]: value })}
+                          />
+                        ) : (
+                          <WorkflowNodeFactStrip facts={nodeFacts} />
+                        )}
                         {nodeRuntime && (
                           <div className={`workflow-node-runtime-card is-${nodeRuntime.status}`}>
                             <div className="workflow-node-runtime-head">
@@ -4495,11 +4577,9 @@ function WorkflowEditorPageContent({
                             )}
                           </div>
                         )}
-                        {nodeInlinePreview}
                         {!reachableNodeIds.has(node.node_id) && node.inputs.length > 0 && (
                           <span className="workflow-node-inline-warning">当前未接入有效链路</span>
                         )}
-                        {nodeSelected && renderNodeInlineEditor(node)}
                       </div>
                       {node.outputs.length > 0 && (
                         <div className="workflow-port-rail is-output">

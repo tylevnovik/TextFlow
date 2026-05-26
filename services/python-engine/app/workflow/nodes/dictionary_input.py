@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from ._common import bool_param, enum_param, string_param, port, runtime, node_definition_from_base, dictionary_input_compiler
+from ._common import bool_param, enum_param, string_param, port, runtime, node_definition_from_base, dictionary_input_compiler, field, graph, slot, ui
 from ._support import _report_node_progress, _set_active_dictionary_set
 
 
@@ -41,6 +41,12 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             cacheable=True,
             previewable=True,
             output_node=False,
+        ),
+        "graph": graph((360, 360), (120, 40), toolbox_order=100),
+        "ui": ui(
+            [
+                slot("dictionary_binding_selector"),
+            ],
         ),
     }
     return node_definition_from_base(base, runtime_profile, None)

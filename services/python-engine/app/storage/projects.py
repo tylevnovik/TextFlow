@@ -18,7 +18,7 @@ from ..domain.project import default_project_manifest
 from ..domain.results import empty_result_bundle
 from ..domain.runtime_profile import default_runtime_profile
 from ..domain.workflow import default_workflow_definition, workflow_payload_hash
-from ..workflow.registry import builtin_node_definitions
+from ..workflow.registry import node_catalog_response
 from .constants import (
     CORPUS_FILENAME,
     CORPUS_VIEWS_FILENAME,
@@ -867,10 +867,12 @@ def load_workspace_snapshot() -> dict[str, Any]:
         history = manifest.get("run_history", [])
         selected_run = history[-1] if history else None
 
+    node_catalog = node_catalog_response()
     return {
         "recent_projects": recent_projects,
         "current_project": current_project,
         "corpus": current_corpus,
         "selected_run": selected_run,
-        "node_definitions": builtin_node_definitions(),
+        "node_definitions": node_catalog["node_definitions"],
+        "port_compatibility": node_catalog.get("port_compatibility"),
     }

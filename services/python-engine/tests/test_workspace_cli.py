@@ -15,6 +15,7 @@ from app.api.actions.dispatcher import (
     action_export_project,
     action_duplicate_project,
     action_export_project_backup,
+    action_get_node_catalog,
     action_import_dictionary_sheet,
     action_import_project_package,
     action_import_project_files,
@@ -114,6 +115,18 @@ def test_bootstrap_project_guides_first_run(isolated_workspace):
     assert snapshot["node_definitions"]
     assert any(node["type"] == "corpus_input" for node in snapshot["node_definitions"])
     assert any(node["type"] == "save_html_report" for node in snapshot["node_definitions"])
+
+
+def test_node_catalog_action_matches_workspace_snapshot(isolated_workspace):
+    snapshot = action_load_workspace()
+    catalog = action_get_node_catalog()
+    snapshot_node_types = {str(node["type"]) for node in snapshot["node_definitions"]}
+    catalog_node_types = {str(node["type"]) for node in catalog["node_definitions"]}
+
+    assert catalog["schema_version"] == "1.0"
+    assert len(catalog_node_types) == len(snapshot_node_types)
+    assert "save_xlsx" in catalog_node_types
+    assert catalog_node_types == snapshot_node_types
 
 
 def test_bootstrap_uses_bundled_workspace_without_seed_sources(isolated_workspace, monkeypatch):
@@ -351,6 +364,15 @@ def test_workspace_snapshot_loads_python_node_plugins(isolated_workspace, scratc
                             "cacheable": False,
                             "previewable": False,
                             "output_node": False,
+                        },
+                        "graph": {
+                            "size": {"w": 320, "h": 220},
+                            "default_position": {"x": 120, "y": 220},
+                            "toolbox_order": 900,
+                        },
+                        "ui": {
+                            "schema_version": "1.0",
+                            "layout": [{"widget": "number", "config_key": "top_n", "label": "Top N"}],
                         },
                     },
                     compiler=_compile,

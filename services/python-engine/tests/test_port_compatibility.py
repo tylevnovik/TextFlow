@@ -1,42 +1,34 @@
-from app.domain.defaults import workflow_port_compatible
-from app.workflow.registry import builtin_node_definitions
+from __future__ import annotations
+
+from app.api.actions.dispatcher import action_get_node_catalog
+from app.storage.projects import load_workspace_snapshot
 
 
-def test_all_analysis_output_ports_are_compatible_with_any_table_or_renderable():
-    definitions = builtin_node_definitions()
-    table_targets = {"AnyTable", "AnyAnalysisResult"}
-    renderable_targets = {"AnyRenderable", "AnyAnalysisResult"}
-    missing: list[tuple[str, str]] = []
+def test_node_catalog_includes_backend_derived_port_compatibility(isolated_workspace):
+    catalog = action_get_node_catalog()
+    compatibility = catalog["port_compatibility"]
 
-    for definition in definitions:
-        category = str(definition.get("category") or "")
-        if category != "analysis":
-            continue
-        node_type = str(definition.get("type") or "")
-        for port in definition.get("outputs", []):
-            if not isinstance(port, dict):
-                continue
-            port_type = str(port.get("port_type") or "")
-            if port_type in {"CorpusTable", "CleanCorpus", "NormalizedCorpus", "TokenCorpus", "FilteredTokenCorpus"}:
-                continue
-            can_table = any(workflow_port_compatible(port_type, t) for t in table_targets)
-            can_render = any(workflow_port_compatible(port_type, t) for t in renderable_targets)
-            if not can_table and not can_render:
-                missing.append((node_type, port_type))
-
-    assert not missing, f"Missing workflow_port_compatible mapping for: {missing}"
+    assert compatibility["corpus_order"] == [
+        "CorpusTable",
+        "ProjectCorpus",
+        "ScopedCorpus",
+        "CleanCorpus",
+        "NormalizedCorpus",
+        "TokenCorpus",
+        "FilteredTokenCorpus",
+    ]
+    assert "FrequencyTable" in compatibility["table_sources"]
+    assert "KeywordTable" in compatibility["table_sources"]
+    assert "AnyTable" in compatibility["table_sources"]
+    assert "FrequencyTable" in compatibility["renderable_sources"]
+    assert "KeywordTable" in compatibility["renderable_sources"]
+    assert "AnalysisBundle" not in compatibility["renderable_sources"]
+    assert "AnalysisBundle" not in compatibility["analysis_result_sources"]
+    assert set(compatibility["table_sources"]).issubset(set(compatibility["analysis_result_sources"]))
 
 
-def test_technology_indicators_declares_graph_metric_input():
-    definitions = {
-        str(definition.get("type") or ""): definition
-        for definition in builtin_node_definitions()
-    }
-    technology_inputs = {
-        str(port.get("port_id") or ""): str(port.get("port_type") or "")
-        for port in definitions["technology_indicators"].get("inputs", [])
-        if isinstance(port, dict)
-    }
+def test_workspace_snapshot_uses_same_port_compatibility_catalog(isolated_workspace):
+    catalog = action_get_node_catalog()
+    snapshot = load_workspace_snapshot()
 
-    assert technology_inputs["term_year_table_in"] == "TermYearTable"
-    assert technology_inputs["graph_metric_table_in"] == "GraphMetricTable"
+    assert snapshot["port_compatibility"] == catalog["port_compatibility"]

@@ -507,6 +507,11 @@ async fn load_workspace(app: tauri::AppHandle, state: tauri::State<'_, EngineSta
 }
 
 #[tauri::command]
+async fn get_node_catalog(app: tauri::AppHandle, state: tauri::State<'_, EngineState>) -> Result<Value, String> {
+    engine_request(&app, &state, "get-node-catalog", json!({})).await
+}
+
+#[tauri::command]
 async fn create_project(
     app: tauri::AppHandle,
     state: tauri::State<'_, EngineState>,
@@ -1082,6 +1087,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             load_workspace,
+            get_node_catalog,
             create_project,
             open_project,
             duplicate_project,

@@ -46,9 +46,6 @@ export type BuiltinWorkflowNodeType =
   | "conditional_router"
   | "result_gate"
   | "manual_review_gate"
-  | "load_project_corpus"
-  | "filter_corpus"
-  | "project_dictionary_set"
   | "clean_text"
   | "normalize_metadata"
   | "normalize_text"
@@ -79,12 +76,10 @@ export type BuiltinWorkflowNodeType =
   | "link_prediction"
   | "technology_indicators"
   | "technology_classification"
-  | "analyze_corpus"
   | "save_csv"
   | "save_xlsx"
   | "save_png"
   | "save_html_report"
-  | "export_results"
   | "note"
   | "group";
 export type WorkflowNodeType = BuiltinWorkflowNodeType | (string & {});
@@ -446,6 +441,10 @@ export interface WorkflowPort {
   port_type: WorkflowPortType;
   label?: string;
   allow_multiple?: boolean;
+  result_bundle_key?: string;
+  png_chart_ids?: string[];
+  include_in_html_audit?: boolean;
+  artifact_kind?: string;
 }
 
 export interface WorkflowNodeUiState {
@@ -526,10 +525,64 @@ export interface WorkflowNodeParamDefinition {
   options?: WorkflowNodeParamOption[];
 }
 
+export type WorkflowLayoutConditionOp = "eq" | "neq" | "in" | "not_in" | "truthy" | "falsy";
+
+export interface WorkflowLayoutCondition {
+  field: string;
+  op: WorkflowLayoutConditionOp;
+  value?: unknown;
+}
+
+export interface WorkflowNodeLayoutWidget {
+  widget:
+    | "text"
+    | "textarea"
+    | "number"
+    | "switch"
+    | "select"
+    | "multi_text"
+    | "condition_rows"
+    | "key_value_rows"
+    | "group"
+    | "row"
+    | "help"
+    | "slot";
+  label?: string;
+  config_key?: string;
+  description?: string;
+  options?: WorkflowNodeParamOption[];
+  condition?: WorkflowLayoutCondition;
+  component_id?: string;
+  children?: WorkflowNodeLayoutWidget[];
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
+export interface WorkflowNodeGraphDefinition {
+  size: { w: number; h: number };
+  default_position: { x: number; y: number };
+  toolbox_order?: number;
+  starter_roles?: string[];
+}
+
+export interface WorkflowNodeUiDefinition {
+  schema_version: "1.0";
+  summary_template?: string;
+  layout: WorkflowNodeLayoutWidget[];
+}
+
+export interface WorkflowPortCompatibilityCatalog {
+  table_sources: WorkflowPortType[];
+  renderable_sources: WorkflowPortType[];
+  analysis_result_sources: WorkflowPortType[];
+  corpus_order: WorkflowPortType[];
+}
+
 export interface RegisteredWorkflowNodeDefinition {
   type: WorkflowNodeType;
   title: string;
-  category: "input" | "process" | "analysis" | "output" | "utility" | "legacy";
+  category: "input" | "process" | "analysis" | "output" | "utility";
   description?: string;
   hidden_from_toolbox?: boolean;
   singleton?: boolean;
@@ -543,6 +596,15 @@ export interface RegisteredWorkflowNodeDefinition {
     previewable: boolean;
     output_node: boolean;
   };
+  graph?: WorkflowNodeGraphDefinition;
+  ui?: WorkflowNodeUiDefinition;
+}
+
+export interface NodeCatalogResponse {
+  schema_version: "1.0";
+  node_definitions: RegisteredWorkflowNodeDefinition[];
+  plugin_errors: string[];
+  port_compatibility?: WorkflowPortCompatibilityCatalog;
 }
 
 export interface RunLogEntry {
@@ -845,6 +907,7 @@ export interface WorkspaceSnapshot {
   corpus: CorpusItem[];
   selected_run?: RunRecord;
   node_definitions?: RegisteredWorkflowNodeDefinition[];
+  port_compatibility?: WorkflowPortCompatibilityCatalog;
 }
 
 export const sourceProfiles: Record<SourceProfile, string> = {

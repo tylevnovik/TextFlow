@@ -114,6 +114,39 @@ def runtime(
     return payload
 
 
+def graph(
+    size: tuple[int, int],
+    position: tuple[int, int],
+    *,
+    toolbox_order: int = 1000,
+    starter_roles: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "size": {"w": int(size[0]), "h": int(size[1])},
+        "default_position": {"x": int(position[0]), "y": int(position[1])},
+        "toolbox_order": int(toolbox_order),
+        "starter_roles": list(starter_roles or []),
+    }
+
+
+def ui(layout: list[dict[str, Any]], *, summary_template: str = "") -> dict[str, Any]:
+    payload: dict[str, Any] = {"schema_version": "1.0", "layout": deepcopy(layout)}
+    if summary_template:
+        payload["summary_template"] = summary_template
+    return payload
+
+
+def field(widget: str, config_key: str, label: str, **extra: Any) -> dict[str, Any]:
+    return {"widget": widget, "config_key": config_key, "label": label, **extra}
+
+
+def slot(component_id: str, label: str = "", **extra: Any) -> dict[str, Any]:
+    payload = {"widget": "slot", "component_id": component_id, **extra}
+    if label:
+        payload["label"] = label
+    return payload
+
+
 def node_definition_from_base(
     base_definition: dict[str, Any],
     runtime_profile: dict[str, Any] | None = None,
@@ -212,15 +245,6 @@ def dictionary_input_compiler(context: Any, node: dict[str, Any]) -> None:
             ),
         },
     )
-
-
-def analyze_corpus_compiler(context: Any, node: dict[str, Any]) -> None:
-    context.merge_section("analysis", {**{flag: True for flag in ANALYSIS_OUTPUT_FLAGS}, **node_config(node)})
-    context.enable_step("analysis")
-
-
-def export_results_compiler(context: Any, node: dict[str, Any]) -> None:
-    context.enable_export(**node_config(node))
 
 
 def empty_executor(_context: Any, _node: dict[str, Any], _inputs: dict[str, Any]) -> dict[str, Any]:

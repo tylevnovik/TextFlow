@@ -7,10 +7,9 @@ from typing import Any
 
 from ...domain.common import utc_now_iso
 
-CORPUS_SOURCE_NODE_TYPES = {"corpus_input", "load_project_corpus"}
+CORPUS_SOURCE_NODE_TYPES = {"corpus_input"}
 DICTIONARY_SOURCE_NODE_TYPES = {
     "dictionary_input",
-    "project_dictionary_set",
 }
 
 

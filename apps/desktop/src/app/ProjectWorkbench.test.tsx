@@ -2,13 +2,46 @@ import { useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PageId } from "@textflow/shared-types";
+import type { PageId, RegisteredWorkflowNodeDefinition, WorkspaceSnapshot } from "@textflow/shared-types";
 import { demoWorkspace } from "../data/demoProject";
 import { WORKFLOW_NODE_TYPE_MIME } from "../features/workflow/workflowWorkbenchActions";
 import { AppShell } from "./AppShell";
 import { ProjectWorkbench, type WorkbenchProgressInfo } from "./ProjectWorkbench";
 
 const useWorkspaceMock = vi.fn();
+
+const workflowNodeDefinitionsFixture: RegisteredWorkflowNodeDefinition[] = [
+  {
+    type: "frequency_statistics",
+    title: "词频统计",
+    category: "analysis",
+    description: "统计过滤后词项的频次、文档频次和时间分布。",
+    inputs: [{ port_id: "token_corpus_in", port_type: "FilteredTokenCorpus", label: "过滤语料" }],
+    outputs: [{ port_id: "frequency_table", port_type: "FrequencyTable", label: "词频表" }],
+    params: [],
+    runtime: {
+      step_id: "analysis",
+      executor: "analysis.frequency_statistics",
+      cacheable: true,
+      previewable: true,
+      output_node: false
+    },
+    graph: {
+      size: { w: 280, h: 210 },
+      default_position: { x: 2040, y: 220 },
+      toolbox_order: 230
+    },
+    ui: {
+      schema_version: "1.0",
+      layout: []
+    }
+  }
+];
+
+const demoWorkspaceWithNodeCatalog: WorkspaceSnapshot = {
+  ...demoWorkspace,
+  node_definitions: workflowNodeDefinitionsFixture
+};
 
 vi.mock("../store/workspaceStore", () => ({
   useWorkspace: () => useWorkspaceMock(),
@@ -37,7 +70,7 @@ function renderWorkbench(activePage: PageId = "project") {
 
     useWorkspaceMock.mockReturnValue({
       state: {
-        snapshot: demoWorkspace,
+        snapshot: demoWorkspaceWithNodeCatalog,
         loading: false,
         statusLine: "测试工作区已加载",
         uiScale: 1
@@ -52,7 +85,7 @@ function renderWorkbench(activePage: PageId = "project") {
       <AppShell uiScale={1}>
         <ProjectWorkbench
           activePage={page}
-          snapshot={demoWorkspace}
+          snapshot={demoWorkspaceWithNodeCatalog}
           loading={false}
           statusLine="测试工作区已加载"
           progress={progress}
@@ -200,6 +233,10 @@ describe("ProjectWorkbench", () => {
     expect(frequencyItem).toHaveAttribute("draggable", "true");
     expect(dataTransfer.effectAllowed).toBe("copy");
     expect(dataTransfer.setData).toHaveBeenCalledWith(WORKFLOW_NODE_TYPE_MIME, "frequency_statistics");
+    expect(dataTransfer.setData).toHaveBeenCalledWith(
+      "application/x-textflow-workbench-selection",
+      expect.stringContaining("\"kind\":\"workflow_library\"")
+    );
     expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "词频统计");
   });
 

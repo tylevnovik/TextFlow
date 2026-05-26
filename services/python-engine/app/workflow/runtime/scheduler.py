@@ -58,7 +58,7 @@ def _node_runtime_parallel_safe(definition: dict[str, Any]) -> bool:
         return bool(runtime.get("parallel_safe"))
     category = str(definition.get("category") or "")
     node_type = str(definition.get("type") or "")
-    return category in {"analysis", "output"} and node_type not in {"analyze_corpus", "export_results"}
+    return category in {"analysis", "output"}
 
 
 def dag_parallel_worker_count(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import bool_param, enum_param, port, runtime, runtime_section_compiler
+from ._common import bool_param, enum_param, port, runtime, runtime_section_compiler, field, graph, slot, ui
 from ._support import (
     _active_dictionary_set,
     _clone_corpus_rows,
@@ -49,6 +49,17 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             "workflow.apply_dictionary_rules",
             cacheable=True,
             previewable=True,
+        ),
+        "graph": graph((340, 240), (2760, 480), toolbox_order=230),
+        "ui": ui(
+            [
+                field("switch", "apply_standard_terms", "应用标准词"),
+                field("switch", "apply_synonym_map", "应用同义词"),
+                field("switch", "apply_near_synonym_map", "应用近义词"),
+                field("switch", "apply_stopwords", "应用停用词"),
+                field("switch", "apply_exclusion_terms", "应用排除词"),
+                field("select", "conflict_resolution", "冲突处理"),
+            ],
         ),
     }
 

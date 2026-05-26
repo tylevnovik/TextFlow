@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from ._common import enum_param, number_param, port, runtime, node_definition_from_base, passthrough_compiler
+from ._common import enum_param, number_param, port, runtime, node_definition_from_base, passthrough_compiler, field, graph, slot, ui
 from ._support import (
     _clone_corpus_rows,
     _scoped_corpus_from_inputs,
@@ -42,6 +42,15 @@ def node_definition(runtime_profile: dict[str, Any] | None = None) -> dict[str, 
             previewable=True,
             output_node=False,
             parallel_safe=True,
+        ),
+        "graph": graph((320, 240), (1080, 820), toolbox_order=180),
+        "ui": ui(
+            [
+                field("select", "sample_mode", "抽样方式"),
+                field("number", "sample_size", "样本数量", step=1),
+                field("number", "sample_ratio", "抽样比例", step=1),
+                field("number", "seed", "随机种子", step=1),
+            ],
         ),
     }
     return node_definition_from_base(base, runtime_profile, None)

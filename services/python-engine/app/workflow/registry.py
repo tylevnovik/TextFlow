@@ -4,6 +4,8 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .schema import port_compatibility_from_definitions, validate_node_definition
+
 NodeCompilerHook = Callable[["NodeCompileContext", dict[str, Any]], None]
 NodeExecutorHook = Callable[..., Any]
 
@@ -62,12 +64,24 @@ class NodeRegistryBuilder:
         self._compilers: dict[str, NodeCompilerHook] = {}
         self._executors: dict[str, NodeExecutorHook] = {}
         self._plugin_errors: list[str] = []
+        self._active_plugin_name: str | None = None
 
-    def register_definition(self, definition: dict[str, Any]) -> None:
+    def register_definition(self, definition: dict[str, Any]) -> bool:
         node_type = str(definition.get("type") or "")
         if not node_type:
-            raise ValueError("Node definition requires a non-empty type")
+            message = "Node definition requires a non-empty type"
+            if self._active_plugin_name:
+                self.add_plugin_error(f"{self._active_plugin_name}: {message}")
+                return False
+            raise ValueError(message)
         payload = deepcopy(definition)
+        errors = validate_node_definition(payload)
+        if errors:
+            message = "; ".join(errors)
+            if self._active_plugin_name:
+                self.add_plugin_error(f"{self._active_plugin_name}: {node_type}: {message}")
+                return False
+            raise ValueError(message)
         existing_index = next(
             (index for index, item in enumerate(self._definitions) if str(item.get("type") or "") == node_type),
             None,
@@ -77,6 +91,7 @@ class NodeRegistryBuilder:
         else:
             self._definitions[existing_index] = payload
         self._definitions_by_type[node_type] = payload
+        return True
 
     def register_compiler(self, node_type: str, compiler: NodeCompilerHook) -> None:
         if not node_type:
@@ -95,7 +110,8 @@ class NodeRegistryBuilder:
         compiler: NodeCompilerHook | None = None,
         executor: NodeExecutorHook | None = None,
     ) -> None:
-        self.register_definition(definition)
+        if not self.register_definition(definition):
+            return
         node_type = str(definition.get("type") or "")
         runtime = definition.get("runtime") if isinstance(definition.get("runtime"), dict) else {}
         executor_id = str(runtime.get("executor") or "")
@@ -107,6 +123,12 @@ class NodeRegistryBuilder:
     def add_plugin_error(self, message: str) -> None:
         if message:
             self._plugin_errors.append(message)
+
+    def begin_plugin(self, plugin_name: str) -> None:
+        self._active_plugin_name = plugin_name
+
+    def end_plugin(self) -> None:
+        self._active_plugin_name = None
 
     def build(self) -> NodeRegistry:
         definitions = [deepcopy(definition) for definition in self._definitions]
@@ -126,6 +148,16 @@ def build_node_registry(runtime_profile: dict[str, Any] | None = None) -> NodeRe
     register_builtin_node_modules(builder)
     load_node_plugins(builder)
     return builder.build()
+
+
+def node_catalog_response(runtime_profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    registry = build_node_registry(runtime_profile)
+    return {
+        "schema_version": "1.0",
+        "node_definitions": registry.definitions,
+        "plugin_errors": registry.plugin_errors,
+        "port_compatibility": port_compatibility_from_definitions(registry.definitions),
+    }
 
 
 def builtin_node_definitions(runtime_profile: dict[str, Any] | None = None) -> list[dict[str, Any]]:

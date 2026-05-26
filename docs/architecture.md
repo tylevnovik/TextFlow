@@ -26,8 +26,8 @@ services/python-engine/
   app/reporting/             # HTML、图表和运行输出报告
   app/samples/               # 内置样例、seed 发现和打包样例工作区
   app/storage/               # workspace、project、SQLite、artifact、resource、review、experiment 存储
-  app/workflow/              # workflow definitions、registry、compiler、executors、runtime、plugin boundary
-  app/workflow/nodes/        # 可扫描的内置节点模块
+  app/workflow/              # workflow catalog、registry、compiler、executors、runtime、plugin boundary
+  app/workflow/nodes/        # 可扫描的内置节点模块，也是节点 catalog 真相源
   tests/                     # Python 测试
   benchmarks/                # 大语料 benchmark
 
@@ -222,7 +222,7 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 FastA
 
 > workflow graph 是唯一真相，执行层统一走 native DAG。
 
-详细规则见 [工作流与运行时](./workflow-runtime.md)。
+节点类型、端口、参数、默认配置、画布尺寸、默认位置、工具箱元数据和动态属性面板 schema 由 Python 节点模块统一声明。registry 扫描内置和插件节点后生成 catalog；同一份 catalog 同时服务运行时、默认图、workspace snapshot、工具箱、端口兼容和属性面板。详细规则见 [工作流与运行时](./workflow-runtime.md) 和 [节点 Catalog Schema](./node-catalog-schema.md)。
 
 ## 插件节点架构
 
@@ -238,9 +238,9 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 FastA
 - `register_nodes(builder, runtime_profile?)`
 - `register(builder, runtime_profile?)`
 
-每个内置节点文件应同时拥有节点级 definition、compiler、executor 和注册函数。节点可以调用 `analysis`、`storage`、`reporting` 或 `workflow/executors/support.py` 里的共享算法/工具，但不应再要求开发者为了修改同一个节点而同时改 `definitions/builtin.py`、`compilers.py` 和 `executors/__init__.py`。
+每个内置节点文件应同时拥有节点级 definition、compiler、executor 和注册函数。definition 必须包含 `graph` 与 `ui`，并通过 `app/workflow/schema.py` 校验。节点可以调用 `analysis`、`storage`、`reporting` 或 `workflow/executors/support.py` 里的共享算法/工具，但不应再要求开发者为了修改同一个节点而同时改多个前后端 schema 文件。
 
-外部插件节点继续使用同样的 `register_nodes` / `register` 入口。registry 会先扫描内置节点目录，再加载外部插件；旧的 `workflow/definitions/builtin.py` 仅作为 catalog 兼容入口保留，其内容来自这些目录模块。所有内置节点都已经迁移到 `app/workflow/nodes`，旧的全局 compiler/executor map 不再参与节点注册。
+外部插件节点继续使用同样的 `register_nodes` / `register` 入口。registry 会先扫描内置节点目录，再加载外部插件；插件 definition 使用同一套校验器。无效插件节点会被跳过，错误通过 `plugin_errors` 返回，不影响内置节点和其他插件节点。所有内置节点都已经迁移到 `app/workflow/nodes`，旧的全局 compiler/executor map 不再参与节点注册。
 
 节点可以注册：
 
@@ -249,7 +249,7 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 FastA
 - executor hook
 - artifact output port declaration
 
-前端当前优先读取 sidecar 返回的 `node_definitions`，因此插件节点可以进入工具箱和 schema 驱动表单。插件输出口若声明 `artifact_kind`，native DAG 会把该输出写入项目 artifact store，并把 handle 写回 `run_record.artifacts` 和 `manifest.artifact_records`。
+前端读取 sidecar 返回的 `node_definitions` 与 `port_compatibility`，因此插件节点可以进入工具箱、拖到画布、创建默认 config、渲染动态属性面板并参与端口校验。插件输出口若声明 `artifact_kind`，native DAG 会把该输出写入项目 artifact store，并把 handle 写回 `run_record.artifacts` 和 `manifest.artifact_records`。
 
 ## 打包策略
 

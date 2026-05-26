@@ -362,6 +362,7 @@ export function ProjectWorkbench({
             selection={selection}
             snapshot={snapshot}
             loading={loading}
+            setActivePage={setActivePage}
             onSendToWorkflow={selectWorkflowEntry}
             onOpenRun={selectRun}
             onOpenArtifact={selectArtifact}
@@ -540,10 +541,9 @@ function ObjectTreeItems({
                 return;
               }
               event.dataTransfer.effectAllowed = "copy";
+              event.dataTransfer.setData(WORKBENCH_SELECTION_MIME, serializeWorkbenchSelection(item.selection));
               if (item.selection.kind === "workflow_library") {
                 event.dataTransfer.setData(WORKFLOW_NODE_TYPE_MIME, item.selection.nodeType);
-              } else {
-                event.dataTransfer.setData(WORKBENCH_SELECTION_MIME, serializeWorkbenchSelection(item.selection));
               }
               event.dataTransfer.setData("text/plain", item.label);
             }}
@@ -754,6 +754,7 @@ function InspectorHost({
   selection,
   snapshot,
   loading,
+  setActivePage,
   onSendToWorkflow,
   onOpenRun,
   onOpenArtifact,
@@ -762,6 +763,7 @@ function InspectorHost({
   selection: WorkbenchSelection;
   snapshot: WorkspaceSnapshot;
   loading: boolean;
+  setActivePage: (page: PageId) => void;
   onSendToWorkflow: () => void;
   onOpenRun: (run: RunRecord) => void;
   onOpenArtifact: (artifact: ArtifactRecord) => void;
@@ -835,6 +837,9 @@ function InspectorHost({
           selection={inspectorSelection}
           project={project}
           workflow={workflow}
+          snapshot={snapshot}
+          loading={loading}
+          onSetActivePage={setActivePage}
         />
       );
     }
@@ -873,14 +878,17 @@ function workflowForSelection(
     return workflow;
   }
 
-  if (selection.kind === "workflow_node" && !workflow.nodes.some((node) => node.node_id === selection.nodeId)) {
-    if (selection.node) {
-      return {
-        ...workflow,
-        nodes: [...workflow.nodes, selection.node]
-      };
-    }
+  if (selection.kind === "workflow_node" && selection.node) {
+    const hasNode = workflow.nodes.some((node) => node.node_id === selection.nodeId);
+    return {
+      ...workflow,
+      nodes: hasNode
+        ? workflow.nodes.map((node) => node.node_id === selection.nodeId ? selection.node! : node)
+        : [...workflow.nodes, selection.node]
+    };
+  }
 
+  if (selection.kind === "workflow_node" && !workflow.nodes.some((node) => node.node_id === selection.nodeId)) {
     const matchingNode = selection.nodeType
       ? workflow.nodes.find((node) => node.node_type === selection.nodeType)
       : null;

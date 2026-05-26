@@ -1,4 +1,5 @@
 import { createEvent, fireEvent, render, screen, within } from "@testing-library/react";
+import type { RegisteredWorkflowNodeDefinition } from "@textflow/shared-types";
 import { sourceProfileImportTemplates } from "@textflow/shared-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { demoWorkspace } from "./data/demoProject";
@@ -17,6 +18,164 @@ vi.mock("./store/workspaceStore", () => ({
 }));
 
 import { PageView, WorkflowEditorPage } from "./screens";
+
+const fallbackFrequencyDefinition: RegisteredWorkflowNodeDefinition = {
+  type: "frequency_statistics",
+  title: "词频统计",
+  category: "analysis",
+  description: "统计词项频率。",
+  inputs: [{ port_id: "token_corpus_in", port_type: "FilteredTokenCorpus", label: "过滤后语料" }],
+  outputs: [{ port_id: "frequency_table", port_type: "FrequencyTable", label: "词频表", result_bundle_key: "frequency_table" }],
+  params: [{ param_id: "top_n", label: "Top N", kind: "number", default_value: 200 }],
+  runtime: {
+    step_id: "analysis",
+    executor: "analysis.frequency_statistics",
+    cacheable: true,
+    previewable: true,
+    output_node: false
+  },
+  graph: {
+    size: { w: 280, h: 210 },
+    default_position: { x: 3660, y: 40 },
+    toolbox_order: 300
+  },
+  ui: {
+    schema_version: "1.0",
+    layout: [{ widget: "number", config_key: "top_n", label: "Top N" }]
+  }
+};
+
+const cleanTextDefinition: RegisteredWorkflowNodeDefinition = {
+  type: "clean_text",
+  title: "基础清洗",
+  category: "process",
+  description: "清理 HTML、URL 与空白。",
+  inputs: [{ port_id: "corpus_in", port_type: "CorpusTable", label: "语料输入" }],
+  outputs: [{ port_id: "clean_corpus", port_type: "CleanCorpus", label: "清洗后语料" }],
+  params: [
+    { param_id: "strip_html", label: "去 HTML", kind: "boolean", default_value: true },
+    { param_id: "strip_urls", label: "去 URL", kind: "boolean", default_value: true },
+    { param_id: "normalize_whitespace", label: "统一空白", kind: "boolean", default_value: true },
+    { param_id: "normalize_punctuation", label: "统一标点", kind: "boolean", default_value: true },
+    { param_id: "remove_special_chars", label: "去特殊字符", kind: "boolean", default_value: false }
+  ],
+  runtime: {
+    step_id: "cleaning",
+    executor: "workflow.clean_text",
+    cacheable: true,
+    previewable: true,
+    output_node: false
+  },
+  graph: {
+    size: { w: 320, h: 230 },
+    default_position: { x: 1500, y: 480 }
+  },
+  ui: {
+    schema_version: "1.0",
+    layout: [
+      { widget: "switch", config_key: "strip_html", label: "去 HTML" },
+      { widget: "switch", config_key: "strip_urls", label: "去 URL" },
+      { widget: "switch", config_key: "normalize_whitespace", label: "统一空白" },
+      { widget: "switch", config_key: "normalize_punctuation", label: "统一标点" },
+      { widget: "switch", config_key: "remove_special_chars", label: "去特殊字符" }
+    ]
+  }
+};
+
+const dictionaryInputDefinition: RegisteredWorkflowNodeDefinition = {
+  type: "dictionary_input",
+  title: "词表输入",
+  category: "input",
+  description: "引用当前项目词表。",
+  inputs: [],
+  outputs: [{ port_id: "dictionary_set", port_type: "DictionarySet", label: "词表" }],
+  params: [
+    {
+      param_id: "resource_mode",
+      label: "资源来源",
+      kind: "enum",
+      default_value: "project_dictionary",
+      options: [{ value: "project_dictionary", label: "项目词表" }]
+    },
+    { param_id: "resource_id", label: "资源 ID", kind: "string", default_value: "project:dictionary_set" },
+    { param_id: "use_custom_lexicon", label: "使用自定义词典", kind: "boolean", default_value: true },
+    { param_id: "use_phrase_lexicon", label: "使用短语词典", kind: "boolean", default_value: true },
+    { param_id: "apply_regex_rules", label: "启用 Regex 规则", kind: "boolean", default_value: true },
+    { param_id: "apply_standard_terms", label: "启用标准词", kind: "boolean", default_value: true },
+    { param_id: "apply_synonym_map", label: "启用同义词", kind: "boolean", default_value: true },
+    { param_id: "apply_near_synonym_map", label: "启用近义词", kind: "boolean", default_value: true },
+    { param_id: "apply_stopwords", label: "启用停用词", kind: "boolean", default_value: true },
+    { param_id: "apply_exclusion_terms", label: "启用排除词", kind: "boolean", default_value: true }
+  ],
+  runtime: {
+    step_id: "resource",
+    executor: "resource.load_dictionary",
+    cacheable: true,
+    previewable: true,
+    output_node: false
+  },
+  graph: {
+    size: { w: 360, h: 360 },
+    default_position: { x: 120, y: 40 }
+  },
+  ui: {
+    schema_version: "1.0",
+    layout: [{ widget: "slot", component_id: "dictionary_binding_selector" }]
+  }
+};
+
+const corpusInputDefinition: RegisteredWorkflowNodeDefinition = {
+  type: "corpus_input",
+  title: "语料输入",
+  category: "input",
+  description: "选择项目语料范围。",
+  inputs: [],
+  outputs: [{ port_id: "corpus", port_type: "CorpusTable", label: "语料" }],
+  params: [
+    {
+      param_id: "resource_mode",
+      label: "资源来源",
+      kind: "enum",
+      default_value: "project_corpus",
+      options: [{ value: "project_corpus", label: "项目语料" }]
+    },
+    {
+      param_id: "mode",
+      label: "处理范围",
+      kind: "enum",
+      default_value: "all_documents",
+      options: [
+        { value: "all_documents", label: "全部文档" },
+        { value: "filtered_subset", label: "筛选子集" },
+        { value: "selected_documents", label: "指定文档" }
+      ]
+    },
+    { param_id: "year_from", label: "起始年份", kind: "number", default_value: null },
+    { param_id: "year_to", label: "结束年份", kind: "number", default_value: null }
+  ],
+  runtime: {
+    step_id: "scope",
+    executor: "scope.select_corpus",
+    cacheable: false,
+    previewable: true,
+    output_node: false
+  },
+  graph: {
+    size: { w: 420, h: 340 },
+    default_position: { x: 120, y: 480 }
+  },
+  ui: {
+    schema_version: "1.0",
+    layout: [{ widget: "slot", component_id: "corpus_scope_selector" }]
+  }
+};
+
+const workflowNodeDefinitions = [
+  fallbackFrequencyDefinition,
+  cleanTextDefinition,
+  dictionaryInputDefinition,
+  corpusInputDefinition
+];
 
 describe("DataPage advanced mapping editor", () => {
   beforeEach(() => {
@@ -99,7 +258,7 @@ describe("Workflow page loading and previews", () => {
           recent_projects: demoWorkspace.recent_projects,
           current_project: project,
           corpus,
-          node_definitions: [],
+          node_definitions: workflowNodeDefinitions,
         },
         loading: false,
       },
@@ -217,6 +376,69 @@ describe("Workflow page loading and previews", () => {
 
     expect(document.querySelectorAll(".workflow-node-card-canvas")).toHaveLength(beforeCount + 1);
     expect(screen.getAllByText("词频统计").length).toBeGreaterThan(0);
+  });
+
+  it("accepts toolbox node drops when WebView only preserves text/plain", () => {
+    useWorkspaceMock.mockReturnValue(workflowWorkspace());
+
+    render(<PageView page="workflow" />);
+
+    const canvas = document.querySelector(".workflow-editor-canvas") as HTMLElement;
+    const beforeCount = document.querySelectorAll(".workflow-node-card-canvas").length;
+    const dropEvent = createEvent.drop(canvas);
+    Object.defineProperty(dropEvent, "clientX", { value: 520 });
+    Object.defineProperty(dropEvent, "clientY", { value: 320 });
+    Object.defineProperty(dropEvent, "dataTransfer", {
+      value: {
+        types: ["text/plain"],
+        getData: vi.fn((type: string) => type === "text/plain" ? "词频统计" : "")
+      }
+    });
+
+    fireEvent(canvas, dropEvent);
+
+    expect(document.querySelectorAll(".workflow-node-card-canvas")).toHaveLength(beforeCount + 1);
+    expect(screen.getAllByText("词频统计").length).toBeGreaterThan(0);
+  });
+
+  it("renders compact inline controls for stable workflow node parameters", () => {
+    useWorkspaceMock.mockReturnValue(workflowWorkspace());
+
+    render(<PageView page="workflow" />);
+
+    const frequencyNode = screen.getAllByText("词频统计")
+      .map((element) => element.closest(".workflow-node-card"))
+      .find(Boolean) as HTMLElement | undefined;
+    expect(frequencyNode).toBeTruthy();
+
+    const inlineConfig = frequencyNode?.querySelector(".workflow-node-inline-config");
+    expect(inlineConfig).not.toBeNull();
+    expect(within(frequencyNode as HTMLElement).getByText("Top N")).toBeInTheDocument();
+    expect(within(frequencyNode as HTMLElement).getByRole("spinbutton")).toHaveValue(200);
+  });
+
+  it("inlines fixed-size workflow configs and summarizes data-growing selectors", () => {
+    useWorkspaceMock.mockReturnValue(workflowWorkspace());
+
+    render(<PageView page="workflow" />);
+
+    const cardByTitle = (title: string) => screen.getAllByText(title)
+      .map((element) => element.closest(".workflow-node-card"))
+      .find(Boolean) as HTMLElement | undefined;
+
+    const cleanNode = cardByTitle("基础清洗");
+    expect(cleanNode?.querySelector(".workflow-node-inline-config")).not.toBeNull();
+    expect(within(cleanNode as HTMLElement).getByText("去 HTML")).toBeInTheDocument();
+    expect(within(cleanNode as HTMLElement).getByText("去特殊字符")).toBeInTheDocument();
+
+    const dictionaryNode = cardByTitle("词表输入");
+    expect(dictionaryNode?.querySelector(".workflow-node-inline-config")).not.toBeNull();
+    expect(within(dictionaryNode as HTMLElement).getByText("资源 ID")).toBeInTheDocument();
+    expect(within(dictionaryNode as HTMLElement).getByText("启用标准词")).toBeInTheDocument();
+
+    const corpusNode = cardByTitle("语料输入");
+    expect(corpusNode?.querySelector(".workflow-node-inline-config")).toBeNull();
+    expect(corpusNode?.querySelector(".workflow-node-card-facts")).not.toBeNull();
   });
 });
 
