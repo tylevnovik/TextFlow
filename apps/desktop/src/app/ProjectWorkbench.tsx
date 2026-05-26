@@ -498,6 +498,7 @@ function ObjectTree({
               selectedKey={selectedKey}
               onSelectItem={onSelectItem}
               openItems={openItems}
+              activePage={activePage}
             />
           </Tree>
         </TreeItem>
@@ -511,18 +512,20 @@ function ObjectTreeItems({
   items,
   selectedKey,
   onSelectItem,
-  openItems
+  openItems,
+  activePage
 }: {
   items: WorkbenchNavigationItem[];
   selectedKey: string;
   onSelectItem: (item: WorkbenchNavigationItem) => void;
   openItems: string[];
+  activePage: PageId;
 }) {
   return (
     <>
       {items.map((item) => {
         const hasChildren = Boolean(item.children?.length);
-        const isActive = selectionKey(item.selection) === selectedKey;
+        const isActive = selectionKey(item.selection) === selectedKey && item.page === activePage;
         const draggable = isDraggableWorkbenchItem(item);
 
         return (
@@ -564,6 +567,7 @@ function ObjectTreeItems({
                   selectedKey={selectedKey}
                   onSelectItem={onSelectItem}
                   openItems={openItems}
+                  activePage={activePage}
                 />
               </Tree>
             )}
