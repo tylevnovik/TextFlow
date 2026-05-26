@@ -1,0 +1,47 @@
+name: CI (Code Quality & Test)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 1. 设置 Node.js 环境
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      # 2. 安装前端依赖
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      # 3. 设置 Python 环境
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      # 4. 初始化 Python 虚拟环境并安装依赖
+      - name: Bootstrap Python
+        shell: powershell
+        run: .\scripts\bootstrap-python.ps1
+
+      # 5. 运行前端规范检查 (Lint)
+      - name: Run Frontend Lint
+        run: npm run lint
+
+      # 6. 运行 Python 引擎快速测试
+      - name: Run Python Engine Tests
+        shell: powershell
+        run: npm run test:engine:fast

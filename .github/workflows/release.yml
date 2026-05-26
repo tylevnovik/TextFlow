@@ -1,0 +1,55 @@
+name: Release App
+
+on:
+  push:
+    tags:
+      - 'v*' # 匹配 v1.0.0, v0.2.0 等版本标签
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 1. 设置 Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      # 2. 设置 Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      # 3. 设置 Rust (Tauri 编译必需)
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # 4. 安装前端依赖
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      # 5. 初始化 Python 虚拟环境并安装依赖
+      # beforeBuildCommand 包含 build-python-sidecar.ps1，它需要 .venv
+      - name: Bootstrap Python Virtual Environment
+        shell: powershell
+        run: .\scripts\bootstrap-python.ps1
+
+      # 6. 使用 Tauri 官方 Action 进行前端构建和 Tauri 打包
+      # 它内部会执行 cargo tauri build，进而自动触发 beforeBuildCommand (即 build-desktop-release-local-samples.ps1)
+      - name: Build Tauri App & Publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'TextFlow Studio v__VERSION__'
+          releaseBody: 'See the assets below to download.'
+          releaseDraft: true
+          prerelease: false
