@@ -41,3 +41,5 @@ sample_seed_sources/*.xlsx
 services/python-engine/app/workflow/nodes/_builtin_list.py
 screenshots_smoke/
 
+# Antigravity local config
+.antigravityignore

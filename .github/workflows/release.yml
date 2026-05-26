@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*' # 匹配 v1.0.0, v0.2.0 等版本标签
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-and-release:
     runs-on: windows-latest
@@ -17,14 +20,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: 'npm'
 
       # 2. 设置 Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.14'
           cache: 'pip'
 
       # 3. 设置 Rust (Tauri 编译必需)
