@@ -5,7 +5,7 @@
   "identifier": "com.textflow.studio",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "powershell -ExecutionPolicy Bypass -File ..\\..\\scripts\\build-desktop-release-local-samples.ps1",
+    "beforeBuildCommand": "powershell -ExecutionPolicy Bypass -File ..\\..\\..\\scripts\\build-desktop-release-local-samples.ps1",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
