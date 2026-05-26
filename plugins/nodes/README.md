@@ -6,9 +6,9 @@
 
 sidecar 启动时会按顺序尝试扫描：
 
+- 环境变量 `TEXTFLOW_NODE_PLUGIN_DIR` 指向的目录
 - 仓库根目录下的 `plugins/nodes`
 - 打包后 sidecar 同级目录下的 `plugins/nodes`
-- 环境变量 `TEXTFLOW_NODE_PLUGIN_DIR` 指向的目录
 
 ## 插件文件入口
 
@@ -31,7 +31,7 @@ sidecar 启动时会按顺序尝试扫描：
 如果插件节点会产生可浏览的中间表格、对象或导出摘要，输出口必须显式声明产物类型。推荐使用：
 
 ```python
-from app.node_plugins import artifact_output_port
+from app.workflow.plugins import artifact_output_port
 
 artifact_output_port("plugin_table", label="插件表格", artifact_kind="table")
 ```
@@ -51,7 +51,7 @@ artifact_output_port("plugin_table", label="插件表格", artifact_kind="table"
 3. 进入 native DAG
    如果插件同时提供 executor，且当前 workflow 满足 native DAG 条件，它也可以进入原生节点执行链。
 
-如果插件节点只有 compiler、没有 executor，或者图中混入 legacy 聚合节点，那么整个 workflow 仍可能回退到兼容 bridge 路径。
+当前 workflow 运行统一进入 native DAG。插件节点如果要被实际执行，必须注册 definition 中声明的 executor；只有 compiler、没有 executor 的插件节点可以影响运行时编译，但不能作为可执行节点进入工作流主链。
 
 ## 最小示例
 
@@ -61,7 +61,7 @@ def _compile(context, node):
     context.enable_step("analysis")
 
 
-from app.node_plugins import artifact_output_port
+from app.workflow.plugins import artifact_output_port
 
 
 def register_nodes(builder):

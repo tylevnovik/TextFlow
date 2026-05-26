@@ -90,9 +90,9 @@ Phase 4 已开始把旧 `WorkflowEditorPage` 迁移为节点图默认主工作�
 截至 `2026-05-26`，本地与 CI 验证结果如下：
 
 - `npm run lint` 通过
-- `npm run test --workspace apps/desktop` 通过（56 个测试全部通过）
+- `npm run test --workspace apps/desktop` 通过
 - `npm run build` 通过
-- `npm run test:engine` (或 `test:engine:fast`) 通过（154 个测试全部通过）
+- `npm run test:engine` (或 `test:engine:fast`) 通过
 - `npm run test:engine:full` 通过
 - `powershell -ExecutionPolicy Bypass -File .\scripts\build-python-sidecar.ps1` 通过
 - `npm run tauri:build --workspace apps/desktop` 通过，且 GitHub Actions 自动化 CI 和 Release 打包工作流正常运行

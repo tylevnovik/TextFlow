@@ -68,7 +68,7 @@ TextFlow Studio 是一个桌面优先的本地文本预处理与基础文本挖�
 
 最新对外版本：
 
-- [GitHub Release v0.1.1](https://github.com/tylevnovik/TextFlow/releases/tag/v0.1.1)
+- [GitHub Release v0.2.0](https://github.com/tylevnovik/TextFlow/releases/tag/v0.2.0)
 
 ## 技术栈
 

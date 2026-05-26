@@ -229,7 +229,7 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 FastA
 节点注册分为两层，但入口形状保持一致：
 
 - 内置节点：`services/python-engine/app/workflow/nodes/*.py`
-- 外部插件节点：仓库根目录 `plugins/nodes`、打包 sidecar 同级 `plugins/nodes`、`TEXTFLOW_NODE_PLUGIN_DIR`
+- 外部插件节点：`TEXTFLOW_NODE_PLUGIN_DIR`、仓库根目录 `plugins/nodes`、打包 sidecar 同级 `plugins/nodes`
 
 内置节点模块可以暴露：
 
@@ -238,7 +238,7 @@ Tauri 不直接嵌入 Python 逻辑，而是通过 sidecar 暴露的本地 FastA
 - `register_nodes(builder, runtime_profile?)`
 - `register(builder, runtime_profile?)`
 
-每个内置节点文件应同时拥有节点级 definition、compiler、executor 和注册函数。definition 必须包含 `graph` 与 `ui`，并通过 `app/workflow/schema.py` 校验。节点可以调用 `analysis`、`storage`、`reporting` 或 `workflow/executors/support.py` 里的共享算法/工具，但不应再要求开发者为了修改同一个节点而同时改多个前后端 schema 文件。
+每个内置节点文件应同时拥有节点级 definition、compiler、executor 和注册函数。definition 必须包含 `graph` 与 `ui`，并通过 `app/workflow/schema.py` 校验。节点可以调用 `analysis`、`storage`、`reporting`、`workflow/runtime` 或 `workflow/nodes/_support.py` 里的共享算法/工具，但不应再要求开发者为了修改同一个节点而同时改多个前后端 schema 文件。
 
 外部插件节点继续使用同样的 `register_nodes` / `register` 入口。registry 会先扫描内置节点目录，再加载外部插件；插件 definition 使用同一套校验器。无效插件节点会被跳过，错误通过 `plugin_errors` 返回，不影响内置节点和其他插件节点。所有内置节点都已经迁移到 `app/workflow/nodes`，旧的全局 compiler/executor map 不再参与节点注册。
 
