@@ -4069,3 +4069,13 @@ th {
     grid-template-columns: 1fr;
   }
 }
+
+/* Hide standard number input spin-buttons to prevent white styling box in dark/custom themes */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
