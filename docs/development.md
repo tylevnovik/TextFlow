@@ -221,7 +221,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\test-engine.ps1 -Suite full
 - 只改前端、样式或文档：通常不需要 Python 引擎测试；至少按改动范围跑 `npm run lint`，触及组件行为时补跑 `npm run test --workspace apps/desktop`。
 - 改普通引擎逻辑但不涉及官方样例打包/引导：跑 `npm run test:engine`。
 - 改工作区首次启动、官方样例、样例 seed gate、sidecar 打包脚本、导出会触发样例运行的链路：跑 `npm run test:engine:full`。
-- 如果改动同时碰到 `services/python-engine/app/sample_projects.py`、`services/python-engine/app/bundled_sample_workspace.py`、`services/python-engine/app/cli.py` 的 bootstrap 路径、`scripts/build-bundled-sample-workspace.ps1` 或 `scripts/build-python-sidecar.ps1`，直接视为 `full`。
+- 如果改动同时碰到 `services/python-engine/app/samples/projects.py`、`services/python-engine/app/samples/bundled_workspace.py`、`services/python-engine/app/samples/seed_sources.py`、`services/python-engine/app/api/actions/support.py` 的 bootstrap 路径、`scripts/build-bundled-sample-workspace.ps1` 或 `scripts/build-python-sidecar.ps1`，直接视为 `full`。
 - 发布前或对测试层级有疑问时，补跑 `npm run test:engine:full`。
 
 ### 缩小官方样例规模用于测试
@@ -331,9 +331,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-large-benchmark.ps1 --lim
 截至 `2026-05-26`，本地与 CI 验证情况如下：
 
 - `npm run lint` 通过
-- `npm run test --workspace apps/desktop` 通过（56 个测试全部通过）
+- `npm run test --workspace apps/desktop` 通过
 - `npm run build` 通过
-- `npm run test:engine` (或 `test:engine:fast`) 通过（154 个测试全部通过）
+- `npm run test:engine` (或 `test:engine:fast`) 通过
 - `npm run test:engine:full` 通过
 - `powershell -ExecutionPolicy Bypass -File .\scripts\build-python-sidecar.ps1` 通过
 - `npm run tauri:build --workspace apps/desktop` 通过，且 GitHub Actions 自动化 CI 和 Release 打包工作流正常运行

@@ -1,6 +1,6 @@
 # TextFlow Studio — 完整技术说明文档
 
-> 自动生成于 2026-04-29
+> 状态核对于 2026-05-26
 
 ## 一、项目概述
 
@@ -32,17 +32,17 @@
                         │ Tauri invoke / HTTP bridge
 ┌───────────────────────┴─────────────────────────────────┐
 │                   命令桥接层 (Bridge)                      │
-│     desktopBridge.ts — 33 个 Tauri 命令                    │
+│     desktopBridge.ts — 38 个 Tauri 命令                    │
 │     • 双模式: Tauri IPC (生产) / 浏览器模拟数据 (开发)      │
 │     • 事件订阅: engine-progress 进度推送                   │
 └───────────────────────┬─────────────────────────────────┘
-                        │ HTTP localhost:8765
+                        │ HTTP localhost:<reserved-port>
 ┌───────────────────────┴─────────────────────────────────┐
 │                   计算引擎层 (Python Sidecar)              │
 │     Python 3.11+ / PyInstaller 打包                      │
 │     • FastAPI/Uvicorn 本地 HTTP 任务接口                  │
 │     • DAG 运行时: 拓扑排序 → 并行批次执行                   │
-│     • 35 个节点执行器 / 40+ 节点定义                        │
+│     • 49 个后端 catalog 节点定义、compiler 和 executor        │
 │     • jieba 分词 / sklearn 聚类 / YAKE 关键词 / NMF 主题   │
 │     • 项目持久化: .tfproj 目录结构                          │
 └─────────────────────────────────────────────────────────┘
@@ -66,12 +66,12 @@ TextFlow/
 │
 ├── services/python-engine/   # Python 计算引擎
 │   ├── app/                  #   核心引擎逻辑 (分包化为 analysis/workflow/api/storage/domain/ingestion/reporting/samples 等模块)
-│   ├── tests/                #   测试套件 (25 个测试文件)
+│   ├── tests/                #   Python 引擎测试套件
 │   └── dist/                 #   PyInstaller 构建输出
 │
 ├── plugins/nodes/            # Python 节点插件目录
 ├── scripts/                  # PowerShell 构建/测试脚本
-└── docs/                     # 文档 (6 篇活跃文档 + 归档)
+└── docs/                     # 当前有效文档、ADR、计划和归档
 ```
 
 > **注意**: 不使用 Turborepo，仅通过 npm workspaces + PowerShell 脚本进行编排。
@@ -120,12 +120,7 @@ Fluent UI React v9 已先接入 `AppShell` 和 `ProjectWorkbench`，承担应用
 
 ### 3.3 节点图画布
 
-节点图工作面采用独立的深色主题布局:
-- **左侧工具栏** (64px): 操作按钮
-- **停靠面板** (330px): 节点工具箱与配置面板
-- **画布区域**: 支持缩放/平移、节点拖拽、连线、小地图
-- **浮动顶栏**: 工作流标题、状态指示器、运行控制
-- **检查器抽屉**: 节点属性详情
+节点图现在嵌在外层 Fluent 工作台里，而不是独立全屏工具。workflow 动作、节点库入口、属性检查器和运行状态优先复用外层对象树、命令面、右侧检查器和底部运行面板；画布区域本身保留缩放/平移、节点拖拽、连线和 minimap。
 
 ### 3.4 前后端通信
 
@@ -139,28 +134,31 @@ Fluent UI React v9 已先接入 `AppShell` 和 `ProjectWorkbench`，承担应用
 └──────────────────┘                    └──────────────────┘
 ```
 
-- **Tauri IPC (生产)**: `invoke<T>(command, payload)` 调用 33 个 Tauri 命令
+- **Tauri IPC (生产)**: `invoke<T>(command, payload)` 调用 38 个 Tauri 命令
 - **浏览器回退 (开发)**: `isTauri()` 为 false 时返回模拟数据，支持纯前端开发
 - **进度订阅**: `listen("engine-progress", ...)` 接收实时工作流进度 (节点级状态)
 - **状态管理**: `WorkspaceProvider` — useReducer + Context，乐观本地补丁模式
 
-### 3.5 Tauri 命令清单
+### 3.5 Tauri 命令分组
 
 | 命令 | 功能 |
 |---|---|
 | `load_workspace` | 加载工作区状态 |
-| `create_project` / `open_project` / `delete_project` | 项目 CRUD |
+| `get_node_catalog` | 获取后端驱动的节点 catalog |
+| `create_project` / `open_project` / `duplicate_project` / `delete_project` | 项目 CRUD |
 | `import_project_files` | 导入语料文件 |
-| `run_workflow` | 执行完整 NLP 流水线 |
+| `run_workflow` | 执行当前节点图 workflow |
 | `save_project` | 持久化项目清单 |
-| `export_project` / `export_project_backup` | 生成输出文件 |
+| `export_project` / `export_project_backup` / `import_project_package` | 生成输出文件与项目包导入导出 |
+| `update_corpus_document` / `delete_corpus_document` | 语料文档编辑 |
 | `create_corpus_view` / `update_corpus_view` / `delete_corpus_view` | 语料视图管理 |
-| `save_ingestion_spec` | 保存导入规范 |
+| `save_ingestion_spec` / `list_ingestion_specs` | 导入规范管理 |
 | `import_dictionary_sheet` / `export_dictionary_sheet` | 词表导入/导出 |
 | `create_review_task` / `list_review_tasks` / `resolve_review_task` | 人工复核工作流 |
-| `save_experiment_spec` / `run_experiment_matrix` | 实验管理 |
+| `save_experiment_spec` / `list_experiment_specs` / `run_experiment_matrix` | 实验管理 |
 | `compare_runs` | 运行对比 |
-| `load_artifact_preview` / `list_run_artifacts` | 节点产物预览 |
+| `load_artifact_preview` / `load_artifact_payload` / `list_run_artifacts` | 节点产物预览 |
+| `pick_files` / `pick_json_file` / `save_json_file_path` / `pick_project_package_file` / `save_project_package_path` | 本地文件选择与保存路径 |
 | `open_path` / `reveal_path` | 系统文件管理器集成 |
 
 ---
@@ -224,7 +222,7 @@ Fluent UI React v9 已先接入 `AppShell` 和 `ProjectWorkbench`，承担应用
 main.py
 ├── CLI 模式: python main.py <action> [json-payload]
 └── HTTP 模式: python main.py serve [host port]
-    └── service.py (FastAPI + Uvicorn, port 8765)
+    └── service.py (FastAPI + Uvicorn, 默认 8765；Tauri 启动时传入保留端口)
         ├── GET  /health           -> {"status": "ok"}
         ├── GET  /tasks/{task_id}  -> 任务快照
         ├── POST /tasks/start      -> {"action": "...", "payload": {...}}
@@ -232,13 +230,13 @@ main.py
 ```
 
 - **TaskManager**: 单线程执行器 (max_workers=1)，支持异步任务提交与进度回调
-- **33 个已注册 Action**: 涵盖工作区/项目CRUD/导入导出/词典/复核/实验/工件等
+- **38 个已注册 Action**: 涵盖工作区/节点 catalog/项目 CRUD/导入导出/词典/复核/实验/工件等
 
-### 5.2 CLI Action 清单 (33 个)
+### 5.2 CLI Action 清单 (38 个)
 
 | 类别 | Actions |
 |---|---|
-| **工作区** | `load-workspace` |
+| **工作区与 catalog** | `load-workspace`, `get-node-catalog` |
 | **项目 CRUD** | `create-project`, `create-project-from-template`, `open-project`, `duplicate-project`, `delete-project` |
 | **导入/导出** | `import-project-files`, `run-workflow`, `export-project`, `export-project-backup`, `import-project-package` |
 | **模板** | `save-project-template`, `list-project-templates`, `save-import-template`, `list-import-templates`, `load-import-template` |
@@ -275,9 +273,10 @@ main.py
 
 #### 配置、默认值与编译逻辑 (`app/domain/defaults.py`, `app/workflow/` 目录下多模块)
 
-- **`app/domain/defaults.py`**：定义 8 种字典类型、6 种导入配置文件和默认项目骨架（`default_project_manifest()`）。
-- **`app/workflow/compilers.py`**：包含从 DAG 编译运行时配置（`compile_runtime_profile_from_workflow()`）。
-- **`app/workflow/registry.py`**：提供工作流定义和节点注册服务，包括构建完整默认 DAG（`default_workflow_definition()`）。
+- **`app/domain/defaults.py`**：定义 8 种字典类型和默认项目骨架（`default_project_manifest()`）。
+- **`app/domain/import_profiles.py`**：定义 7 种导入 profile 的默认模板。
+- **`app/workflow/runtime_profile_compiler.py`**：包含从 DAG 编译运行时配置（`compile_runtime_profile_from_workflow()`）。
+- **`app/workflow/registry.py`**：提供节点 registry、catalog 响应和内置/插件节点注册服务。
 - **`app/workflow/runner.py`**：计算工作流哈希（`workflow_payload_hash()`）。
 
 ### 5.4 DAG 执行引擎 (`app/workflow/runtime/` 子包)
@@ -292,46 +291,40 @@ main.py
 - **`incremental.py`**：支持脏节点检测与局部增量重算。
 - **`support.py`**：其他辅助与支持函数。
 
-### 5.5 节点执行器 (`app/workflow/executors/` 子包)
+### 5.5 后端驱动节点模块 (`app/workflow/nodes/*.py`)
 
-节点执行逻辑已按照功能类别拆分为 `app/workflow/executors/` 子包，并在 `__init__.py` 中统一对外注册：
-- **`corpus.py`**：语料相关输入与合并（如 `execute_corpus_input`、`execute_merge_corpora` 等）。
-- **`preprocessing.py`**：文本清洗、归一化、分词和词典过滤（如 `execute_clean_text`、`execute_normalize_text` 等）。
-- **`analysis.py`**：各种统计与挖掘算法分析（如 `execute_frequency_statistics`、`execute_topic_modeling`、`execute_document_clustering` 等）。
-- **`export.py`**：数据与报告导出（如 `execute_save_csv`、`execute_save_xlsx` 等）。
-- **`technology.py`**：技术识别分析。
-- **`support.py`**：辅助性节点执行器。
+内置节点已经统一迁移到 `services/python-engine/app/workflow/nodes/`。当前 registry 扫描 49 个后端 catalog 节点，每个节点模块拥有自己的 definition、compiler hook、executor hook 和注册入口；不再依赖旧的 `workflow/definitions` 或 `workflow/executors` 子包作为真相源。
 
-### 5.6 节点定义 (`app/workflow/definitions/` 子包)
+典型节点文件通过 `register_nodes(builder, runtime_profile=None)` 调用：
 
-节点定义被组织在 `app/workflow/definitions/` 下，包括内置节点与工作流定制节点：
-- **`builtin.py`**：定义了所有系统内置节点（如语料输入、清洗、分词、分析等）。
-- **`new_flow.py`**：定义了新流（Revised-flow）的节点规范。
+- `builder.register_node(definition, compiler=..., executor=...)`
+- 或分别调用 `register_definition`、`register_compiler`、`register_executor`
 
-每个节点定义均包含：
-- `type`: 节点类型标识 (28 种内置类型)
-- `title` / `category`: UI 显示 (input/process/analysis/output/utility)
-- `inputs` / `outputs`: 类型化端口 (25 种端口类型)
-- `params`: 参数定义 (boolean/number/string/enum)
-- `runtime`: step_id, executor, cacheable, previewable
+节点共享能力放在 `nodes/_common.py`、`nodes/_support.py` 以及 `analysis`、`storage`、`reporting`、`workflow/runtime` 等模块中。每个节点 definition 均包含：
 
-### 5.7 插件系统 (`app/workflow/plugins.py`)
+- `type`: 节点类型标识
+- `title` / `category`: UI 显示 (`input` / `process` / `analysis` / `output` / `utility`)
+- `inputs` / `outputs`: 类型化端口
+- `params`: 参数定义与默认值
+- `runtime`: `step_id`、`executor`、`cacheable`、`previewable`、`output_node`、`parallel_safe`
+- `graph`: 画布尺寸、默认位置、工具箱排序和 starter roles
+- `ui`: 动态属性面板 schema 和摘要模板
+
+### 5.6 插件系统 (`app/workflow/plugins.py`)
 
 插件扫描路径:
-1. `plugins/nodes/` (项目根)
-2. sidecar 同级 `plugins/nodes/`
-3. `TEXTFLOW_NODE_PLUGIN_DIR` 环境变量
+1. `TEXTFLOW_NODE_PLUGIN_DIR` 环境变量
+2. `plugins/nodes/` (项目根)
+3. 打包后 sidecar 同级 `plugins/nodes/`
 
 ```python
 def register_nodes(builder):
-    builder.register_definition(...)
-    builder.register_executor(...)
-    builder.register_compiler(...)
+    builder.register_node(definition, compiler=..., executor=...)
 ```
 
 > 当前状态: Alpha — 本地 Python 插件扫描与注册已实现，无安全隔离。
 
-### 5.8 支撑模块与辅助逻辑
+### 5.7 支撑模块与辅助逻辑
 
 | 模块 | 功能 |
 |---|---|
@@ -453,8 +446,8 @@ DictionarySet (项目级)
 
 ```
 WoS/IncoPat seed (local/private or approved)
-    ↓ sample_seed_sources.py 授权 gate
-    ↓ bundled_sample_workspace.py
+    ↓ app/samples/seed_sources.py 授权 gate
+    ↓ app/samples/bundled_workspace.py
 source profile 导入 -> project.db -> 预构建工作区模板
     ↓ 首次启动时恢复
 ```
@@ -527,35 +520,23 @@ npm run tauri:build                 # -> NSIS 安装程序
 
 ### 11.1 测试套件概览
 
-- **25 个测试文件**, 覆盖引擎所有核心模块
+- **29 个 Python 引擎测试文件**, 覆盖引擎所有核心模块
+- **154 个 fast-suite 用例 / 164 个 full-suite 用例**（截至 2026-05-26 收集结果）
 - **两种标记**: 常规测试 + `@pytest.mark.engine_full` (重量级集成测试)
 - **隔离工作区**: 每个测试通过 `monkeypatch` 获得临时工作区目录
 - **会话级 fixture**: 公共数据缓存和预构建工作区仅构建一次
 
 ### 11.2 关键测试覆盖
 
-| 测试文件 | 测试数 | 覆盖范围 |
-|---|---|---|
-| `test_workflow_runner.py` | 22 | 端到端工作流/导出/缓存/作用域/增量/并行 |
-| `test_workspace_cli.py` | 23 | 项目 CRUD/工作区快照/导入导出/插件加载 |
-| `test_sample_projects.py` | 14 | 3 个 revised-flow 示例规范/引导元数据/工作流覆盖/运行验证 |
-| `test_ingestion.py` | 5 | CSV/JSON/TXT/XLSX 导入/字段映射/IncoPat 模板 |
-| `test_modeling_nodes.py` | 3 | 主题建模/聚类评估/结果合并 |
-| `test_node_catalog_parity.py` | 4 | **TS<->Python 节点定义一致性校验** |
-| `test_control_flow_nodes.py` | 3 | 条件路由/结果门禁/人工复核门禁 |
-| `test_comparison_nodes.py` | 4 | 词表选择/覆盖规则/分组比较/关键性分析 |
-| `test_incremental_runtime.py` | 3 | 单文档失效/增量作用域/词典覆盖失效 |
-| `test_sample_seed_sources.py` | 2 | WoS/IncoPat seed 授权 gate 与 restricted override |
-| `test_review_store.py` | 3 | 关键词合并/词表回写/文档补丁 |
-| `test_artifact_store.py` | 1 | 工件预览 (前 50 行) |
-| `test_bundled_sample_workspace.py` | 3 | 元数据匹配/行限制拒绝/引导状态 |
-| `test_experiment_store.py` | 1 | 实验矩阵变体运行 |
-| `test_ingestion_specs.py` | 1 | 导入规范哈希持久化 |
-| `test_main.py` | 2 | UTF-8 stdio/JSON 解析 |
-| `test_project_resources.py` | 2 | 资源集合默认值/遗留项目回填 |
-| `test_resource_store.py` | 1 | 语料视图过滤规范 |
-| `test_run_diff.py` | 1 | 运行对比 |
-| `test_service.py` | 1 | TaskManager 进度追踪 |
+| 覆盖主题 | 代表测试文件 |
+|---|---|
+| 端到端 workflow、导出、缓存、作用域、增量和并行 | `test_workflow_runner.py`, `test_incremental_runtime.py` |
+| 工作区 CLI、项目 CRUD、导入导出、模板、插件加载 | `test_workspace_cli.py`, `test_project_database.py`, `test_project_config.py` |
+| 3 个 revised-flow 官方样例、打包样例工作区和 seed 授权 gate | `test_sample_projects.py`, `test_bundled_sample_workspace.py`, `test_sample_seed_sources.py` |
+| CSV/JSON/TXT/XLSX/XLS 导入、字段映射、WoS/Scopus/IncoPat profile | `test_ingestion.py`, `test_ingestion_specs.py` |
+| 后端 catalog、端口兼容、插件节点、前后端节点 schema 契约 | `test_node_catalog_contract.py`, `test_node_catalog_parity.py`, `test_plugin_node_catalog.py`, `test_port_compatibility.py` |
+| 图分析、主题/聚类/相似度/技术识别和比较类节点 | `test_graph_ops.py`, `test_modeling_nodes.py`, `test_technology_ops.py`, `test_comparison_nodes.py`, `test_control_flow_nodes.py` |
+| Artifact、review、resource、experiment、run diff 和 FastAPI service | `test_artifact_store.py`, `test_review_store.py`, `test_resource_store.py`, `test_experiment_store.py`, `test_run_diff.py`, `test_service.py` |
 
 ---
 
@@ -609,7 +590,7 @@ npm run tauri:build                 # -> NSIS 安装程序
 
 ### 13.1 V1 完成度
 
-**V1 全部 16 项必需功能已完成**:
+**AGENTS 中列出的 V1 必需功能已基本完成**:
 项目管理 / 多格式导入 / 元数据映射 / 文本构建 / 清洗归一化 / 短语分词 / 词典中心 / 停用词同义词标准词排除处理 / 词频统计 / 词-文档/年关系 / 共现分析 / 基础聚类 / TF-IDF 特征词 / YAKE 关键词 / 关键词聚类 / 机构-关键词主题分析 / CSV/XLSX/PNG/HTML 导出 / 运行记录与日志
 
 ### 13.2 超出 V1 已交付的功能
@@ -627,8 +608,8 @@ npm run tauri:build                 # -> NSIS 安装程序
 
 | 差距 | 影响 |
 |---|---|
-| 缺少系统化 E2E 测试 | 前端无 E2E 覆盖，CI 流水线仅支持单元与快速集成测试 |
-| 前端测试不足 | 仅少量组件测试，无 E2E 测试 |
+| 缺少系统化 E2E 测试 | 前端已有 Vitest 组件/store 覆盖，但还没有完整浏览器 E2E 自动化矩阵 |
+| CI 覆盖仍偏轻 | CI 当前覆盖前端 lint 和 engine fast suite，full sample/packaging 验证主要在发版链路与本地执行 |
 | 工作流画布 UX 待打磨 | 可用但不精致 |
 | macOS 未验证 | 可移植性保留但未正式构建验证 |
 | 插件节点无安全隔离 | 恶意插件可访问全进程 |
@@ -648,4 +629,4 @@ npm run tauri:build                 # -> NSIS 安装程序
 | **TS 类型直接源码导入** | 无编译步骤，path alias 直接引用 |
 | **双模式桥接** (Tauri/浏览器) | 支持纯前端开发，无需后端 |
 | **Windows 优先** | 主要目标平台，macOS 可移植性保留 |
-| **无外部 UI 库** | 完全自定义控件，保持轻量与一致性 |
+| **Fluent 工作台 + 定制画布** | 通用桌面控件使用 Fluent UI v9，workflow 画布保留定制交互和动态 schema 渲染 |

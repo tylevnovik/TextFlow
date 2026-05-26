@@ -16,8 +16,16 @@
   开发环境、脚本、测试、打包、压测入口。
 - [示例项目说明](./sample-projects.md)
   首次启动从安装包内置模板恢复的 3 个官方 revised-flow 样例及用途。
+- [内置场景样例](./examples.md)
+  官方样例矩阵、seed 授权、存储形态和使用提醒。
 - [大规模压测记录](./benchmark.md)
   当前仓库保留的万条级工作流压测数据与性能边界。
+- [技术全景与架构设计](./technical-overview.md)
+  当前技术栈、前后端边界、节点 catalog、测试覆盖和已知差距的全景说明。
+- [节点 Catalog Schema](./node-catalog-schema.md)
+  后端驱动节点 definition、UI schema、slot 白名单和插件示例。
+- [ADR](./adr/)
+  架构决策记录，说明重要迁移和边界选择的背景。
 - [插件节点说明](../plugins/nodes/README.md)
   本地纯 Python 节点插件的加载方式、注册接口和当前运行边界。
 

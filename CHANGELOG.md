@@ -13,7 +13,7 @@
 ### Performance
 
 - Split Python engine verification into a default `test:engine` fast tier and a heavier `test:engine:full` tier so day-to-day changes do not always pay for bundled sample integration coverage.
-- Moved the nine official sample projects to a build-time bundled workspace template that ships inside the Python sidecar, avoiding first-run live generation for empty workspaces.
+- Moved the three official revised-flow sample projects to a build-time bundled workspace template that ships inside the Python sidecar, avoiding first-run live generation for empty workspaces.
 
 ### Fixes
 
