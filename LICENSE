@@ -2,7 +2,7 @@ TextFlow Studio Source-Available License
 
 Version 1.0 (May 2026)
 
-Copyright (c) 2026 TextFlow Studio Developers (https://github.com/tylevnovik/TextFlow)
+Copyright (c) 2026 TextFlow Studio Developers - https://github.com/tylevnovik/TextFlow
 All rights reserved.
 
 BY DOWNLOADING, RUNNING, COPYING, MODIFYING, OR DISTRIBUTING THIS SOFTWARE (INCLUDING SOURCE CODE AND BINARY CODE), YOU AGREE TO BE BOUND BY ALL THE TERMS AND CONDITIONS OF THIS LICENSE AGREEMENT.
@@ -23,7 +23,7 @@ Subject to your compliance with the terms of this Agreement, the copyright holde
 * Modify the Software and distribute such modifications (derivative works) for non-commercial purposes.
 
 ### 3. Restrictions
-* **Attribution**: You must prominently retain the original copyright notice, this license agreement, the link to the original project (https://github.com/tylevnovik/TextFlow), and explicit attribution to the original author in all copies or derivative works of the Software you distribute.
+* **Attribution**: You must prominently retain the original copyright notice, this license agreement, the link to the original project: https://github.com/tylevnovik/TextFlow, and explicit attribution to the original author in all copies or derivative works of the Software you distribute.
 * **Non-Commercial Restriction**: Any use, distribution, sale, or copying of the Software or any part thereof for commercial purposes is strictly prohibited.
 * **Share-Alike**: If you modify, restructure, or build derivative works upon the Software, you must distribute your contributions under the exact same "Source-Available License". You may not add any restrictions beyond this license or grant any rights exceeding it.
 * **No Sublicensing**: You do not have the right to sublicense the Software. Third parties must obtain the license directly from the copyright holder under this Agreement.
@@ -50,7 +50,7 @@ TextFlow Studio 共享源码许可协议 (Source-Available License)
 
 版本 1.0 (2026年5月)
 
-版权所有 (c) 2026 TextFlow Studio 开发者 (https://github.com/tylevnovik/TextFlow)
+版权所有 (c) 2026 TextFlow Studio 开发者 - https://github.com/tylevnovik/TextFlow
 保留所有未在此协议中明确授予的权利。
 
 在使用、复制、修改或分发本软件（包括源代码和二进制文件）之前，请仔细阅读本许可协议。一旦您使用、复制、修改或分发本软件，即表示您接受并同意遵守本协议的所有条款。
@@ -74,7 +74,7 @@ TextFlow Studio 共享源码许可协议 (Source-Available License)
 * **署名要求 (Attribution)**：您必须在分发本软件的所有副本或任何衍生作品时，显要地保留以下内容：
   - 原始版权声明；
   - 本许可协议全文；
-  - 指向原始项目的链接（https://github.com/tylevnovik/TextFlow）；
+  - 指向原始项目的链接：https://github.com/tylevnovik/TextFlow ；
   - 明确标注原始作者的署名。
 * **限制商业化 (Non-Commercial)**：严禁出于任何商业目的使用、分发、销售或复制本软件或其任何部分（包括但不限于将本软件用于企业内部运营、将本软件打包进商业产品、基于本软件提供有偿技术服务等）。
 * **相同方式共享 (Share-Alike)**：如果您对本软件进行了修改、重构或基于本软件创作了衍生作品，您分发该衍生作品时，必须采用与本协议条款完全相同的“共享源码许可协议”。您不得为衍生作品附加任何超出本协议范围的限制或授予任何超出本协议范围的权利。
