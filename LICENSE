@@ -1,0 +1,94 @@
+TextFlow Studio Source-Available License
+
+Version 1.0 (May 2026)
+
+Copyright (c) 2026 TextFlow Studio Developers (https://github.com/tylevnovik/TextFlow)
+All rights reserved.
+
+BY DOWNLOADING, RUNNING, COPYING, MODIFYING, OR DISTRIBUTING THIS SOFTWARE (INCLUDING SOURCE CODE AND BINARY CODE), YOU AGREE TO BE BOUND BY ALL THE TERMS AND CONDITIONS OF THIS LICENSE AGREEMENT.
+
+### 1. Definitions
+* "Software" refers to the source code, binary code, associated documentation, and derivative works provided by the copyright holder.
+* "Commercial Use" refers to any use of the Software for profit, commercial advantage, or the internal operations of a private/commercial entity. This includes, but is not limited to:
+  - Selling the Software or its derivative versions;
+  - Offering the Software as a cloud service, SaaS (Software as a Service), or paid hosted service to third parties;
+  - Using the Software within commercial companies or enterprises to support business operations;
+  - Displaying advertisements on platforms incorporating the Software to generate revenue.
+* "Non-Commercial Use" refers to the use of the Software for personal learning, academic research, education, non-profit testing, or other purposes where there is no direct or indirect commercial intent or profit-seeking motive.
+
+### 2. License Grant (Non-Commercial Use)
+Subject to your compliance with the terms of this Agreement, the copyright holder grants you a worldwide, royalty-free, non-assignable, and non-exclusive license to, solely for Non-Commercial Use:
+* Download, run, and use the Software;
+* Copy, propagate, and distribute the original source code or compiled binary versions of the Software;
+* Modify the Software and distribute such modifications (derivative works) for non-commercial purposes.
+
+### 3. Restrictions
+* **Attribution**: You must prominently retain the original copyright notice, this license agreement, the link to the original project (https://github.com/tylevnovik/TextFlow), and explicit attribution to the original author in all copies or derivative works of the Software you distribute.
+* **Non-Commercial Restriction**: Any use, distribution, sale, or copying of the Software or any part thereof for commercial purposes is strictly prohibited.
+* **Share-Alike**: If you modify, restructure, or build derivative works upon the Software, you must distribute your contributions under the exact same "Source-Available License". You may not add any restrictions beyond this license or grant any rights exceeding it.
+* **No Sublicensing**: You do not have the right to sublicense the Software. Third parties must obtain the license directly from the copyright holder under this Agreement.
+
+### 4. Commercial Licensing
+If you wish to use the Software for any commercial purpose, or if you are unsure whether your intended use constitutes "Commercial Use," you must contact the copyright holder and obtain a separate, explicit written commercial license before such use.
+
+### 5. Disclaimer of Warranty
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES (INCLUDING DIRECT, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, INCLUDING LOSS OF PROFITS OR DATA) OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+### 6. Termination
+This License and the rights granted hereunder will terminate automatically if you fail to comply with any of its terms. Upon termination, you must immediately cease all use of the Software and destroy all copies of the Software in your possession.
+
+---
+Contact: Please submit commercial licensing requests via Issues or Discussions on the GitHub repository homepage.
+Original Project URL: https://github.com/tylevnovik/TextFlow
+
+
+========================================================================
+中译对照参考 (Chinese Translation Reference)
+========================================================================
+
+TextFlow Studio 共享源码许可协议 (Source-Available License)
+
+版本 1.0 (2026年5月)
+
+版权所有 (c) 2026 TextFlow Studio 开发者 (https://github.com/tylevnovik/TextFlow)
+保留所有未在此协议中明确授予的权利。
+
+在使用、复制、修改或分发本软件（包括源代码和二进制文件）之前，请仔细阅读本许可协议。一旦您使用、复制、修改或分发本软件，即表示您接受并同意遵守本协议的所有条款。
+
+### 1. 定义
+* "本软件" 指由版权持有人提供的源代码、二进制代码、相关文档以及衍生作品。
+* "商业使用" 指任何以营利、获取商业利益或私营企业的内部运营为目的的使用行为。这包括但不限于：
+  - 销售本软件或其衍生版本；
+  - 将本软件作为云服务、SaaS（软件即服务）或付费托管服务提供给第三方；
+  - 在商业性公司、企业的日常生产经营活动中使用本软件来辅助盈利；
+  - 在包含本软件的平台上展示广告以获取收益。
+* "非商业使用" 指出于个人学习、学术研究、教学、非盈利性测试等目的，不具有直接或间接商业盈利意图的使用行为。
+
+### 2. 授权许可（非商业使用）
+在遵守本协议所有条款的前提下，版权持有人授予您一项全球性的、免费的、不可转让的、非独占的许可证，允许您出于非商业目的：
+* 下载、运行、使用本软件；
+* 复制、传播、分发本软件的原始代码或编译后的二进制版本；
+* 修改本软件，并基于修改后的代码（衍生作品）进行非商业性的分发。
+
+### 3. 限制条款
+* **署名要求 (Attribution)**：您必须在分发本软件的所有副本或任何衍生作品时，显要地保留以下内容：
+  - 原始版权声明；
+  - 本许可协议全文；
+  - 指向原始项目的链接（https://github.com/tylevnovik/TextFlow）；
+  - 明确标注原始作者的署名。
+* **限制商业化 (Non-Commercial)**：严禁出于任何商业目的使用、分发、销售或复制本软件或其任何部分（包括但不限于将本软件用于企业内部运营、将本软件打包进商业产品、基于本软件提供有偿技术服务等）。
+* **相同方式共享 (Share-Alike)**：如果您对本软件进行了修改、重构或基于本软件创作了衍生作品，您分发该衍生作品时，必须采用与本协议条款完全相同的“共享源码许可协议”。您不得为衍生作品附加任何超出本协议范围的限制或授予任何超出本协议范围的权利。
+* **禁止转授权**：您无权对本软件的全部或部分进行转授权。任何第三方如需使用本软件，必须直接遵循本协议从版权持有人处获得许可。
+
+### 4. 商业使用授权
+如果您希望将本软件用于任何商业目的，或者您对您的使用行为是否属于“商业使用”存在疑问，您必须在使用前联系版权持有人并获得明确的、单独的书面授权许可（可能需要支付授权费用）。
+
+### 5. 免责声明 (Disclaimer)
+本软件按“原样”提供，不带有任何明示或暗示的担保（包括但不限于对适销性、特定用途适用性以及不侵权的暗示担保）。在任何情况下，版权持有人均不对因使用本软件或无法使用本软件而引起的任何索赔、损害（包括直接、间接、附带或后果性损害，例如利润损失、数据丢失等）或其他责任承担任何赔偿责任，无论是在合同诉讼、侵权诉讼还是其他诉讼中。
+
+### 6. 协议终止
+如果您违反本协议的任何条款，本协议授予您的所有权利将自动终止。协议终止后，您必须立即停止使用本软件，并销毁您拥有的所有软件副本（包括修改过的版本）。
+
+---
+版权持有人联系方式：请通过 GitHub 项目主页的 Issues 或 Discussions 提交商业授权申请。
+原始项目地址：https://github.com/tylevnovik/TextFlow
